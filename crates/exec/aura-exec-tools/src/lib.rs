@@ -22,6 +22,8 @@ pub mod automaton_tools;
 pub mod catalog;
 pub mod computer_tool;
 pub mod confine;
+#[cfg(test)]
+mod confine_test;
 pub mod definitions;
 pub mod domain_tools;
 mod error;

@@ -170,9 +170,9 @@ async fn test_confined_run_command_cannot_write_above_the_workspace() {
     if !crate::confine::supported() {
         return;
     }
-    // Not under /tmp or the home caches, which confined commands may
-    // write to.
-    let Some(parent) = crate::confine::test_dirs::unconfined_parent() else {
+    // Not under /tmp or a cache folder, which confined commands may write to.
+    let Some(parent) = crate::confine_test::unwritable_parent() else {
+        eprintln!("no folder outside the writable roots here; skipping");
         return;
     };
     let workspace = parent.path().join("ws");

@@ -262,10 +262,6 @@ mod imp {
     }
 }
 
-#[cfg(test)]
-#[cfg(target_os = "linux")]
-pub(crate) mod test_dirs;
-
 // Two attributes rather than `cfg(all(test, ...))`: clippy only treats a
 // plain `cfg(test)` module as test code.
 #[cfg(test)]
@@ -294,7 +290,8 @@ mod tests {
             eprintln!("Landlock unsupported here; skipping");
             return;
         }
-        let Some(parent) = test_dirs::unconfined_parent() else {
+        let Some(parent) = crate::confine_test::unwritable_parent() else {
+            eprintln!("no folder outside the writable roots here; skipping");
             return;
         };
         let workspace = parent.path().join("ws");
@@ -319,7 +316,8 @@ mod tests {
         if !supported() {
             return;
         }
-        let Some(parent) = test_dirs::unconfined_parent() else {
+        let Some(parent) = crate::confine_test::unwritable_parent() else {
+            eprintln!("no folder outside the writable roots here; skipping");
             return;
         };
         let workspace = parent.path().join("ws");
@@ -456,7 +454,8 @@ mod tests {
         if !supported() {
             return;
         }
-        let Some(parent) = test_dirs::unconfined_parent() else {
+        let Some(parent) = crate::confine_test::unwritable_parent() else {
+            eprintln!("no folder outside the writable roots here; skipping");
             return;
         };
         let workspace = parent.path().join("ws");
