@@ -1,6 +1,11 @@
 //! One-line summaries of the long messages the user posts in a channel,
 //! for the channel's HISTORY tab.
 //!
+//! The messages are the user's posts, and the messages the user typed to
+//! the coordinator, which stay in its conversation and are no posts
+//! ([`prompts_of`]); a post goes by its `seq`, a typed message by its
+//! [`prompt_key`].
+//!
 //! A post longer than [`aura_ui::events::POST_SUMMARY_MIN_CHARS`] gets one summary, written
 //! once by a cheap model (Claude Haiku when the user has a route to it)
 //! through the coordinator's kernel, like a chat title, and kept in a
@@ -26,7 +31,7 @@ use crate::event_loop::titles;
 use aura_agent::AgentLoopConfig;
 use aura_core_types::AgentId;
 use aura_model::ModelProvider;
-use aura_ui::events::wants_summary;
+use aura_ui::events::{is_typed_prompt, prompt_key, wants_summary, MessageData, MessageRole};
 use aura_ui::UiCommand;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -93,6 +98,19 @@ pub(crate) fn spawn_for(
         posts,
         asker(state, coordinator),
     ));
+}
+
+/// The messages the user typed in a coordinator's conversation `history`,
+/// as [`spawn_for`] takes them: each under its [`prompt_key`], with its
+/// text. Shell commands, agent steps and mail other agents sent are not
+/// the user's.
+pub(crate) fn prompts_of(history: &[MessageData]) -> Vec<(u64, String)> {
+    history
+        .iter()
+        .filter(|m| m.role == MessageRole::User && m.command.is_none() && m.activity.is_none())
+        .filter(|m| is_typed_prompt(&m.content))
+        .map(|m| (prompt_key(&m.content), m.content.clone()))
+        .collect()
 }
 
 /// The kept summaries and the texts being summarized.

@@ -114,17 +114,28 @@ impl App {
         }
     }
 
+    /// Keep `posts` as channel `channel_id`'s, filing its `/plan` requests
+    /// apart for HISTORY.
     pub(in crate::app) fn set_channel_posts(
         &mut self,
         channel_id: String,
         posts: Vec<ChannelPostView>,
     ) {
+        let (plans, posts): (Vec<_>, Vec<_>) =
+            posts.into_iter().partition(|post| post.planner.is_some());
+        self.channels.plan_posts.insert(channel_id.clone(), plans);
         self.channels.posts.insert(channel_id, posts);
     }
 
-    /// Add `post` to its channel, or replace the post with its `seq`.
+    /// Add `post` to its channel, or replace the post with its `seq`; a
+    /// `/plan` request is filed apart for HISTORY.
     pub(in crate::app) fn add_channel_post(&mut self, channel_id: String, post: ChannelPostView) {
-        let posts = self.channels.posts.entry(channel_id).or_default();
+        let kept = if post.planner.is_some() {
+            &mut self.channels.plan_posts
+        } else {
+            &mut self.channels.posts
+        };
+        let posts = kept.entry(channel_id).or_default();
         match posts.binary_search_by_key(&post.seq, |known| known.seq) {
             Ok(at) => {
                 if let Some(known) = posts.get_mut(at) {
