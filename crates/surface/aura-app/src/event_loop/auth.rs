@@ -120,6 +120,8 @@ pub(super) async fn handle_login(state: &mut LoopState<'_>, email: &str, passwor
             }
             show_system_message(state, note).await;
             publish_auth(state).await;
+            // Agents the model refused for their sign-in carry on.
+            super::recover::signed_in(state).await;
         }
         Err(e) => send(state, UiCommand::ShowError(format!("Login failed: {e}"))).await,
     }
@@ -356,6 +358,7 @@ pub(super) async fn handle_link_outcome(state: &mut LoopState<'_>, outcome: Link
             }
             show_system_message(state, note).await;
             publish_auth(state).await;
+            super::recover::signed_in(state).await;
         }
         Err(e) => {
             send(

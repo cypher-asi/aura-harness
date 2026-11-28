@@ -122,6 +122,7 @@ pub(super) async fn turn(
         failure: finished.failure.clone(),
         unseen: Vec::new(),
         refused_models: finished.refused_models.clone(),
+        health: finished.health.clone(),
     };
     handle_work_done(state, finished).await;
     reported

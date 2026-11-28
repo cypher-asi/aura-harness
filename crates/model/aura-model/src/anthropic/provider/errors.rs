@@ -164,7 +164,7 @@ impl FailedResponse {
 }
 
 /// Map a non-Cloudflare failure status to its error and class label.
-fn status_error(
+pub(super) fn status_error(
     status: reqwest::StatusCode,
     body: &str,
     header_retry_after: Option<Duration>,
@@ -200,6 +200,17 @@ fn status_error(
                 message: provider_api_error_message(status, body),
             },
             "upstream_5xx",
+        ),
+        // 408: the provider gave up waiting for the request. Sending the
+        // same request again usually works, so it takes the 5xx path:
+        // the same backoff, cap and fallback model. Only the model request
+        // is sent again; no tool ran for it.
+        408 => (
+            ApiError::TransientServer {
+                status: status_code,
+                message: provider_api_error_message(status, body),
+            },
+            "request_timeout_408",
         ),
         _ => (
             ApiError::Other(ReasonerError::Api {

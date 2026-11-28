@@ -421,6 +421,9 @@ pub struct AgentHub {
     /// Which agents failed and why, and which are starting on a cloud
     /// machine, for their rows ([`status::AgentStatus`])
     pub(crate) status: status::AgentStatus,
+    /// Agents held through trouble they can get past instead of failed:
+    /// a refused sign-in, a model out of reach, a failed cloud start
+    pub(crate) recovery: super::recover::Recovery,
     /// One-line summaries of the user's long channel posts, kept on disk
     pub(crate) post_summaries: Arc<super::channels::summaries::PostSummaries>,
     /// The chats of the agents shown last, as read from their records

@@ -146,6 +146,7 @@ async fn messages_the_turn_never_saw_run_next() {
             failure: None,
             unseen: vec![(SteerSource::User, "late".to_string())],
             refused_models: Vec::new(),
+            health: crate::event_loop::recover::TurnHealth::default(),
         },
     )
     .await;

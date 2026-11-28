@@ -43,6 +43,7 @@ pub(crate) mod policies;
 pub(crate) mod processes;
 mod queue;
 pub(crate) mod record_ui;
+pub(crate) mod recover;
 pub(crate) mod repo;
 mod rewind;
 mod run;

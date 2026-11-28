@@ -318,6 +318,8 @@ impl<'s> Swarm<'s> {
         let ago = agent.last_active_ms.map(|ms| format_ago(ms, self.now_ms));
         let name = if agent.error.is_some() {
             Style::default().fg(crate::renderer::failure_color(theme))
+        } else if agent.waiting_for_sign_in {
+            Style::default().fg(theme.colors.warning)
         } else if agent.depth == 0 {
             Style::default().fg(theme.colors.foreground)
         } else {
