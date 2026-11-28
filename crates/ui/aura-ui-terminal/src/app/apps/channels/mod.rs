@@ -45,8 +45,10 @@
 mod fold;
 mod list;
 mod side;
+mod welcome;
 
 pub(crate) use side::CHANNEL_MEMBER_ROWS;
+pub(crate) use welcome::ChannelWelcome;
 
 use crate::app::scroll::{ChatPlace, InfoScroll};
 use crate::app::{AgentsTab, App, ChatTab, SidePanelTab};
