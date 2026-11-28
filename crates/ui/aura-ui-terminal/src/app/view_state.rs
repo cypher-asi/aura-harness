@@ -53,6 +53,19 @@ impl App {
         self.terminal_mode
     }
 
+    /// Whether the terminal runs inline in the chat panel, as a terminal
+    /// does: the prompt and what is typed follow the output in the
+    /// panel's body, and no input box sits under the panel. A view over
+    /// the body, a benchmark in its place, or an app with nothing to
+    /// show keeps the box, so the prompt is never hidden under them.
+    #[must_use]
+    pub(crate) fn terminal_inline(&self) -> bool {
+        self.chat_tab() == super::ChatTab::Terminal
+            && self.detail_view().is_none()
+            && !self.bench_draws_center()
+            && !self.app_empty()
+    }
+
     /// Whether the open pane has nothing to show.
     #[must_use]
     pub fn pane_is_empty(&self) -> bool {

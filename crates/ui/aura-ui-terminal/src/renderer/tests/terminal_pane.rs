@@ -26,19 +26,25 @@ fn test_long_command_wraps_at_the_last_column() {
 }
 
 #[test]
-fn test_pane_shows_only_the_running_command_and_input_keeps_the_prompt() {
+fn test_pane_shows_the_running_command_and_the_prompt_under_it() {
     let mut app = app_with_model(None);
     app.set_shell_prompt("[u@h d]$ ");
     submit_message(&mut app, "$sleep 5");
     let rows = render_rows(&mut app, 120);
+    let screen = rows.join("\n");
+    assert_eq!(screen.matches("[u@h d]$ ").count(), 2, "{screen}");
+    assert!(!screen.contains("running sleep"), "{screen}");
+    let command = rows
+        .iter()
+        .position(|row| row.contains("[u@h d]$ sleep 5"))
+        .unwrap();
     let (_, chat_left, _) = chat_panel(&rows);
-    let input_y = rows.len() - INPUT_FROM_BOTTOM;
-    let pane = rows[..input_y].join("\n");
-    assert_eq!(pane.matches("[u@h d]$ ").count(), 1, "{pane}");
-    assert!(pane.contains("[u@h d]$ sleep 5"), "{pane}");
-    assert!(!pane.contains("running sleep"), "{pane}");
-    let typed: String = rows[input_y].chars().skip(chat_left + 3).collect();
-    assert!(typed.starts_with("[u@h d]$ "), "{:?}", rows[input_y]);
+    let typed: String = rows[command + 1].chars().skip(chat_left + 3).collect();
+    assert!(typed.starts_with("[u@h d]$ "), "{:?}", rows[command + 1]);
+    assert!(
+        typed.contains("■ Stop"),
+        "the running command stops here: {typed:?}"
+    );
 }
 
 #[test]

@@ -301,3 +301,22 @@ pub(super) fn char_column(row: &str, needle: &str) -> usize {
         .unwrap_or_else(|| panic!("{needle:?} not in {row:?}"));
     row[..i].chars().count()
 }
+
+/// Draw `app` and return the screen rows and where the cursor is.
+pub(super) fn render_with_cursor(app: &mut crate::App, width: u16) -> (Vec<String>, (u16, u16)) {
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 30)).unwrap();
+    terminal
+        .draw(|frame| super::super::render(frame, app, &test_theme()))
+        .unwrap();
+    let cursor = terminal.get_cursor_position().unwrap();
+    let buffer = terminal.backend().buffer();
+    let rows = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect()
+        })
+        .collect();
+    (rows, (cursor.x, cursor.y))
+}

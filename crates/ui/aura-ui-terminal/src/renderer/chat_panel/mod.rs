@@ -6,6 +6,7 @@ mod links;
 mod live_tail;
 mod prose;
 mod rows;
+mod terminal;
 mod text_area;
 mod user_band;
 mod visible;
@@ -37,8 +38,8 @@ pub(super) use prose::{pack_prose, prose_columns};
 pub(super) use text_area::{breathing_room, terminal_text_area};
 
 /// Render the Chat panel: a CHAT | TERMINAL | GRAPH header bar over the
-/// conversation, the shell commands run this session, or the flow between
-/// the agent and the agents it spawned. While a record, file, process or
+/// conversation, the terminal (its commands and output, then its prompt),
+/// or the flow between the agent and the agents it spawned. While a record, file, process or
 /// the run graph covers the body, the bar names it. BENCH shows a
 /// benchmark, or the form that sets one up, under a bar with no tabs.
 pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
@@ -69,6 +70,10 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
     let terminal = app.terminal_pane() && !empty;
     let padded = terminal_text_area(body, terminal);
     app.set_chat_width(padded.width);
+    if app.terminal_inline() {
+        terminal::render_terminal(frame, (area, body, padded), app, theme, is_focused);
+        return;
+    }
     app.set_chat_text_area(padded);
 
     if empty {
