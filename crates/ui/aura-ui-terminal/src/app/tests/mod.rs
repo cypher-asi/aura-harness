@@ -38,6 +38,7 @@ mod model_selector;
 mod multi_line_input;
 mod pasted_images;
 mod projects_and_agent_buttons;
+mod reply_interrupted;
 mod roster;
 mod scrolling;
 mod session_modes_and_plans;

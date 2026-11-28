@@ -1,5 +1,6 @@
-//! How each agent's work went, for its rows: failed, and why, or starting
-//! on a cloud machine of its own.
+//! How each agent's work went, for its rows: failed, and why, starting
+//! on a cloud machine of its own, or waiting for the turn already under
+//! way on it.
 //!
 //! A failure is shown on the agent's row in red until its next turn
 //! starts. Nothing here is stored: a restart shows every agent as it is.
@@ -19,6 +20,9 @@ const MAX_ERROR_CHARS: usize = 200;
 pub(crate) struct AgentStatus {
     failed: Mutex<HashMap<AgentId, String>>,
     starting: Mutex<HashSet<AgentId>>,
+    /// Cloud agents whose turn waits for the one already under way on
+    /// their machine ([`aura_engine_cloud::hub::WAITING`])
+    waiting: Mutex<HashSet<AgentId>>,
 }
 
 impl AgentStatus {
@@ -28,6 +32,7 @@ impl AgentStatus {
         let why: String = why.trim().chars().take(MAX_ERROR_CHARS).collect();
         lock(&self.failed).insert(agent, why);
         lock(&self.starting).remove(&agent);
+        lock(&self.waiting).remove(&agent);
     }
 
     /// Forget `agent`'s failure: it works again. Returns whether it had
@@ -55,6 +60,22 @@ impl AgentStatus {
     pub(crate) fn is_starting(&self, agent: AgentId) -> bool {
         lock(&self.starting).contains(&agent)
     }
+
+    /// Note whether `agent`'s turn waits for the one under way on its
+    /// machine. Returns whether that changed.
+    pub(crate) fn set_waiting(&self, agent: AgentId, waiting: bool) -> bool {
+        let mut set = lock(&self.waiting);
+        if waiting {
+            set.insert(agent)
+        } else {
+            set.remove(&agent)
+        }
+    }
+
+    /// Whether `agent`'s turn waits for the one under way on its machine.
+    pub(crate) fn is_waiting(&self, agent: AgentId) -> bool {
+        lock(&self.waiting).contains(&agent)
+    }
 }
 
 impl AgentHub {
@@ -62,6 +83,7 @@ impl AgentHub {
     pub(super) fn mark_status(&self, agent_id: AgentId, row: &mut AgentSummary) {
         row.error = self.status.failure(agent_id);
         row.starting = row.error.is_none() && self.status.is_starting(agent_id);
+        row.waiting = row.error.is_none() && self.status.is_waiting(agent_id);
     }
 }
 

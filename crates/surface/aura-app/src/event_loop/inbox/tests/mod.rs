@@ -3,6 +3,7 @@
 
 mod answers;
 mod assignments;
+mod channel_peers;
 mod hooks;
 mod peers;
 mod support;

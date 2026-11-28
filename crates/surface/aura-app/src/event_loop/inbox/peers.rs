@@ -113,14 +113,26 @@ impl Circle {
     }
 }
 
-/// The circle of `caller`; `None` for an agent the registry doesn't have
-/// or another agent spawned. Reads the channel store synchronously: on
-/// the async runtime use [`circle`].
+/// The circle of `caller`; `None` for an agent the registry doesn't have,
+/// a channel member's subagent, or an agent in no channel that another
+/// spawned. A channel's own agents always have one, however they joined
+/// ([`channels::is_channel_agent`]): the channel decides, not the spawn
+/// tree. Reads the channel store synchronously: on the async runtime use
+/// [`circle`].
 pub(crate) fn circle_of(hub: &AgentHub, caller: AgentId) -> Option<Circle> {
     let channel = read_channel(hub, caller);
     let registry = lock(&hub.registry);
     let me = registry.find(caller)?;
-    if !registry.is_top_level_agent(caller) {
+    let in_channel = channel.as_ref().is_some_and(|(channel, members)| {
+        channel.coordinator == caller
+            || members.iter().any(|member| {
+                member.agent_id == caller && channels::is_channel_agent(&registry, member)
+            })
+    });
+    // A member's subagent is no channel agent: it reaches what its own
+    // tree does, as before.
+    let channel = channel.filter(|_| in_channel);
+    if !in_channel && !registry.is_top_level_agent(caller) {
         return None;
     }
     let hidden = lock(&hub.hidden_members);
@@ -175,8 +187,9 @@ fn read_channel(hub: &AgentHub, agent: AgentId) -> Option<(ChannelRecord, Vec<Me
     })
 }
 
-/// The `members` of `channel` that `caller` reaches: every top-level,
-/// unarchived one but itself and the subagents.
+/// The `members` of `channel` that `caller` reaches: every one of the
+/// channel's own agents ([`channels::is_channel_agent`]) but itself and
+/// the archived, wherever in the spawn tree they were registered.
 fn channel_peers(
     registry: &AgentRegistry,
     caller: AgentId,
@@ -185,15 +198,15 @@ fn channel_peers(
 ) -> Vec<Peer> {
     let mut peers = Vec::new();
     for member in members {
-        if member.agent_id == caller || member.role == MemberRole::Subagent {
+        if member.agent_id == caller || !channels::is_channel_agent(registry, member) {
             continue;
         }
-        let Some(agent) = registry.find(member.agent_id) else {
+        let Some(agent) = registry
+            .find(member.agent_id)
+            .filter(|agent| !agent.archived)
+        else {
             continue;
         };
-        if agent.archived || !registry.is_top_level_agent(member.agent_id) {
-            continue;
-        }
         let relation = if member.agent_id == channel.coordinator {
             Relation::Coordinator
         } else {

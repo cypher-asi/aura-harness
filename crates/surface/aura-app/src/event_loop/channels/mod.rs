@@ -97,7 +97,7 @@ use load::{move_placements, stage_rows};
 pub(crate) use plan::{is_coordinator_agent, start_planner};
 #[cfg(test)]
 pub(crate) use plan::{PLANNER_DEFINITION, PLANS_HERE};
-pub(crate) use prompt::{channel_prompt, is_coordinator};
+pub(crate) use prompt::{channel_prompt, is_channel_agent, is_coordinator};
 pub(crate) use update::{archive_channel, update_channel, ChannelEdit, CoordinatorBusy};
 
 /// The channel placement the UI's `placement` stands for.
