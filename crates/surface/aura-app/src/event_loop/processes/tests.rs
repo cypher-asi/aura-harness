@@ -264,44 +264,36 @@ async fn background_commands_are_listed_killed_and_reported() {
 }
 
 #[cfg(target_os = "linux")]
-/// Snapshots of `table` until `agent` owns `count` rows, or 50 tries.
-fn wait_for_rows(table: &ProcessTable, agent: AgentId, count: usize) -> Vec<ProcessSummary> {
-    let mut rows = Vec::new();
-    for _ in 0..50 {
-        rows = table.snapshot();
-        if rows
+/// Snapshots of `table` until `done` holds for the rows `agent` owns, or
+/// ten seconds pass; the last snapshot's rows either way.
+fn wait_until(
+    table: &ProcessTable,
+    agent: AgentId,
+    done: impl Fn(&[&ProcessSummary]) -> bool,
+) -> Vec<ProcessSummary> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let rows = table.snapshot();
+        let mine: Vec<&ProcessSummary> = rows
             .iter()
             .filter(|r| r.owner_agent_id == agent.to_hex())
-            .count()
-            == count
-        {
-            break;
+            .collect();
+        if done(&mine) || std::time::Instant::now() >= deadline {
+            return rows;
         }
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::yield_now();
     }
-    rows
 }
 
 #[cfg(target_os = "linux")]
-/// Whether `shell` is kept as killed once `agent`'s rows stop, polling
-/// up to 50 times.
+/// Whether `shell` is kept as killed once `agent`'s rows stop.
 fn wait_killed(table: &ProcessTable, agent: AgentId, shell: &str) -> bool {
-    let mut gone = false;
-    for _ in 0..50 {
-        let rows = table.snapshot();
-        if rows
-            .iter()
-            .filter(|r| r.owner_agent_id == agent.to_hex())
+    let rows = wait_until(table, agent, |mine| {
+        mine.iter()
             .all(|r| r.kind == ProcessKind::Turn || !r.status.is_live())
-        {
-            gone = rows
-                .iter()
-                .any(|r| r.id == shell && r.status == ProcessStatus::Killed);
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    gone
+    });
+    rows.iter()
+        .any(|r| r.id == shell && r.status == ProcessStatus::Killed)
 }
 
 #[cfg(target_os = "linux")]
@@ -322,10 +314,15 @@ fn tagged_os_processes_are_listed_under_their_parent_and_killable() {
         .spawn()
         .unwrap();
 
-    let rows = wait_for_rows(&table, agent, 3);
+    // The shell's background child is a tagged copy of the shell until it
+    // execs `sleep`: wait for `sleep` itself, not for a third row.
+    let rows = wait_until(&table, agent, |mine| {
+        mine.iter()
+            .any(|r| r.label == "sleep 30" && r.status.is_live())
+    });
     let mine: Vec<&ProcessSummary> = rows
         .iter()
-        .filter(|r| r.owner_agent_id == agent.to_hex())
+        .filter(|r| r.owner_agent_id == agent.to_hex() && r.status.is_live())
         .collect();
     assert_eq!(mine.len(), 3, "turn, shell and sleep: {mine:#?}");
     assert_eq!(mine[0].kind, ProcessKind::Turn);
