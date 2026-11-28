@@ -15,10 +15,14 @@
 //! one's, and a rewrite of the same plan file counts. A failed or stopped
 //! turn leaves the flow, as the work it was in is given up; one that was
 //! planning says so, so its agent leaves plan mode.
+//!
+//! The stages outlive the app: they are saved with the inbox and put back
+//! when it starts ([`super::saved`]). [`Flows::records`] and
+//! [`Flows::restore`] are that boundary.
 
 use aura_core_types::AgentId;
-use std::collections::HashMap;
-use std::sync::Mutex;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 /// Where an agent is in the flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,30 +97,116 @@ pub(crate) struct Flows {
     /// The text each agent's latest turn was started with, which finds
     /// where that turn starts in its conversation.
     prompts: Mutex<HashMap<AgentId, String>>,
+    /// The plan each building agent builds
+    plans: Mutex<HashMap<AgentId, String>>,
+    /// Agents whose cut-off factory work a restore queued again, until
+    /// their next turn starts
+    resumed: Mutex<HashSet<AgentId>>,
+}
+
+/// One agent's place in the flow, as it is saved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FlowRecord {
+    pub agent: AgentId,
+    pub stage: Stage,
+    /// The plan it builds, while building or shipping
+    pub plan: Option<String>,
+    /// The text its latest turn started with
+    pub prompt: Option<String>,
+    /// Factory work of its stage is in flight or queued, and only the
+    /// factory can start it again: a planning turn under way, the build,
+    /// the ship
+    pub pending: bool,
+}
+
+fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Flows {
-    fn stages(&self) -> std::sync::MutexGuard<'_, HashMap<AgentId, Stage>> {
-        self.stages
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    fn stages(&self) -> MutexGuard<'_, HashMap<AgentId, Stage>> {
+        locked(&self.stages)
     }
 
-    /// `agent`'s turn starts with `prompt`.
+    /// `agent`'s turn starts with `prompt`. A restored agent's work runs
+    /// again: it is no longer the restore's to start.
     pub(crate) fn note_prompt(&self, agent: AgentId, prompt: &str) {
-        self.prompts
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(agent, prompt.to_string());
+        locked(&self.prompts).insert(agent, prompt.to_string());
+        locked(&self.resumed).remove(&agent);
+    }
+
+    /// `agent`'s turn starts without a prompt of its own (a plan's build).
+    pub(crate) fn note_started(&self, agent: AgentId) {
+        locked(&self.resumed).remove(&agent);
     }
 
     /// The text `agent`'s latest turn started with, if known.
     pub(crate) fn prompt_of(&self, agent: AgentId) -> Option<String> {
-        self.prompts
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&agent)
-            .cloned()
+        locked(&self.prompts).get(&agent).cloned()
+    }
+
+    /// Whether a restore queued `agent`'s cut-off factory work again and
+    /// it hasn't started yet. A turn resumed on reopen skips such an
+    /// agent: its work is queued already.
+    // The hook RUS203's turn resume on reopen calls; until it lands only
+    // the tests do.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn resumes_after_restart(&self, agent: AgentId) -> bool {
+        locked(&self.resumed).contains(&agent)
+    }
+
+    /// The plan `agent` builds, while building or shipping.
+    pub(crate) fn plan_of(&self, agent: AgentId) -> Option<String> {
+        locked(&self.plans).get(&agent).cloned()
+    }
+
+    /// Every agent's place in the flow, oldest id first; `running` says
+    /// whether an agent has a turn under way.
+    pub(crate) fn records(&self, running: impl Fn(AgentId) -> bool) -> Vec<FlowRecord> {
+        let stages: Vec<(AgentId, Stage)> = self.stages().iter().map(|(a, s)| (*a, *s)).collect();
+        let resumed = locked(&self.resumed).clone();
+        let mut records: Vec<FlowRecord> = stages
+            .into_iter()
+            .map(|(agent, stage)| FlowRecord {
+                agent,
+                stage,
+                plan: self.plan_of(agent),
+                prompt: self.prompt_of(agent),
+                pending: match stage {
+                    Stage::Assigned => false,
+                    Stage::Planning => running(agent) || resumed.contains(&agent),
+                    Stage::Building | Stage::Shipping => true,
+                },
+            })
+            .collect();
+        records.sort_by_cached_key(|record| record.agent.to_hex());
+        records
+    }
+
+    /// Put `records` back, as the app starts. Those whose work is
+    /// `pending` are marked resumed until their next turn starts.
+    pub(crate) fn restore(&self, records: &[FlowRecord]) {
+        for record in records {
+            self.stages().insert(record.agent, record.stage);
+            if let Some(plan) = &record.plan {
+                locked(&self.plans).insert(record.agent, plan.clone());
+            }
+            if let Some(prompt) = &record.prompt {
+                locked(&self.prompts).insert(record.agent, prompt.clone());
+            }
+            if record.pending {
+                locked(&self.resumed).insert(record.agent);
+            }
+        }
+    }
+
+    /// Forget every stage, as a new process starts.
+    #[cfg(test)]
+    pub(crate) fn forget_all(&self) {
+        self.stages().clear();
+        locked(&self.prompts).clear();
+        locked(&self.plans).clear();
+        locked(&self.resumed).clear();
     }
 
     /// `agent` got a new task: the work it starts plans first.
@@ -146,14 +236,30 @@ impl Flows {
     /// `agent` leaves the flow (its build could not start).
     pub(crate) fn leave(&self, agent: AgentId) {
         self.stages().remove(&agent);
+        self.forget_extras(agent);
+    }
+
+    fn forget_extras(&self, agent: AgentId) {
+        locked(&self.plans).remove(&agent);
+        locked(&self.resumed).remove(&agent);
     }
 
     /// Record that `agent`'s turn ended as `end`; returns what to do next.
     pub(crate) fn turn_ended(&self, agent: AgentId, end: TurnEnd<'_>) -> Next {
-        let mut stages = self.stages();
-        let (stage, next) = advance(stages.remove(&agent), end);
-        if let Some(stage) = stage {
-            stages.insert(agent, stage);
+        let (stage, next) = {
+            let mut stages = self.stages();
+            let (stage, next) = advance(stages.remove(&agent), end);
+            if let Some(stage) = stage {
+                stages.insert(agent, stage);
+            }
+            (stage, next)
+        };
+        match (&stage, &next) {
+            (_, Next::Build(plan)) => {
+                locked(&self.plans).insert(agent, plan.clone());
+            }
+            (None, _) => self.forget_extras(agent),
+            _ => {}
         }
         next
     }
