@@ -237,6 +237,21 @@ impl Flows {
 
     /// Whether `agent`'s task is being planned: the plan its turn writes
     /// is built right after, unasked.
+    /// `agent`'s task goes on to its build without a plan written: it was
+    /// asked to implement, or started to, while it planned. Its build turn
+    /// is then shipped and reported as a planned one is. Returns whether
+    /// it was planning.
+    pub(crate) fn build_unplanned(&self, agent: AgentId) -> bool {
+        let mut stages = self.stages();
+        match stages.get_mut(&agent) {
+            Some(stage @ (Stage::Assigned | Stage::Planning)) => {
+                *stage = Stage::Building;
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub(crate) fn plans(&self, agent: AgentId) -> bool {
         self.stage(agent) == Some(Stage::Planning)
     }

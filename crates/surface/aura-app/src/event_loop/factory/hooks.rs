@@ -91,10 +91,25 @@ fn typed_task(hub: &AgentHub, agent: AgentId, prompt: &Prompt) -> bool {
         && takes_tasks(hub, agent)
 }
 
-/// How `agent`'s turn plans its task, if it does ([`super::Flows::begin`]).
-/// Switching the agent out of plan mode while its task plans takes the
-/// task over: it leaves the flow, and the turn runs as asked.
-fn begin(hub: &AgentHub, agent: AgentId) -> Option<Planning> {
+/// Whether `prompt` asks to build: the factory's own build, `/build`, or
+/// a message the user typed that is only "implement", "build it" and the
+/// like ([`plan_mode::is_build_phrase`]).
+fn asks_to_build(prompt: &Prompt) -> bool {
+    prompt.request == Request::Build
+        || (prompt.mentions && prompt.images.is_empty() && plan_mode::is_build_phrase(&prompt.text))
+}
+
+/// How `agent`'s turn for `prompt` plans its task, if it does
+/// ([`super::Flows::begin`]). Switching the agent out of plan mode while
+/// its task plans takes the task over: it leaves the flow, and the turn
+/// runs as asked. Asked to build, the task goes on to its build with no
+/// plan written: implementation starts, planning is over, and the build
+/// is shipped and reported as a planned one is.
+fn begin(hub: &AgentHub, agent: AgentId, prompt: &Prompt) -> Option<Planning> {
+    if asks_to_build(prompt) && hub.factory_flows.build_unplanned(agent) {
+        info!(%agent, "Software factory: asked to build while planning; building");
+        return None;
+    }
     let planning = hub.factory_flows.begin(agent)?;
     if planning == Planning::GoesOn && hub.mode_of(agent) != PermissionMode::Plan {
         info!(%agent, "Software factory: out of plan mode, the task leaves the flow");
@@ -119,7 +134,16 @@ pub(in crate::event_loop) async fn plan_first(
         info!(%agent, "Software factory: the typed task starts with a plan");
         state.hub.factory_flows.assign(agent);
     }
-    let Some(planning) = begin(&state.hub, agent) else {
+    let Some(planning) = begin(&state.hub, agent, prompt) else {
+        // Asked to build in plan mode: the turn builds, out of it. With
+        // a plan open the build starts it ([`plan_mode::start_build`]).
+        if asks_to_build(prompt)
+            && state.hub.mode_of(agent) == PermissionMode::Plan
+            && !has_open_plan(session)
+        {
+            let mode = state.hub.build_mode(agent);
+            modes::switch_mode(state, agent, &session.kernel, mode).await;
+        }
         return false;
     };
     if planning == Planning::Starts {
@@ -155,8 +179,15 @@ pub(in crate::event_loop) async fn plan_first_in_cloud(
         info!(%agent, "Software factory: the typed task starts with a plan");
         hub.factory_flows.assign(agent);
     }
-    if begin(hub, agent) != Some(Planning::Starts) {
-        return;
+    match begin(hub, agent, prompt) {
+        Some(Planning::Starts) => {}
+        // A cloud agent's plan is on its machine: asked to build, the
+        // turn builds, out of plan mode.
+        None if asks_to_build(prompt) => {
+            modes::leave_plan_mode_of(hub, agent).await;
+            return;
+        }
+        _ => return,
     }
     if hub.mode_of(agent) != PermissionMode::Plan {
         let approval = hub.permissions_of(agent).approval;
@@ -319,18 +350,10 @@ pub(in crate::event_loop) fn ship_work(offers_ship: bool) -> Work {
     }
 }
 
-/// Put cloud agent `agent` back in the mode it had before plan mode, and
-/// show its chat that mode.
+/// Put cloud agent `agent` back in the mode it had before plan mode,
+/// shown in its chat and on its rows ([`modes::leave_plan_mode_of`]).
 async fn leave_plan_mode(state: &LoopState<'_>, agent: AgentId) {
-    let hub = &state.hub;
-    if hub.mode_of(agent) == PermissionMode::Plan {
-        let back = hub.exit_plan_mode(agent);
-        let approval = hub.permissions_of(agent).approval;
-        hub.set_permissions(agent, Permissions::new(back, approval));
-        AgentUi::new(state.commands.clone(), agent)
-            .send(UiCommand::SetMode(back))
-            .await;
-    }
+    modes::leave_plan_mode_of(&state.hub, agent).await;
 }
 
 /// Whether another member of a channel, not its coordinator, works in
