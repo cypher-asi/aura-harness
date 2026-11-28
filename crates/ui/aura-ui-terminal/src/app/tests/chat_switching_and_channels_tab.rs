@@ -198,14 +198,16 @@ fn test_a_non_member_on_screen_takes_the_user_back_to_projects() {
     assert!(rx.try_recv().is_err(), "nothing is asked for in its place");
 }
 
-/// Shift+arrows go between the channel's three tabs only, from MEMBERS,
+/// Shift+arrows go between the channel's four tabs only, from MEMBERS,
 /// ending on INFO.
 fn shift_arrows_cycle_the_channel_tabs(app: &mut App) {
     let shift = |code| KeyEvent::new(code, KeyModifiers::SHIFT);
     for (code, tab) in [
         (KeyCode::Right, SidePanelTab::ChannelInfo),
         (KeyCode::Right, SidePanelTab::ChannelQueue),
+        (KeyCode::Right, SidePanelTab::Tasks),
         (KeyCode::Right, SidePanelTab::ChannelMembers),
+        (KeyCode::Left, SidePanelTab::Tasks),
         (KeyCode::Left, SidePanelTab::ChannelQueue),
         (KeyCode::Left, SidePanelTab::ChannelInfo),
     ] {
@@ -215,14 +217,13 @@ fn shift_arrows_cycle_the_channel_tabs(app: &mut App) {
 }
 
 /// [`app_with_others_channel`] come to its channel from a layout of the
-/// user's own: Record shown on POLICIES, the side panel hidden and not
-/// maximized, on TRACE.
+/// user's own: Record shown, the side panel hidden and not maximized, on
+/// TRACE.
 fn channel_over_own_layout() -> (App, mpsc::Receiver<UiEvent>) {
     let (mut app, rx) = app_with_others_channel();
     app.panels.record_visible = true;
     app.panels.side_expanded = false;
     app.panels.sandbox_visible = false;
-    app.records.tab = RecordsTab::Policies;
     app.side.tab = SidePanelTab::Trace;
     app.handle_key(key(KeyCode::Left));
     assert!(app.channel_open());
@@ -230,23 +231,22 @@ fn channel_over_own_layout() -> (App, mpsc::Receiver<UiEvent>) {
 }
 
 #[test]
-fn test_an_open_channel_shows_its_tasks_above_its_members_and_info() {
+fn test_an_open_channel_fills_the_right_column_with_its_tabs() {
     let (mut app, _rx) = channel_over_own_layout();
-    assert!(app.record_panel_visible(), "the channel's TASKS on top");
-    assert_eq!(app.records_tab(), RecordsTab::ChannelTasks);
-    assert_eq!(RecordsTab::tabs(true), [RecordsTab::ChannelTasks]);
+    assert!(!app.record_panel_visible(), "no Kernel panel in a channel");
     assert!(
         app.sandbox_panel_visible(),
         "shown though the agent's side panel is hidden"
     );
-    assert!(!app.side_maximized(), "the two share the column");
+    assert!(app.side_maximized());
     assert_eq!(app.side_tab(), SidePanelTab::ChannelMembers);
     assert_eq!(
         SidePanelTab::tabs(true),
         [
             SidePanelTab::ChannelMembers,
             SidePanelTab::ChannelInfo,
-            SidePanelTab::ChannelQueue
+            SidePanelTab::ChannelQueue,
+            SidePanelTab::Tasks,
         ]
     );
 
@@ -254,20 +254,17 @@ fn test_an_open_channel_shows_its_tasks_above_its_members_and_info() {
 }
 
 #[test]
-fn test_an_open_channel_keeps_its_panels_and_gives_back_the_users() {
+fn test_an_open_channel_keeps_the_agent_panels_away_and_gives_back_the_users() {
     let (mut app, _rx) = channel_over_own_layout();
     // The agent panels stay away, and the user's flags are untouched.
     for command in ["/kernel", "/files", "/inbox", "/members", "/policies"] {
         app.handle_command(command);
-        assert_eq!(app.records_tab(), RecordsTab::ChannelTasks, "{command}");
-        assert!(app.record_panel_visible(), "{command}");
+        assert!(!app.record_panel_visible(), "{command}");
         assert!(app.sandbox_panel_visible(), "{command}");
     }
     app.toggle_side_expanded();
     app.show_side_tab(SidePanelTab::Trace);
-    app.show_records_tab(RecordsTab::Kernel);
     assert_eq!(app.side_tab(), SidePanelTab::ChannelMembers);
-    assert_eq!(app.records_tab(), RecordsTab::ChannelTasks);
     assert!(
         (
             app.panels.record_visible,
@@ -277,21 +274,18 @@ fn test_an_open_channel_keeps_its_panels_and_gives_back_the_users() {
         "the user's flags are untouched"
     );
 
+    // TASKS is the agent app's tab too, yet leaving from it gives back
+    // the tab there was before the channel.
+    app.show_side_tab(SidePanelTab::Tasks);
+    assert_eq!(app.side_tab(), SidePanelTab::Tasks);
     app.focus = PanelFocus::Swarm;
     app.handle_key(key(KeyCode::Right));
     assert!(!app.channel_open());
     assert!(app.record_panel_visible());
-    assert_eq!(
-        app.records_tab(),
-        RecordsTab::Policies,
-        "its tab comes back"
-    );
     assert!(!app.sandbox_panel_visible());
     assert!(!app.side_expanded());
     assert!(!app.side_maximized());
     assert_eq!(app.side_tab(), SidePanelTab::Trace);
-    app.show_records_tab(RecordsTab::ChannelTasks);
-    assert_eq!(app.records_tab(), RecordsTab::Policies, "no TASKS outside");
 }
 
 #[test]
@@ -304,10 +298,9 @@ fn test_a_channel_dropped_from_the_list_gives_back_the_side_tab() {
     app.process_command(UiCommand::SetChannels(Vec::new()));
     assert!(!app.channel_open());
     assert_eq!(app.side_tab(), SidePanelTab::Tasks);
-    assert_eq!(app.records_tab(), RecordsTab::Kernel, "TASKS left with it");
     assert_eq!(app.agents_tab(), AgentsTab::Channels);
     assert!(
-        !app.sandbox_panel_visible() && !app.record_panel_visible(),
+        !app.sandbox_panel_visible(),
         "nothing to show beside the list"
     );
 }
@@ -330,10 +323,8 @@ fn test_channel_side_tabs_are_listed_and_reached_only_in_a_channel() {
         SidePanelTab::ChannelInfo.next(true),
         SidePanelTab::ChannelQueue
     );
-    assert_eq!(
-        SidePanelTab::ChannelQueue.next(true),
-        SidePanelTab::ChannelMembers
-    );
+    assert_eq!(SidePanelTab::ChannelQueue.next(true), SidePanelTab::Tasks);
+    assert_eq!(SidePanelTab::Tasks.next(true), SidePanelTab::ChannelMembers);
     assert_eq!(
         SidePanelTab::Sandbox.next(true),
         SidePanelTab::ChannelMembers

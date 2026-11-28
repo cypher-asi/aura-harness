@@ -1,27 +1,10 @@
-//! What the TASKS tab's rows open, and clicks and keys on them.
+//! What the TASKS tab's rows open, and clicks on them.
 
 use super::TaskRow;
 use crate::app::processes::on_row_icon;
 use crate::app::{contains, App, NotificationType, SideScope};
-use crossterm::event::{KeyCode, KeyEvent};
 
 impl App {
-    /// Keys of the TASKS tree that would otherwise go to the input, used
-    /// while it is empty: Home/End jump, Space folds, `p` opens the row's
-    /// plan and `t` highlights the task doing its todo. Returns whether
-    /// `key` was one.
-    pub(in crate::app) fn handle_tasks_shortcut(&mut self, key: KeyEvent) -> bool {
-        match key.code {
-            KeyCode::Home => self.task_list.select(0),
-            KeyCode::End => self.task_list.select(usize::MAX),
-            KeyCode::Char(' ') => self.task_list.toggle_selected(),
-            KeyCode::Char('p') => self.open_selected_row_plan(),
-            KeyCode::Char('t') => self.jump_to_todo_task(),
-            _ => return false,
-        }
-        true
-    }
-
     /// Open the highlighted row: a plan's file, at the todo for a todo;
     /// the agent of a task, of the request an item is on, or of a round's
     /// first request. The No Plan header has nothing to open, so it folds.

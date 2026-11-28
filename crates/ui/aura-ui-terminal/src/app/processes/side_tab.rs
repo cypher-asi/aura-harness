@@ -31,7 +31,8 @@ pub enum SidePanelTab {
     Trace,
     /// Work agents did or are doing, grouped under the plans they work
     /// on, each plan with its todos and each task with what is done and
-    /// left.
+    /// left. Listed in a channel too, last, where it lists the whole
+    /// project's work.
     Tasks,
 }
 
@@ -57,9 +58,14 @@ impl SidePanelTab {
         Self::Tasks,
     ];
 
-    /// The tabs listed while a channel is open: the channel's own, and
-    /// none of the agent app's.
-    const IN_CHANNEL: [Self; 3] = [Self::ChannelMembers, Self::ChannelInfo, Self::ChannelQueue];
+    /// The tabs listed while a channel is open: the channel's own, then
+    /// TASKS, and none of the agent app's others.
+    const IN_CHANNEL: [Self; 4] = [
+        Self::ChannelMembers,
+        Self::ChannelInfo,
+        Self::ChannelQueue,
+        Self::Tasks,
+    ];
 
     /// The tabs the header bar lists, in order, with a channel open or
     /// not.

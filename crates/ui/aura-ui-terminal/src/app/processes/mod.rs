@@ -54,11 +54,11 @@ impl App {
         self.side.processes.scroll
     }
 
-    /// Show `tab`. A channel's tabs are only shown while a channel is
-    /// open, and the agent app's only while none is; asked for in the
-    /// wrong one, nothing changes.
+    /// Show `tab` if the bar lists it: a channel's tabs only while a
+    /// channel is open, the agent app's only while none is, and TASKS in
+    /// both. Asked for one it doesn't list, nothing changes.
     pub(super) fn show_side_tab(&mut self, tab: SidePanelTab) {
-        if tab.is_channel_tab() != self.channel_open() {
+        if !SidePanelTab::tabs(self.channel_open()).contains(&tab) {
             return;
         }
         self.side.tab = tab;
@@ -190,7 +190,9 @@ impl App {
             (SidePanelTab::Repo, KeyCode::Char(']')) => self.step_repo_filter(true),
             (SidePanelTab::Repo, KeyCode::Char('o')) => self.open_selected_repo_page(),
             (SidePanelTab::Repo, KeyCode::Char('r')) => self.request_repo(true),
-            (SidePanelTab::Tasks, _) => return self.handle_tasks_shortcut(key),
+            (SidePanelTab::Tasks, KeyCode::Char(' ')) => self.task_list.toggle_selected(),
+            (SidePanelTab::Tasks, KeyCode::Char('p')) => self.open_selected_row_plan(),
+            (SidePanelTab::Tasks, KeyCode::Char('t')) => self.jump_to_todo_task(),
             (SidePanelTab::Processes, KeyCode::Char('o')) => self.jump_to_selected_owner(),
             (SidePanelTab::Processes, KeyCode::Char('k') | KeyCode::Delete) => {
                 self.request_kill_selected();

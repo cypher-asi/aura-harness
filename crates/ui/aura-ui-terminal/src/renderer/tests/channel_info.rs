@@ -1,12 +1,6 @@
 use super::channels::{channel_info_app, info_row};
 use super::*;
 
-/// INFO shares the column with the channel's TASKS, so it is drawn on a
-/// screen tall enough for all of it.
-fn render_info(app: &mut crate::App) -> Vec<String> {
-    render_rows_sized(app, 140, 60)
-}
-
 #[test]
 fn test_channel_info_tab_shows_what_the_channel_is() {
     use crate::events::ChannelProjectView;
@@ -15,7 +9,7 @@ fn test_channel_info_tab_shows_what_the_channel_is() {
         name: "zodeproj".to_string(),
         folder: "/src/zodeproj".to_string(),
     }));
-    let rows = render_info(&mut app);
+    let rows = render_rows(&mut app, 140);
     let description = info_row(&rows, "Ship it");
     let coordinator = info_row(&rows, "COORDINATOR");
     let members = info_row(&rows, "2 agents");
@@ -56,7 +50,7 @@ fn test_channel_info_says_a_cloud_channel_needs_a_project_to_run_agents_there() 
         let mut channels = app.channels().to_vec();
         channels[0].placement = crate::host::PlacementView::Cloud;
         app.process_command(UiCommand::SetChannels(channels));
-        let rows = render_info(&mut app);
+        let rows = render_rows(&mut app, 140);
         let cloud = info_row(&rows, "In the cloud");
         assert!(info_row(&rows, "AGENTS RUN") < cloud, "{project:?}");
         let note = rows.iter().position(|row| row.contains("run locally"));
@@ -71,7 +65,7 @@ fn test_channel_info_says_a_cloud_channel_needs_a_project_to_run_agents_there() 
 #[test]
 fn test_channel_info_without_a_project_says_where_agents_work() {
     let mut app = channel_info_app(None);
-    let rows = render_info(&mut app);
+    let rows = render_rows(&mut app, 140);
     let heading = info_row(&rows, "PROJECT");
     let none = info_row(&rows, "No project —");
     assert!(heading < none, "{heading} {none}");
@@ -97,7 +91,7 @@ fn test_channel_info_shows_a_missing_project_by_name_without_a_folder() {
         name: "(missing project)".to_string(),
         folder: String::new(),
     }));
-    let rows = render_info(&mut app);
+    let rows = render_rows(&mut app, 140);
     let heading = info_row(&rows, "PROJECT");
     let project = info_row(&rows, "(missing project)");
     assert!(heading < project, "{heading} {project}");

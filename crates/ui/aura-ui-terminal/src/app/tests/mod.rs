@@ -21,6 +21,7 @@ mod channel_member_chat;
 mod channel_member_chat_edges;
 mod channel_member_folds;
 mod channel_menu;
+mod channel_scroll;
 mod channel_side_panel;
 mod channel_tasks;
 mod chat_scrollbar;

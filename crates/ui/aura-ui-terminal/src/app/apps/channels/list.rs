@@ -42,10 +42,10 @@ impl App {
     }
 
     /// Say why the agent panels (`/kernel`, `/files`, `/inbox`, ...) are
-    /// not shown: the channel app has only its chat and its own panels.
+    /// not shown: the channel app has only its chat and its own panel.
     pub(in crate::app) fn notify_channel_owns_column(&mut self) {
         self.notifications.current = Some((
-            "Channels have only their own panels; switch to PROJECTS for agent panels".to_string(),
+            "Channels have only a chat; switch to PROJECTS for agent panels".to_string(),
             NotificationType::Warning,
         ));
     }

@@ -363,3 +363,42 @@ fn test_esc_cancels_the_form_without_an_event() {
     assert!(app.channel_form().is_none());
     assert!(rx.try_recv().is_err());
 }
+
+#[test]
+fn test_kernel_panel_commands_leave_the_layout_alone_while_a_channel_is_open() {
+    let (_dir, mut app) = app_in_channel("co");
+    let before = (
+        app.panels.record_visible,
+        app.panels.side_expanded,
+        app.panels.sandbox_visible,
+    );
+    app.show_members();
+    app.show_policies();
+    app.show_inbox();
+    assert_eq!(
+        (
+            app.panels.record_visible,
+            app.panels.side_expanded,
+            app.panels.sandbox_visible,
+        ),
+        before
+    );
+    assert!(
+        !app.record_panel_visible(),
+        "the channel still fills the column"
+    );
+}
+
+#[test]
+fn test_a_kernel_record_jump_in_a_channel_only_says_the_panel_is_away() {
+    let (_dir, mut app) = app_in_channel("co");
+    app.process_command(UiCommand::SetRecords(vec![
+        crate::app::detail_tests::record(1),
+    ]));
+    app.focus = PanelFocus::Chat;
+    app.show_turn_records(0);
+    assert_eq!(app.focus(), PanelFocus::Chat);
+    assert!(app
+        .notification()
+        .is_some_and(|(text, _)| text.contains("PROJECTS")));
+}

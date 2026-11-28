@@ -28,6 +28,7 @@
 use super::chat_view::EarlyPolicy;
 use super::run_log::{fade_progress, LOADING_DELAY};
 use super::sandbox::SandboxTree;
+use super::scroll::ChatPlace;
 use super::side_scope::ListPlaces;
 use super::{hud::Hud, App, AppState, ChatTab, NotificationType, PendingApproval, SidePanelTab};
 use crate::{
@@ -47,7 +48,7 @@ pub(crate) struct AgentView {
     early_policies: Vec<EarlyPolicy>,
     status: String,
     processing_since: Option<Instant>,
-    scroll_offset: usize,
+    scroll: ChatPlace,
     group_open: HashMap<u64, bool>,
     chat_lines: ChatLineCache,
     pending_approvals: VecDeque<PendingApproval>,
@@ -83,7 +84,7 @@ impl Default for AgentView {
             early_policies: Vec::new(),
             status: "Ready".to_string(),
             processing_since: None,
-            scroll_offset: 0,
+            scroll: ChatPlace::default(),
             group_open: HashMap::new(),
             chat_lines: ChatLineCache::default(),
             pending_approvals: VecDeque::new(),
@@ -128,7 +129,7 @@ impl App {
         mem::swap(&mut self.chat.early_policies, &mut view.early_policies);
         mem::swap(&mut self.status, &mut view.status);
         mem::swap(&mut self.ticks.processing_since, &mut view.processing_since);
-        mem::swap(&mut self.scroll_offset, &mut view.scroll_offset);
+        view.scroll = self.replace_chat_place(view.scroll);
         mem::swap(&mut self.chat.group_open, &mut view.group_open);
         mem::swap(&mut self.chat.chat_lines, &mut view.chat_lines);
         mem::swap(&mut self.pending.approvals, &mut view.pending_approvals);
@@ -237,6 +238,7 @@ impl App {
         let busy = view.busy;
         let tab = mem::replace(&mut view.chat_tab, self.chat_tab());
         self.switching.list_places_due = view.list_places.replace(self.list_places());
+        self.put_channel_chat_place_away();
         self.swap_chat(&mut view);
         view.busy = is_busy(self.chat_state);
         self.switching.views.insert(previous, view);
