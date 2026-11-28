@@ -238,6 +238,14 @@ pub(super) fn enforce_command_policy(args: &RunArgs, ctx: &ToolContext) -> Resul
         ));
     }
 
+    // Every push goes through the push tools and the merge queue, at any
+    // approval level.
+    super::push_guard::refuse_raw_push(
+        args.program.as_deref(),
+        &args.cmd_args,
+        args.shell_script.as_deref(),
+    )?;
+
     // A command confined to writing in the workspace (the `yolo` approval
     // level) is already bounded by the confinement, not by which binary
     // it starts with.

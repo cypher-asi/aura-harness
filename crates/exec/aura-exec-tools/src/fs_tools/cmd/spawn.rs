@@ -145,6 +145,8 @@ fn apply_plain_output_env(cmd: &mut std::process::Command) {
     cmd.env("CLICOLOR", "0");
     cmd.env("CLICOLOR_FORCE", "0");
     cmd.env("TERM", "dumb");
+    // No push to a remote from a command: they go through the merge queue.
+    cmd.envs(super::push_guard::PUSH_BLOCK_ENV);
     if let Some(jobs) = build_jobs_limit() {
         cmd.env(BUILD_JOBS_VAR, jobs);
     }
