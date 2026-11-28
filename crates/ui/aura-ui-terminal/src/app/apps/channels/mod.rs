@@ -103,9 +103,15 @@ pub(crate) struct ChannelState {
     merge_queues: HashMap<String, MergeQueueView>,
     /// How far the QUEUE side tab is scrolled
     queue_scroll: InfoScroll,
-    /// Where QUEUE drew each branch that opens its page this frame, with
-    /// the page
-    queue_links: Vec<(Rect, String)>,
+    /// Where QUEUE drew each branch that opens its page this frame, by
+    /// its place among the document's links, with the page
+    queue_links: Vec<(usize, Rect, String)>,
+    /// Where QUEUE drew each time this frame, by its place among the
+    /// document's times
+    queue_times: Vec<(usize, Rect)>,
+    /// When a time QUEUE shows next reads differently, so the tab is
+    /// drawn again then
+    queue_time_due: Option<std::time::Instant>,
     /// The channel whose QUEUE tab last asked for older merges, and how
     /// many merges it showed then: it asks once per page shown
     older_asked: Option<(String, usize)>,

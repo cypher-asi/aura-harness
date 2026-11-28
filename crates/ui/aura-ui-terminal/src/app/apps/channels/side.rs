@@ -5,7 +5,7 @@ use super::fold;
 use crate::animation::AURA_WIDTH;
 use crate::app::processes::SIDE_PAGE;
 use crate::app::wheel_views::WheelList;
-use crate::app::{contains, App};
+use crate::app::{contains, App, HoverTarget};
 use crate::components::ROW_INSET;
 use crate::events::{MergeQueueView, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -308,19 +308,63 @@ impl App {
         self.channels.queue_scroll.by(delta);
     }
 
-    /// Record where QUEUE drew each branch that opens its page this
-    /// frame, with the page.
-    pub(crate) fn set_channel_queue_links(&mut self, links: Vec<(Rect, String)>) {
+    /// Record what QUEUE drew this frame for the pointer and the clock:
+    /// each branch that opens its page and each time, by its place in
+    /// the document, and when a time next reads differently.
+    pub(crate) fn set_channel_queue_marks(
+        &mut self,
+        links: Vec<(usize, Rect, String)>,
+        times: Vec<(usize, Rect)>,
+        due: Option<std::time::Instant>,
+    ) {
         self.channels.queue_links = links;
+        self.channels.queue_times = times;
+        self.channels.queue_time_due = due;
+    }
+
+    /// The branch QUEUE drew at a screen cell, if any: its place among
+    /// the links, and its page.
+    fn channel_queue_link(&self, column: u16, row: u16) -> Option<(usize, &str)> {
+        self.channels
+            .queue_links
+            .iter()
+            .find(|(_, area, _)| contains(Some(*area), column, row))
+            .map(|(at, _, url)| (*at, url.as_str()))
     }
 
     /// The page of the branch QUEUE drew at a screen cell, if any.
     pub(in crate::app) fn channel_queue_link_at(&self, column: u16, row: u16) -> Option<&str> {
+        self.channel_queue_link(column, row).map(|(_, url)| url)
+    }
+
+    /// What the pointer lights on QUEUE at a screen cell: a branch link,
+    /// which underlines, or a time, which shows in full.
+    pub(in crate::app) fn hovered_channel_queue(
+        &self,
+        column: u16,
+        row: u16,
+    ) -> Option<HoverTarget> {
+        if let Some((at, _)) = self.channel_queue_link(column, row) {
+            return Some(HoverTarget::ChannelQueueLink(at));
+        }
         self.channels
-            .queue_links
+            .queue_times
             .iter()
-            .find(|(area, _)| contains(Some(*area), column, row))
-            .map(|(_, url)| url.as_str())
+            .find(|(_, area)| contains(Some(*area), column, row))
+            .map(|(at, _)| HoverTarget::ChannelQueueTime(*at))
+    }
+
+    /// Whether a time QUEUE shows reads differently by now, so the screen
+    /// is drawn again; the next draw records when the next one does.
+    pub(in crate::app) fn take_channel_queue_time_due(&mut self) -> bool {
+        let due = self
+            .channels
+            .queue_time_due
+            .is_some_and(|due| std::time::Instant::now() >= due);
+        if due {
+            self.channels.queue_time_due = None;
+        }
+        due
     }
 
     /// A click on a branch of QUEUE opens its page on GitHub; anywhere

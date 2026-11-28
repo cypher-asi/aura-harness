@@ -5,17 +5,17 @@ use super::*;
 const QUEUED_AT: &str = "2024-11-27T20:31:00Z";
 const FINISHED_AT: &str = "2024-11-27T20:44:00Z";
 
-/// `at`, RFC 3339, as QUEUE shows it: month, day and minute, local time.
+/// The date of `at`, RFC 3339, as QUEUE shows it now: long ago, a date
+/// with its year (`Nov 27 2024`), before its minute, which a narrow
+/// column wraps under it.
 fn local(at: &str) -> String {
-    chrono::DateTime::parse_from_rfc3339(at)
-        .unwrap()
-        .with_timezone(&chrono::Local)
-        .format("%m-%d %H:%M")
-        .to_string()
+    let time = crate::components::parse_time(at).unwrap();
+    let said = crate::components::relative_time(&time, &chrono::Local::now());
+    said.split(',').next().unwrap_or_default().to_string()
 }
 
 /// [`channels_app`] with `#zode` open on its QUEUE tab.
-fn queue_app() -> crate::App {
+pub(super) fn queue_app() -> crate::App {
     use crate::app::{PaneTab, SidePanelTab};
     let mut app = channels_app();
     app.open_channel_by_id("c1");
@@ -26,7 +26,7 @@ fn queue_app() -> crate::App {
 
 /// `#zode`'s queue, newest first: a running merge, a failed one and a
 /// merged one.
-fn zode_queue() -> crate::events::MergeQueueView {
+pub(super) fn zode_queue() -> crate::events::MergeQueueView {
     use crate::events::{MergeEntryView, MergeQueueView, MergeStateView};
     let entry = |id: &str, branch: &str, state| MergeEntryView {
         id: id.to_string(),
@@ -88,7 +88,7 @@ fn test_an_open_channel_lists_queue_right_after_info() {
 
 /// Rows of a screen tall enough for the whole queue below the channel's
 /// TASKS, which shares the column.
-const TALL: u16 = 70;
+pub(super) const TALL: u16 = 70;
 
 #[test]
 fn test_queue_tab_lists_every_merge_newest_first() {
@@ -118,7 +118,12 @@ fn test_queue_tab_lists_every_merge_newest_first() {
     let queued_row = line_with(&rows, &queued);
     assert!(queued_row > running && queued_row < failed, "{queued}");
     assert!(rows[queued_row].contains("Queued"), "{}", rows[queued_row]);
-    let finished = line_with(&rows, &local(FINISHED_AT));
+    let finished = line_with(&rows, "Finished");
+    assert!(
+        rows[finished].contains(&local(FINISHED_AT)),
+        "{}",
+        rows[finished]
+    );
     assert!(finished > failed && finished < merged);
     let attempts = line_with(&rows, "Attempts");
     assert!(rows[attempts].contains('2'), "{}", rows[attempts]);
@@ -130,7 +135,7 @@ fn test_queue_tab_lists_every_merge_newest_first() {
 }
 
 /// The screen of `app`, tall enough for the whole queue.
-fn queue_buffer(app: &mut crate::App, theme: &crate::Theme) -> ratatui::buffer::Buffer {
+pub(super) fn queue_buffer(app: &mut crate::App, theme: &crate::Theme) -> ratatui::buffer::Buffer {
     let mut terminal =
         ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, TALL)).unwrap();
     terminal
@@ -205,50 +210,6 @@ fn test_queue_tab_has_no_bold_or_colored_text() {
             );
         }
     }
-}
-
-/// `#zode`'s queue, in a repo on GitHub, drawn on a tall screen; returns
-/// the screen and the row and column the branch `branch` starts at.
-fn linked_queue(app: &mut crate::App, web: Option<&str>, branch: &str) -> (u16, u16) {
-    app.process_command(crate::events::UiCommand::SetMergeQueue {
-        channel_id: "c1".to_string(),
-        queue: crate::events::MergeQueueView {
-            web: web.map(str::to_string),
-            ..zode_queue()
-        },
-    });
-    let rows = render_rows_sized(app, 140, TALL);
-    let row = line_with(&rows, branch);
-    let column = char_column(&rows[row], branch);
-    (u16::try_from(column).unwrap(), u16::try_from(row).unwrap())
-}
-
-#[test]
-fn test_a_click_on_a_branch_opens_it_on_github() {
-    use crossterm::event::{MouseButton, MouseEventKind};
-    let mut app = queue_app();
-    let at = linked_queue(&mut app, Some("https://github.com/o/r"), "fix/escapes");
-    mouse_at(&mut app, MouseEventKind::Down(MouseButton::Left), at);
-    assert_eq!(
-        app.opened_links(),
-        ["https://github.com/o/r/tree/fix/escapes"]
-    );
-    // The header above it is no link.
-    mouse_at(
-        &mut app,
-        MouseEventKind::Down(MouseButton::Left),
-        (at.0, at.1 - 1),
-    );
-    assert_eq!(app.opened_links().len(), 1);
-}
-
-#[test]
-fn test_a_branch_of_a_repo_off_github_opens_nothing() {
-    use crossterm::event::{MouseButton, MouseEventKind};
-    let mut app = queue_app();
-    let at = linked_queue(&mut app, None, "fix/escapes");
-    mouse_at(&mut app, MouseEventKind::Down(MouseButton::Left), at);
-    assert!(app.opened_links().is_empty());
 }
 
 #[test]
@@ -332,16 +293,6 @@ fn test_queue_tab_is_picked_by_click_and_shift_arrows_cycle_the_channel_tabs() {
             SidePanelTab::ChannelQueue
         ]
     );
-}
-
-#[test]
-fn test_a_time_that_does_not_parse_is_cut_to_its_minutes() {
-    use super::super::channel_queue::compact_time;
-    assert_eq!(
-        compact_time("2024-11-27T20:31:59+bogus"),
-        "2024-11-27 20:31"
-    );
-    assert_eq!(compact_time(QUEUED_AT), local(QUEUED_AT));
 }
 
 /// `#zode`'s queue with `older` merges not sent yet.

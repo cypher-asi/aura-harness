@@ -30,6 +30,7 @@ mod channel_member_chat;
 mod channel_member_folds;
 mod channel_members;
 mod channel_queue;
+mod channel_queue_links;
 mod channel_side_toggle;
 mod channel_tasks;
 mod channel_welcome;

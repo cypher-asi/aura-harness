@@ -173,16 +173,28 @@ impl<'t> Info<'t> {
         self.lines.push(Line::from(spans));
     }
 
-    /// `  text`, indented like an item, in `foreground` and underlined: a
-    /// line the pointer opens. Returns its index among the document's
-    /// lines, for the caller to find it under the pointer.
-    pub fn link(&mut self, text: &str) -> usize {
+    /// `  text`, indented like an item, in `foreground`: a line the
+    /// pointer opens, underlined while it is `hovered`, as the chat's
+    /// links are. Returns its index among the document's lines, for the
+    /// caller to find it under the pointer.
+    pub fn link(&mut self, text: &str, hovered: bool) -> usize {
         let text = truncate_line(text, self.width.saturating_sub(INDENT.len()));
+        let style = if hovered {
+            self.plain().add_modifier(Modifier::UNDERLINED)
+        } else {
+            self.plain()
+        };
         self.lines.push(Line::from(vec![
             Span::raw(INDENT),
-            Span::styled(text, self.plain().add_modifier(Modifier::UNDERLINED)),
+            Span::styled(text, style),
         ]));
         self.lines.len() - 1
+    }
+
+    /// How many lines the document has so far: the index the next one
+    /// gets.
+    pub fn line_count(&self) -> usize {
+        self.lines.len()
     }
 
     /// `  label     value`: the muted label in its column, then the value,

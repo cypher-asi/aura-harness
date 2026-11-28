@@ -211,8 +211,17 @@ fn a_link_is_an_indented_plain_line_whose_index_comes_back() {
     let theme = Theme::cyber();
     let mut info = Info::new(20, &theme);
     info.section("BRANCH", None);
-    let at = info.link("aura/a-very-long-branch-name");
+    let at = info.link("aura/a-very-long-branch-name", true);
+    assert_eq!(info.line_count(), 2);
+    let plain = info.link("aura/x", false);
     let lines = info.into_lines();
+    assert!(
+        !lines[plain].spans[1]
+            .style
+            .add_modifier
+            .contains(Modifier::UNDERLINED),
+        "underlined only on hover"
+    );
     assert_eq!(at, 1);
     assert!(
         text(&lines[at]).starts_with("  aura/"),

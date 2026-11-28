@@ -20,8 +20,8 @@
 //!   ---- parser::escapes stdout ----
 //!   assertion `left == right` failed
 //!   Agent     RE36
-//!   Queued    11-27 20:31
-//!   Finished  11-27 20:33
+//!   Queued    5 h ago
+//!   Finished  2 minutes ago
 //!   Attempts  2
 //!   Overlaps  q4 feat/lexer (RE37): src/parser.rs
 //!   cargo test failed: parser::escapes
@@ -32,6 +32,13 @@
 //! When the queue found the target failing its own checks, a `BROKEN`
 //! section with a failed dot says why, above every merge.
 //!
+//! Times read as people say them (`components::relative_time`): `just
+//! now`, `2 minutes ago`, `5 h ago`, then `yesterday 14:32` and dates.
+//! The tab records when the soonest of them next reads differently, and
+//! the app redraws then, not every frame. The pointer over a time shows
+//! it in full, to the second; over a branch it underlines it, as the
+//! chat's links are.
+//!
 //! Only the dots are colored, and nothing is bold: the text is
 //! `foreground`, or `muted` for ids, shas, output and what happened.
 //!
@@ -41,12 +48,16 @@
 //! scrolling to it asks for the next page.
 
 use super::chrome::{pad_sides, Body};
-use crate::app::PanelFocus;
-use crate::components::{truncate_line, Info, StatusDot, Value};
+use crate::app::{HoverTarget, PanelFocus};
+use crate::components::{
+    exact_time, parse_time, relative_time, relative_time_changes, truncate_line, Info, StatusDot,
+    Value,
+};
 use crate::events::{MergeEntryView, MergeQueueView, MergeStateView};
 use crate::{App, Theme};
 use chrono::{DateTime, Local};
 use ratatui::{layout::Rect, style::Style, text::Line, Frame};
+use std::time::{Duration, Instant};
 
 /// What QUEUE says while no merge has been queued into `target`, the
 /// queue's target branch; the branch goes unnamed while unknown.
@@ -64,16 +75,49 @@ pub(super) fn no_merges(target: Option<&str>) -> String {
     )
 }
 
-/// The QUEUE tab's document: its lines, and the lines that open a
-/// branch's page, by index, with the page.
+/// What the QUEUE document is drawn for: the time it is, and the branch
+/// link and the time under the pointer, each by its place in the
+/// document.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct QueueLook {
+    pub now: DateTime<Local>,
+    pub hovered_link: Option<usize>,
+    pub hovered_time: Option<usize>,
+}
+
+impl QueueLook {
+    /// Drawn at `now` with nothing under the pointer.
+    pub(super) const fn at(now: DateTime<Local>) -> Self {
+        Self {
+            now,
+            hovered_link: None,
+            hovered_time: None,
+        }
+    }
+}
+
+/// The QUEUE tab's document: its lines, the lines that open a branch's
+/// page with the page, the lines with a time, and how long until the
+/// soonest time reads differently.
 pub(super) struct QueueDoc {
     pub lines: Vec<Line<'static>>,
     pub links: Vec<(usize, String)>,
+    pub times: Vec<usize>,
+    pub due: Option<Duration>,
+}
+
+/// What the entries add to the document as it is built.
+struct Marks {
+    look: QueueLook,
+    links: Vec<(usize, String)>,
+    times: Vec<usize>,
+    due: Option<Duration>,
 }
 
 /// Draw the open channel's merge queue into `inner`, the body below the
 /// tab bar of the panel bordered by `area`, and record where its branch
-/// links went. Without an open channel there is nothing to draw.
+/// links and times went, and when a time next changes. Without an open
+/// channel there is nothing to draw.
 pub(super) fn render_channel_queue(
     frame: &mut Frame,
     area: Rect,
@@ -81,38 +125,54 @@ pub(super) fn render_channel_queue(
     app: &mut App,
     theme: &Theme,
 ) {
-    app.set_channel_queue_links(Vec::new());
+    app.set_channel_queue_marks(Vec::new(), Vec::new(), None);
     if app.open_channel().is_none() {
         return;
     }
     let body = Body::new(area, inner, app.focus() == PanelFocus::Sandbox);
-    let doc = queue_doc(app.open_channel_queue(), body.text_width(), theme);
+    let look = QueueLook {
+        hovered_link: match app.hover() {
+            Some(HoverTarget::ChannelQueueLink(at)) => Some(at),
+            _ => None,
+        },
+        hovered_time: match app.hover() {
+            Some(HoverTarget::ChannelQueueTime(at)) => Some(at),
+            _ => None,
+        },
+        ..QueueLook::at(Local::now())
+    };
+    let doc = queue_doc(app.open_channel_queue(), body.text_width(), theme, look);
     let (total, visible) = (doc.lines.len(), body.visible());
     let first = app.sync_channel_queue_scroll(total, visible);
-    app.set_channel_queue_links(link_areas(&doc.links, pad_sides(body.rows()), first));
+    let rows = pad_sides(body.rows());
+    let links = doc
+        .links
+        .iter()
+        .enumerate()
+        .filter_map(|(at, (line, url))| Some((at, line_area(*line, rows, first)?, url.clone())))
+        .collect();
+    let times = doc
+        .times
+        .iter()
+        .enumerate()
+        .filter_map(|(at, line)| Some((at, line_area(*line, rows, first)?)))
+        .collect();
+    app.set_channel_queue_marks(links, times, doc.due.map(|due| Instant::now() + due));
     body.draw_document(frame, doc.lines, first, theme);
     if first + visible >= total {
         app.queue_end_reached();
     }
 }
 
-/// Where each of `links` is on screen, its document drawn in `rows` from
-/// line `first`: the links scrolled out of `rows` are left out.
-fn link_areas(links: &[(usize, String)], rows: Rect, first: usize) -> Vec<(Rect, String)> {
-    links
-        .iter()
-        .filter_map(|(line, url)| {
-            let offset = u16::try_from(line.checked_sub(first)?).ok()?;
-            (offset < rows.height).then(|| {
-                let area = Rect {
-                    y: rows.y + offset,
-                    height: 1,
-                    ..rows
-                };
-                (area, url.clone())
-            })
-        })
-        .collect()
+/// Where document line `line` is on screen, the document drawn in `rows`
+/// from line `first`; `None` once it is scrolled out of them.
+fn line_area(line: usize, rows: Rect, first: usize) -> Option<Rect> {
+    let offset = u16::try_from(line.checked_sub(first)?).ok()?;
+    (offset < rows.height).then(|| Rect {
+        y: rows.y + offset,
+        height: 1,
+        ..rows
+    })
 }
 
 /// The QUEUE tab's lines, `width` columns wide.
@@ -122,11 +182,22 @@ pub(super) fn queue_lines(
     width: usize,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
-    queue_doc(queue, width, theme).lines
+    queue_doc(queue, width, theme, QueueLook::at(Local::now())).lines
 }
 
 /// The QUEUE tab's document, `width` columns wide.
-pub(super) fn queue_doc(queue: Option<&MergeQueueView>, width: usize, theme: &Theme) -> QueueDoc {
+pub(super) fn queue_doc(
+    queue: Option<&MergeQueueView>,
+    width: usize,
+    theme: &Theme,
+    look: QueueLook,
+) -> QueueDoc {
+    let mut marks = Marks {
+        look,
+        links: Vec::new(),
+        times: Vec::new(),
+        due: None,
+    };
     let mut info = Info::new(width, theme).wrap_values();
     if let Some(queue) = queue {
         target_section(&mut info, queue);
@@ -140,13 +211,12 @@ pub(super) fn queue_doc(queue: Option<&MergeQueueView>, width: usize, theme: &Th
         return QueueDoc {
             lines: info.into_lines(),
             links: Vec::new(),
+            times: Vec::new(),
+            due: None,
         };
     }
-    let mut links = Vec::new();
     for entry in entries {
-        if let Some(link) = entry_lines(&mut info, queue, entry, theme) {
-            links.push(link);
-        }
+        entry_lines(&mut info, queue, entry, theme, &mut marks);
     }
     if let Some(older) = queue.map(|queue| queue.older).filter(|&older| older > 0) {
         info.blank();
@@ -154,7 +224,9 @@ pub(super) fn queue_doc(queue: Option<&MergeQueueView>, width: usize, theme: &Th
     }
     QueueDoc {
         lines: info.into_lines(),
-        links,
+        links: marks.links,
+        times: marks.times,
+        due: marks.due,
     }
 }
 
@@ -185,30 +257,29 @@ fn older_merges(older: u64) -> String {
 }
 
 /// An entry as its own section: its header, its branch on a line of its
-/// own, then its facts. Returns the branch's line and page when the
+/// own, then its facts. The branch's line and page go in `marks` when the
 /// branch opens one.
 fn entry_lines(
     info: &mut Info<'_>,
     queue: Option<&MergeQueueView>,
     entry: &MergeEntryView,
     theme: &Theme,
-) -> Option<(usize, String)> {
+    marks: &mut Marks,
+) {
     let head = entry.head.trim();
     let note = (!head.is_empty()).then_some(head);
     info.marked_section(state_dot(entry.state), entry.state.label(), note);
     let branch = entry.branch.trim();
-    let link = match queue.and_then(|queue| queue.branch_url(branch)) {
-        Some(url) => Some((info.link(branch), url)),
-        None => {
-            if !branch.is_empty() {
-                info.item(branch, None);
-            }
-            None
+    match queue.and_then(|queue| queue.branch_url(branch)) {
+        Some(url) => {
+            let hovered = marks.look.hovered_link == Some(marks.links.len());
+            marks.links.push((info.link(branch, hovered), url));
         }
-    };
+        None if !branch.is_empty() => info.item(branch, None),
+        None => {}
+    }
     failure_first(info, entry, theme);
-    entry_facts(info, entry);
-    link
+    entry_facts(info, entry, marks);
 }
 
 /// A failed merge's failing tests and their output, before anything else
@@ -242,13 +313,13 @@ const EXCERPT_LINES: usize = 24;
 /// and finished, its attempts when it ran more than once, what the
 /// target moved to, the other work that changes the same files, and what
 /// happened. None of it is colored.
-fn entry_facts(info: &mut Info<'_>, entry: &MergeEntryView) {
+fn entry_facts(info: &mut Info<'_>, entry: &MergeEntryView, marks: &mut Marks) {
     if let Some(agent) = entry.agent.as_deref().filter(|agent| !agent.is_empty()) {
         info.fact("Agent", agent, Value::Plain);
     }
-    info.fact("Queued", &compact_time(&entry.queued_at), Value::Plain);
+    time_fact(info, "Queued", &entry.queued_at, marks);
     if let Some(finished) = entry.finished_at.as_deref() {
-        info.fact("Finished", &compact_time(finished), Value::Plain);
+        time_fact(info, "Finished", finished, marks);
     }
     if entry.attempts > 1 {
         info.fact("Attempts", &entry.attempts.to_string(), Value::Plain);
@@ -279,12 +350,26 @@ pub(super) const fn state_dot(state: MergeStateView) -> StatusDot {
     }
 }
 
-/// An RFC 3339 time as `MM-DD HH:MM` in local time. A time that does not
-/// parse is shown as sent, cut to its minutes.
-pub(super) fn compact_time(at: &str) -> String {
-    let at = at.trim();
-    match DateTime::parse_from_rfc3339(at) {
-        Ok(time) => time.with_timezone(&Local).format("%m-%d %H:%M").to_string(),
-        Err(_) => at.chars().take(16).collect::<String>().replace('T', " "),
+/// A time fact: `Queued  5 h ago`, or the time in full while the pointer
+/// is on it. Its line goes in `marks`, and when it next reads
+/// differently. A time that does not parse is shown as sent, cut to its
+/// minutes.
+fn time_fact(info: &mut Info<'_>, label: &str, at: &str, marks: &mut Marks) {
+    let index = marks.times.len();
+    marks.times.push(info.line_count());
+    let Some(time) = parse_time(at) else {
+        let sent = at.trim().chars().take(16).collect::<String>();
+        info.fact(label, &sent.replace('T', " "), Value::Plain);
+        return;
+    };
+    let now = marks.look.now;
+    if let Some(next) = relative_time_changes(&time, &now) {
+        marks.due = Some(marks.due.map_or(next, |due| due.min(next)));
     }
+    let text = if marks.look.hovered_time == Some(index) {
+        exact_time(&time)
+    } else {
+        relative_time(&time, &now)
+    };
+    info.fact(label, &text, Value::Plain);
 }

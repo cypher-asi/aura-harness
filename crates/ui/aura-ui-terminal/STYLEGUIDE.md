@@ -305,11 +305,18 @@ What the rows are depends on what the tab shows:
 - **A channel's QUEUE** is a `MERGES INTO  main` section with the repo's
   folder under it, then a section per merge, newest first, headed by a
   marked section: the status dot, the state and the short sha. The
-  branch has its own indented line, underlined in `foreground` when the
-  repo is on GitHub, and a click on it opens the branch there
+  branch has its own indented line in `foreground`, underlined while the
+  pointer is on it when the repo is on GitHub, as the chat's links are,
+  and a click on it opens the branch there
   (`https://github.com/owner/repo/tree/<branch>`); off GitHub it is
   plain. The facts follow (Agent, Queued, Finished, Attempts, Merged,
-  Overlaps) and what happened, in `muted`. Only the dot has a color:
+  Overlaps) and what happened, in `muted`. Queued and Finished read as
+  people say them (`components::relative_time`): `just now` under a
+  minute, `2 minutes ago` under an hour, `5 h ago` under a day, then
+  `yesterday 14:32`, `Nov 26, 14:32` and `Nov 26 2023, 14:32` from
+  another year. The pointer on a time shows it in full
+  (`2024-11-27 20:31:05 +01:00`). The tab is drawn again when a time
+  next reads differently, never every frame for them. Only the dot has a color:
   no text on QUEUE is bold or colored, a failure's detail included.
 
 ```text
