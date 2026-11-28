@@ -97,7 +97,14 @@ button, or a local merge pushed by the user.
   `fewer-merge-conflicts-rus204` 6.
 - Unrelated work rides on old names: #111 ("Fold a running turn's
   steps") came from `channel-history-tab-rus200`, and #113 (RunPod) from
-  `encrypt-local-database-rus205`.
+  `encrypt-local-database-rus205`. That branch is now fully merged
+  (`4c5cc54a`, through #93 and #113; nothing on it is missing from
+  `main`), but the queue still held a stale entry for an older tip
+  (`26834d41`) reporting a `docs/integrations.md` conflict that #113
+  had already resolved. A stale entry outlives the branch it named.
+- Work that lives only on a machine is at risk: RUS205's workspace
+  keeps a `git stash` of changes that predate its task and belong to
+  no one on the channel. Resetting the workspace would lose them.
 - To drop superseded history from a reused branch, agents made
   `-s ours` merges: `913e5eaf` ("Supersede the old HISTORY tab branch"),
   `d5db3396` and `02816ac1` (#72, #78 and #111 carry them).
