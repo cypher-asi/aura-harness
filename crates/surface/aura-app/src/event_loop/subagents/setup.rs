@@ -84,6 +84,7 @@ impl AgentHub {
             channel_members: Mutex::new(channel_sets.members),
             hidden_members: Mutex::new(channel_sets.hidden),
             cloud_starts: Mutex::default(),
+            cloud_members: Mutex::new(channel_sets.cloud),
             cloud_turns: Mutex::default(),
             machine_working: Mutex::default(),
             channels: parts.channels,

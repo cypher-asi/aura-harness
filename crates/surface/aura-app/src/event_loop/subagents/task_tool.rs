@@ -219,34 +219,44 @@ pub fn assign_tool_definition(definitions: &AgentDefinitions) -> Option<ToolDefi
              Permanent agents:\n{}",
             catalog.join("\n")
         ),
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "to": {
-                    "type": "string",
-                    "description": "Code of the member to give the work to, such as `REN4`."
-                },
-                "agent": {
-                    "type": "string",
-                    "enum": names,
-                    "description": "Permanent agent to start a new member from."
-                },
-                "subject": {
-                    "type": "string",
-                    "description": "A few words naming the work, shown in inboxes and the channel."
-                },
-                "prompt": {
-                    "type": "string",
-                    "description": "The brief: the goal, the context and what done looks like."
-                },
-                "todo_id": {
-                    "type": "string",
-                    "description": "Id of the todo this work does. The todo shows the agent and goes in progress now; the agent's report marks it done, or pending again when the work failed."
-                }
-            },
-            "required": ["subject", "prompt"]
-        }),
+        assign_tool_schema(&names),
     ))
+}
+
+/// The `assign` tool's input schema, offering the permanent agents
+/// `names` to start new members from.
+fn assign_tool_schema(names: &[&str]) -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "to": {
+                "type": "string",
+                "description": "Code of the member to give the work to, such as `REN4`."
+            },
+            "agent": {
+                "type": "string",
+                "enum": names,
+                "description": "Permanent agent to start a new member from."
+            },
+            "subject": {
+                "type": "string",
+                "description": "A few words naming the work, shown in inboxes and the channel."
+            },
+            "prompt": {
+                "type": "string",
+                "description": "The brief: the goal, the context and what done looks like."
+            },
+            "todo_id": {
+                "type": "string",
+                "description": "Id of the todo this work does. The todo shows the agent and goes in progress now; the agent's report marks it done, or pending again when the work failed. Giving a todo to another member takes it back from the one that had it, if it hadn't started."
+            },
+            "withdraw": {
+                "type": "boolean",
+                "description": "Take back the work given to the member in `to` that it hasn't started, instead of assigning more: it won't start. Work already under way is not stopped. `subject` and `prompt` may then say why."
+            }
+        },
+        "required": ["subject", "prompt"]
+    })
 }
 
 /// The tools out of `tools` an instance of `definition` gets: the ones

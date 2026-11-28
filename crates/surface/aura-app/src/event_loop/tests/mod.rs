@@ -51,6 +51,7 @@ mod restart;
 mod rewinding;
 mod subtasks;
 pub(in crate::event_loop) mod support;
+mod withdrawn_work;
 
 use fixture::{
     borrowed, completed, drain, fixture, fixture_with_gate, lock_registry_agent, loop_state,
