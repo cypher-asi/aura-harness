@@ -454,6 +454,8 @@ pub(super) fn cloud_git_note(branch: &str) -> String {
          queue's target branch (main unless the repo's committed .aura/merge-queue.toml names \
          another), pushes this branch and puts it in the merge queue, which merges it into that \
          branch once the build and tests pass. git_commit and git_push also work, and only push this branch; every \
-         push goes into the merge queue. Never push other branches.\n</cloud_git>"
+         push goes into the merge queue. Never push other branches. If the repo has a \
+         `changelog.d/` folder, write your changelog entry as a new file there, named after \
+         your branch; never edit CHANGELOG.md.\n</cloud_git>"
     )
 }

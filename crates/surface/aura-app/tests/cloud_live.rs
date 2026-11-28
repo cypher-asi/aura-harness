@@ -140,6 +140,7 @@ async fn place_local(hub: &Arc<CloudHub>, fx: &Fixture, started: Instant) {
                 fork_from: None,
                 owner: aura_app::cloud::hub::Owner::Local,
                 owner_name: None,
+                clean: false,
             },
             &BootReporter::none(),
         )
@@ -286,6 +287,7 @@ async fn place_for_owner(hub: &Arc<CloudHub>, fx: &Fixture, owner: &aura_core_au
                 fork_from: None,
                 owner: owner.clone(),
                 owner_name: None,
+                clean: false,
             },
             &BootReporter::none(),
         )

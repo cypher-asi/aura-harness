@@ -157,6 +157,7 @@ pub async fn run_cli(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
         Some(Commands::Eval(args)) => crate::trace_commands::cmd_eval(args).await,
         Some(Commands::Gate(args)) => crate::gate_commands::cmd_gate(args).await,
         Some(Commands::Cloud(args)) => crate::cloud_commands::cmd_cloud(args).await,
+        Some(Commands::Changelog(args)) => crate::changelog_commands::cmd_changelog(args).await,
         Some(Commands::Node(args)) => crate::cloud_commands::cmd_node(args).await,
         Some(Commands::Run(args)) => run_with_args(args, requested_mode, approval).await,
         None => run_with_args(RunArgs::default(), requested_mode, approval).await,

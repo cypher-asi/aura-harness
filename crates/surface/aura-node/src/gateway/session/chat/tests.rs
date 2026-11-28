@@ -232,4 +232,8 @@ fn the_cloud_git_note_names_the_branch_and_the_tools() {
         !note.contains("gh pr create"),
         "pushes go through the queue: {note}"
     );
+    assert!(
+        note.contains("changelog.d/") && note.contains("never edit CHANGELOG.md"),
+        "entries go in fragments: {note}"
+    );
 }

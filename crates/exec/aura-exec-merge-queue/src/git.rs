@@ -16,6 +16,9 @@ use tokio::process::Command;
 /// The subcommands the queue runs. `merge` merges an entry in the
 /// queue's worktree, or fast-forwards a clean checkout of the target
 /// branch; `push` never forces; `show` reads the target's config file.
+/// `checkout-index`, `merge-file`, `add` and `commit` only settle a merge
+/// of the queue's own that conflicted in generated files
+/// ([`crate::resolve`]).
 pub const ALLOWED_SUBCOMMANDS: &[&str] = &[
     "fetch",
     "worktree",
@@ -31,6 +34,10 @@ pub const ALLOWED_SUBCOMMANDS: &[&str] = &[
     "push",
     "update-ref",
     "merge",
+    "checkout-index",
+    "merge-file",
+    "add",
+    "commit",
 ];
 
 /// Author and committer of the queue's merge commits.
