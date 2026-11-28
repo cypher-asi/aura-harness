@@ -61,11 +61,12 @@ themes keep working:
 ### Status Indicators
 
 - **Ready (`●`)** and **working (`⬢`)**: `success`
-- **Status dot**: an entry's state as `●` alone in its color, the text
-  beside it uncolored: `success` done or up, `warning` under way,
-  `muted` waiting, `error` failed, `faint` off. Every dot comes from
-  `components::StatusDot` (a channel's QUEUE, the integrations), so a
-  state is the same color everywhere.
+- **Status dot**: an entry's state as one glyph in one color, the text
+  beside it uncolored. Filled `●` means it is there: `success` done or
+  connected, `warning` under way, `muted` waiting, `error` failed. Hollow
+  `○` in `muted` means not there or not set up. Every dot comes from
+  `components::StatusDot` (a channel's QUEUE, the Integrations panel),
+  so a state looks the same everywhere.
 - **Waiting (`◐`)**: `warning`
 - **Error (`✗`)**: `error`
 - **Failed agent**: an agent that errored out is drawn in the Stop
@@ -240,9 +241,10 @@ right-aligned under the icon and shaded like a hovered button.
 
 INTEGRATIONS lists every integration (`docs/integrations.md`). Each is
 a dot, its icon and name, and its description under it, muted; a blank
-row goes between them. The dot is the shared `StatusDot` (`aura-ui-widgets`), as MEMBERS and
-QUEUE draw it: `●` in `success` connected, `faint` not connected,
-`error` failed, `warning` while a Connect or Test runs. The selected one, its name bold,
+row goes between them. The dot is the shared `components::StatusDot`
+(`aura-ui-widgets`), as a channel's QUEUE marks its merges: `●` in
+`success` connected, hollow `○` in `muted` not connected, `●` in
+`error` failed, `●` in `warning` while a Connect or Test runs. The selected one, its name bold,
 also shows its status (in `success` connected, `error` failed, else
 `muted`), its last action's result, what it provides, and its actions
 in the primary colour, flowing onto more rows in a narrow column:
@@ -308,11 +310,18 @@ What the rows are depends on what the tab shows:
 - **A channel's QUEUE** is a `MERGES INTO  main` section with the repo's
   folder under it, then a section per merge, newest first, headed by a
   marked section: the status dot, the state and the short sha. The
-  branch has its own indented line, underlined in `foreground` when the
-  repo is on GitHub, and a click on it opens the branch there
+  branch has its own indented line in `foreground`, underlined while the
+  pointer is on it when the repo is on GitHub, as the chat's links are,
+  and a click on it opens the branch there
   (`https://github.com/owner/repo/tree/<branch>`); off GitHub it is
   plain. The facts follow (Agent, Queued, Finished, Attempts, Merged,
-  Overlaps) and what happened, in `muted`. Only the dot has a color:
+  Overlaps) and what happened, in `muted`. Queued and Finished read as
+  people say them (`components::relative_time`): `just now` under a
+  minute, `2 minutes ago` under an hour, `5 h ago` under a day, then
+  `yesterday 14:32`, `Nov 26, 14:32` and `Nov 26 2023, 14:32` from
+  another year. The pointer on a time shows it in full
+  (`2024-11-27 20:31:05 +01:00`). The tab is drawn again when a time
+  next reads differently, never every frame for them. Only the dot has a color:
   no text on QUEUE is bold or colored, a failure's detail included.
 
 ```text

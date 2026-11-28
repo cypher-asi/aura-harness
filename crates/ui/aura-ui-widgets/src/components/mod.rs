@@ -18,6 +18,7 @@ mod live_output;
 mod message;
 mod modal;
 mod progress;
+mod relative_time;
 mod status;
 mod status_dot;
 pub mod syntax;
@@ -49,6 +50,7 @@ pub use modal::{
     STANDARD_WIDTH, WIDE_WIDTH,
 };
 pub use progress::ProgressBar;
+pub use relative_time::{exact_time, parse_time, relative_time, relative_time_changes};
 pub use status::StatusBar;
 pub use status_dot::StatusDot;
 pub use tool_card::{ToolCard, ToolStatus};
