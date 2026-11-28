@@ -187,6 +187,8 @@ struct BarLayout {
     scope: Option<(Rectangle, bool)>,
     /// The box of the tab drawn as its icon, and the tab
     icon_tab: Option<(Rectangle, PaneTab)>,
+    /// The box of a second tab drawn as its icon, left of `icon_tab`
+    lead_icon_tab: Option<(Rectangle, PaneTab)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -283,7 +285,8 @@ impl Chrome {
             .find_map(|bar| {
                 let labelled = bar.boxes.iter().find(|boxed| boxed.kind == Kind::Tab(tab));
                 labelled.map(|boxed| boxed.rect).or_else(|| {
-                    let icon = bar.icon_tab.filter(|&(_, icon)| icon == tab);
+                    let mut icons = [bar.icon_tab, bar.lead_icon_tab].into_iter().flatten();
+                    let icon = icons.find(|&(_, icon)| icon == tab);
                     icon.map(|(rect, _)| rect)
                 })
             })

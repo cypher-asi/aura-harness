@@ -185,6 +185,31 @@ adds a sealed place for a token or key entered in the panel.
 - The REPO tab reads GitHub's stored token after `GH_TOKEN` and
   `GITHUB_TOKEN`.
 
+## The Integrations panel
+
+The plug icon `🔌` in the agents panel's header, just left of BENCH's
+wrench, opens INTEGRATIONS in the terminal and in the desktop app. It
+uses the same icon cell, tooltip and active state as BENCH.
+
+- **Each row:** a dot for its state (`●` connected in the success colour,
+  `○` not connected, `●` failed in the error colour, `●` busy in the
+  warning colour), then its icon, name and description.
+- **The selected row** adds its status, its last action's result, what it
+  provides, and its actions: **Connect**, **Configure**, **Test** and
+  **Disconnect**. Click one, or press `c` `e` `t` `d`.
+  - Connect asks for the key in the input, masked. A CLI login says what
+    to run instead.
+  - Configure asks for a setting's value (`key=value` when there are
+    several).
+- **The wiring:** `UiCommand::SetIntegrations` carries `IntegrationView`s
+  (`aura-ui` `events/views/integrations.rs`), and `UiEvent::Integration
+  { id, action }` carries the action. `IntegrationAction`'s `Debug` hides
+  a Connect's key. aura-app runs each action off the event loop
+  (`integrations/ui.rs`), refreshes the connected snapshot, and sends the
+  list back.
+- **Code:** terminal `app/apps/integrations.rs`,
+  `renderer/agents/integrations.rs`; desktop `chrome/glyphs.rs` `plug`.
+
 ## How to add an integration
 
 1. **Write the manifest and the trait.** In a module of your own, either

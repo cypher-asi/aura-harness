@@ -188,6 +188,8 @@ impl App {
                 let scroll = self.archived.scroll;
                 self.archived.scroll = self.wheel_list(WheelList::Archive, scroll, delta);
             }
+            // Its few rows always fit; the wheel moves no highlight.
+            AgentsTab::Integrations => {}
         }
     }
 

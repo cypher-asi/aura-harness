@@ -18,18 +18,24 @@ pub enum AgentsTab {
     Bench,
     /// Agents moved out of the projects list, until restored.
     Archive,
+    /// Every integration with an external service, and its status. Its
+    /// tab is an icon just before BENCH's.
+    Integrations,
 }
 
 impl AgentsTab {
     /// Every tab, in the order Alt+digit numbers them and Left / Right
     /// move through them. BENCH keeps its place here though its tab is
     /// drawn as an icon after the others, so its keys stay as they were.
-    pub const ALL: [Self; 5] = [
+    /// INTEGRATIONS, added later, is last, so the others keep their
+    /// digits.
+    pub const ALL: [Self; 6] = [
         Self::Channels,
         Self::Projects,
         Self::Roster,
         Self::Bench,
         Self::Archive,
+        Self::Integrations,
     ];
 
     /// The tabs the header bar labels; BENCH is an icon after them.
@@ -37,6 +43,9 @@ impl AgentsTab {
 
     /// The tab the header bar draws as an icon at its end.
     pub const ICON_TAB: Self = Self::Bench;
+
+    /// The tab drawn as an icon just left of [`Self::ICON_TAB`].
+    pub const LEAD_ICON_TAB: Self = Self::Integrations;
 
     #[must_use]
     pub const fn label(self) -> &'static str {
@@ -46,6 +55,7 @@ impl AgentsTab {
             Self::Roster => "AGENTS",
             Self::Bench => "BENCH",
             Self::Archive => "ARCHIVE",
+            Self::Integrations => "INTEGRATIONS",
         }
     }
 
@@ -58,15 +68,17 @@ impl AgentsTab {
             Self::Roster => "AGT",
             Self::Bench => "BEN",
             Self::Archive => "ARC",
+            Self::Integrations => "INT",
         }
     }
 
     /// What a tab drawn as an icon shows instead of its label: BENCH's
-    /// wrench, two columns wide. The desktop window draws its own.
+    /// wrench or INTEGRATIONS' plug, two columns wide. The desktop window draws its own.
     #[must_use]
     pub const fn icon(self) -> Option<&'static str> {
         match self {
             Self::Bench => Some("🔧"),
+            Self::Integrations => Some("🔌"),
             _ => None,
         }
     }
@@ -77,6 +89,7 @@ impl AgentsTab {
     pub const fn tooltip(self) -> Option<&'static str> {
         match self {
             Self::Bench => Some("Bench"),
+            Self::Integrations => Some("Integrations"),
             _ => None,
         }
     }
@@ -85,14 +98,15 @@ impl AgentsTab {
     pub(in crate::app) const fn shifted(self, forward: bool) -> Self {
         match (self, forward) {
             (Self::Channels, true) | (Self::Roster, false) => Self::Projects,
-            (Self::Projects, true) | (Self::Bench, false) => Self::Roster,
-            (Self::Roster, true) | (Self::Archive, false) => Self::Bench,
+            (Self::Projects, true) | (Self::Integrations, false) => Self::Roster,
+            (Self::Roster, true) | (Self::Bench, false) => Self::Integrations,
+            (Self::Integrations, true) | (Self::Archive, false) => Self::Bench,
             (Self::Bench, true) | (Self::Channels, false) => Self::Archive,
             (Self::Archive, true) | (Self::Projects, false) => Self::Channels,
         }
     }
 
-    /// The tab Alt+`digit` brings to the front: 1 to 5, in [`Self::ALL`]'s
+    /// The tab Alt+`digit` brings to the front: 1 to 6, in [`Self::ALL`]'s
     /// order.
     #[must_use]
     pub fn numbered(digit: char) -> Option<Self> {

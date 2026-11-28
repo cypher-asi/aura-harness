@@ -27,6 +27,9 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock, RwLock};
 use tracing::{info, warn};
 
+mod ui;
+pub(crate) use ui::act;
+
 /// The folder in the data directory integrations keep their files in.
 pub const DIR: &str = "integrations";
 
@@ -40,6 +43,8 @@ pub struct Integrations {
     connected: RwLock<HashSet<IntegrationId>>,
     /// GitHub's stored token, for the REPO tab
     github_token: RwLock<Option<Secret>>,
+    /// What each integration's last action said, for the panel
+    notes: RwLock<std::collections::HashMap<String, (bool, String)>>,
 }
 
 /// Open this process's integrations under `data_dir`, once; later calls
@@ -88,6 +93,7 @@ impl Integrations {
             registry: Arc::new(registry),
             connected: RwLock::default(),
             github_token: RwLock::default(),
+            notes: RwLock::default(),
         }
     }
 

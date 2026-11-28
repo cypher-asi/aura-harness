@@ -1,6 +1,6 @@
 //! The title bars as quads.
 
-use super::glyphs::{computer, corners, hamburger, wrench};
+use super::glyphs::{computer, corners, hamburger, plug, wrench};
 use super::{BarLayout, Boxed, Chrome, Hit, Info, Kind, SIDE};
 use crate::geom::{rgba, Color, Point, Rectangle, Size};
 use crate::grid::Palette;
@@ -70,7 +70,7 @@ impl Chrome {
             if let Some(scope) = bar.scope {
                 self.scope_quads(&pen, bar, scope, text, out);
             }
-            if let Some(icon) = bar.icon_tab {
+            for icon in [bar.lead_icon_tab, bar.icon_tab].into_iter().flatten() {
                 self.icon_tab_quads(&pen, bar, icon, out);
             }
             if let Some(expand) = bar.expand {
@@ -141,6 +141,8 @@ impl Chrome {
         let arm = (pen.unit * 0.55).round();
         if tab == PaneTab::Agents(AgentsTab::Bench) {
             wrench(&mut out.under, rect, (arm, pen.line), ink);
+        } else if tab == PaneTab::Agents(AgentsTab::Integrations) {
+            plug(&mut out.under, rect, (arm, pen.line), ink);
         } else {
             computer(&mut out.under, rect, (arm, pen.line), ink);
         }
@@ -157,11 +159,12 @@ impl Chrome {
         let Some(name) = tab.tooltip() else {
             return;
         };
-        let icon = self
-            .layout
-            .bars
-            .iter()
-            .find_map(|bar| bar.icon_tab.filter(|&(_, icon)| icon == tab));
+        let icon = self.layout.bars.iter().find_map(|bar| {
+            [bar.icon_tab, bar.lead_icon_tab]
+                .into_iter()
+                .flatten()
+                .find(|&(_, icon)| icon == tab)
+        });
         let (Some((icon, _)), Some(pen)) = (icon, self.pen(top)) else {
             return;
         };

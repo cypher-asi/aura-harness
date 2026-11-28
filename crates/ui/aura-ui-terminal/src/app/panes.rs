@@ -93,6 +93,9 @@ pub struct PaneChrome {
     /// A tab drawn as its icon at the bar's end, left of the scope and
     /// expand buttons: HOST's computer, or BENCH's wrench
     pub icon_tab: Option<PaneTab>,
+    /// A second tab drawn as its icon, left of `icon_tab`: the agents
+    /// panel's Integrations plug
+    pub lead_icon_tab: Option<PaneTab>,
     pub active: Option<PaneTab>,
     /// Shown first, for panels without tabs
     pub title: Option<String>,

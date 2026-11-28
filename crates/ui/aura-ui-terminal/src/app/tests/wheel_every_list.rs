@@ -101,6 +101,16 @@ fn fill_agents(app: &mut App, tab: AgentsTab) -> List {
                 .collect();
             app.process_command(UiCommand::SetArchivedAgents(archived));
         }
+        AgentsTab::Integrations => {
+            let integrations = (0..ROWS)
+                .map(|n| crate::events::IntegrationView {
+                    id: format!("svc{n}"),
+                    name: format!("Service {n:02}"),
+                    ..crate::events::IntegrationView::default()
+                })
+                .collect();
+            app.process_command(UiCommand::SetIntegrations(integrations));
+        }
     }
     app.show_agents_tab(tab);
     app.focus = PanelFocus::Swarm;
@@ -110,6 +120,7 @@ fn fill_agents(app: &mut App, tab: AgentsTab) -> List {
         AgentsTab::Roster => |app| Some(app.definitions.selected),
         AgentsTab::Bench => |app| Some(app.selected_bench()),
         AgentsTab::Archive => |app| Some(app.archived.selected),
+        AgentsTab::Integrations => |app| Some(app.selected_integration()),
     };
     List {
         name: format!("{tab:?}"),

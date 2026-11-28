@@ -13,9 +13,9 @@ fn test_agents_header_is_a_bar_of_equal_tabs() {
             "CHN"
         };
         let (tabs, cells) = header_bar(&rows, first);
-        // The last cell is BENCH's wrench; the labelled tabs lay out in
-        // the bar up to the divider before it.
-        let widths = &cells[..cells.len() - 1];
+        // The last cells are INTEGRATIONS' plug and BENCH's wrench; the
+        // labelled tabs lay out in the bar up to the divider before them.
+        let widths = &cells[..cells.len() - 2];
         let bar_width = widths.iter().sum::<usize>() + widths.len() + 1;
         let layout = AgentsTab::layout(u16::try_from(bar_width).unwrap());
         let tab_order: Vec<AgentsTab> = layout.cells.iter().map(|cell| cell.tab).collect();
