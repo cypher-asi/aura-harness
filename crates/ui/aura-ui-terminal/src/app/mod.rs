@@ -57,7 +57,7 @@ pub mod run_log;
 pub mod tasks;
 pub use aura_ui::sandbox;
 mod chat_hits;
-pub(crate) mod chat_links;
+mod chat_links;
 mod chat_view;
 mod detail;
 mod detail_state;

@@ -434,13 +434,16 @@ impl App {
         if let Some(target) = self.hovered_side_panel(column, row) {
             return Some(target);
         }
-        self.image_at(column, row)
-            .or_else(|| {
-                self.code_copy_at(column, row)
-                    .map(|hit| HoverTarget::CopyCode(hit.line))
-            })
-            .or_else(|| self.hovered_link(column, row))
-            .or_else(|| self.hovered_activity(column, row))
+        if let Some(target) = self.image_at(column, row) {
+            return Some(target);
+        }
+        if let Some(hit) = self.code_copy_at(column, row) {
+            return Some(HoverTarget::CopyCode(hit.line));
+        }
+        if let Some(target) = self.hovered_link(column, row) {
+            return Some(target);
+        }
+        self.hovered_activity(column, row)
     }
 
     fn record_row_at(&self, column: u16, row: u16) -> Option<usize> {

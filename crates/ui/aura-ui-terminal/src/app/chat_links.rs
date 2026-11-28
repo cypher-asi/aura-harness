@@ -90,9 +90,9 @@ impl App {
             return;
         };
         let first = self.chat.first_line;
-        self.chat.link_hits.retain(|shown| {
-            drawn(buffer, (area, first), &shown.hit).as_ref() == Some(&shown.symbols)
-        });
+        self.chat
+            .link_hits
+            .retain(|shown| drawn(buffer, (area, first), &shown.hit).as_ref() == Some(&shown.symbols));
     }
 
     /// The link at a screen cell, using the last frame. A view over the
@@ -125,13 +125,6 @@ impl App {
     #[must_use]
     pub fn hovers_link(&self) -> bool {
         matches!(self.hover, Some(HoverTarget::Link(_)))
-    }
-
-    /// The links clicks opened, in order; tests read them instead of a
-    /// browser starting.
-    #[cfg(test)]
-    pub(crate) fn opened_links(&self) -> &[String] {
-        &self.chat.opened_links
     }
 
     /// Open the link at a screen cell. Returns whether there was one.
