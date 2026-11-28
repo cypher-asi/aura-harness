@@ -153,6 +153,10 @@ fn task_tool_schema(names: &[&str]) -> serde_json::Value {
                 "type": "string",
                 "description": "Everything the agent needs to know to do the task."
             },
+            "description": {
+                "type": "string",
+                "description": aura_exec_tools::agents::TASK_DESCRIPTION_HELP
+            },
             "spawn_mode": {
                 "type": "string",
                 "enum": ["wait", "detached"],

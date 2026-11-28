@@ -164,8 +164,29 @@ async fn without_a_title_model_a_subtask_is_named_from_its_prompt() {
     let child = result.child_agent_id.unwrap();
     let row = row_once_named(&mut fixture, child).await;
 
-    assert_eq!(row.subtitle.as_deref(), Some("review the diff"));
-    assert!(row.name.ends_with(": review the diff"), "{}", row.name);
+    assert_eq!(row.subtitle.as_deref(), Some("Review the diff"));
+    assert!(row.name.ends_with(": Review the diff"), "{}", row.name);
+}
+
+#[tokio::test]
+async fn a_task_with_a_description_is_named_by_it_without_a_model_call() {
+    let fixture = titled_fixture("Model subtitle", "mock-title");
+    let parent = lock(&fixture.hub.registry).active().agent_id();
+    let mut task = request(
+        parent,
+        "reviewer",
+        "You are working in /workspace. Review the merge queue store.",
+    );
+    task.description = Some("Merge queue store review".to_string());
+
+    let result = fixture.dispatcher.dispatch(task).await.unwrap();
+
+    // Named at once; the model would have answered "Model subtitle", and
+    // only later.
+    let child = result.child_agent_id.unwrap();
+    let registry = lock(&fixture.hub.registry);
+    let agent = registry.find(child).unwrap();
+    assert_eq!(agent.subtitle.as_deref(), Some("Merge queue store review"));
 }
 
 #[tokio::test]
@@ -187,7 +208,7 @@ async fn subtasks_of_a_benchmark_run_are_named_without_a_model_call() {
     let child = result.child_agent_id.unwrap();
     let registry = lock(&fixture.hub.registry);
     let agent = registry.find(child).unwrap();
-    assert_eq!(agent.subtitle.as_deref(), Some("check the build"));
+    assert_eq!(agent.subtitle.as_deref(), Some("Check the build"));
 }
 
 #[tokio::test]
@@ -232,7 +253,7 @@ async fn subtasks_nested_under_a_benchmark_run_are_named_without_a_model_call() 
         agent.parent.as_deref(),
         registry.find(middle).map(|a| a.zns_id.as_str())
     );
-    assert_eq!(agent.subtitle.as_deref(), Some("check the build"));
+    assert_eq!(agent.subtitle.as_deref(), Some("Check the build"));
 }
 
 #[tokio::test]

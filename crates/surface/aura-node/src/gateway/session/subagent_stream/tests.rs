@@ -58,6 +58,7 @@ fn request() -> SubagentDispatchRequest {
         council_parent_tool_use_id: None,
         check: None,
         todo_id: None,
+        description: None,
     }
 }
 

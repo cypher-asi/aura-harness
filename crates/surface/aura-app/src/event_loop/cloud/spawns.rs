@@ -6,7 +6,7 @@
 use super::*;
 use crate::agent_registry::{RegisteredAgent, Spawned};
 use crate::event_loop::channels::join_or_warn;
-use crate::event_loop::titles::fallback_subtitle;
+use crate::event_loop::titles::subtitle_of_spawn;
 use aura_agent_kernel::{spawned_as, SpawnedAs};
 use aura_store_db::ReadStore;
 
@@ -21,7 +21,8 @@ const FIRST_PROMPT_WITHIN: usize = 16;
 struct Unlisted {
     agent: AgentId,
     spawned: SpawnedAs,
-    /// What it was spawned to do, from its first prompt.
+    /// What it was spawned to do: the description its `task` call gave,
+    /// else made from its first prompt.
     subtitle: Option<String>,
 }
 
@@ -46,10 +47,12 @@ pub(super) fn adopt_machine_spawns(hub: &AgentHub, spawns: &[(AgentId, AgentId)]
     let mut unlisted: Vec<Unlisted> = unknown
         .into_iter()
         .filter_map(|agent| {
+            let spawned = spawned_as(store, agent)?;
+            let brief = || first_prompt(store, agent);
             Some(Unlisted {
                 agent,
-                spawned: spawned_as(store, agent)?,
-                subtitle: first_prompt(store, agent).map(|prompt| fallback_subtitle(&prompt)),
+                subtitle: subtitle_of_spawn(spawned.description.as_deref(), brief),
+                spawned,
             })
         })
         .collect();

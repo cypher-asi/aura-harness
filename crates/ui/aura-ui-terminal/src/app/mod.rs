@@ -83,6 +83,7 @@ mod switching;
 pub mod tab_bar;
 mod ticks;
 pub(crate) mod todo_drawer;
+pub(crate) use todo_drawer::TodoAgent;
 mod tool_view;
 pub mod trace_feed;
 mod trace_json;

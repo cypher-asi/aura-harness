@@ -86,6 +86,7 @@ fn helper_spec() -> ChildAgentSpec {
         system_prompt_override: None,
         preassigned_agent_id: None,
         initial_prompt: Some("go".into()),
+        description: None,
     }
 }
 
@@ -206,6 +207,7 @@ async fn spawned_salts(cache_salt: Option<&str>) -> Vec<Option<String>> {
         system_prompt_override: None,
         preassigned_agent_id: None,
         initial_prompt: Some("go".into()),
+        description: None,
     };
     agents
         .hooks_for(root)

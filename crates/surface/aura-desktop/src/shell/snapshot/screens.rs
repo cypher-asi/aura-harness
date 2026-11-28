@@ -391,7 +391,7 @@ fn agent_working() {
         h.pass(TICK);
     }
     let screen = h.screen();
-    assert!(screen.contains("Working on 3 to-dos"), "{screen}");
+    assert!(screen.contains("Working on 2 active · 1 done"), "{screen}");
     snapshot("working", &mut h);
 }
 

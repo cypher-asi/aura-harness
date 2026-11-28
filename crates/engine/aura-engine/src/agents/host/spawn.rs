@@ -150,6 +150,7 @@ impl HostInner {
             iteration_cap: None,
             timeout: None,
             policy,
+            description: child.description.clone(),
         }
     }
 
@@ -242,6 +243,7 @@ impl HostInner {
                     system_prompt_override: Some(plan.system_prompt.clone()),
                     preassigned_agent_id: Some(plan.child_id),
                     initial_prompt: None,
+                    description: plan.description.clone(),
                 },
             )
             .await
@@ -387,6 +389,8 @@ pub(super) struct ChildPlan {
     pub(super) iteration_cap: Option<u32>,
     pub(super) timeout: Option<Duration>,
     pub(super) policy: PolicyConfig,
+    /// What the child works on, in a few words, when its spawner said.
+    pub(super) description: Option<String>,
 }
 
 pub(super) struct ParentSnapshot {

@@ -41,6 +41,10 @@ pub struct ChildAgentSpec {
     /// working on it right away.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_prompt: Option<String>,
+    /// Optional few words naming what the child works on, kept in its
+    /// identity row so whoever lists the child can title it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// Successful outcome of a `SpawnHook::spawn_child` call.
@@ -130,6 +134,7 @@ mod tests {
                     system_prompt_override: None,
                     preassigned_agent_id: None,
                     initial_prompt: None,
+                    description: None,
                 },
             )
             .await
@@ -155,6 +160,7 @@ mod tests {
                     system_prompt_override: None,
                     preassigned_agent_id: Some(pre),
                     initial_prompt: None,
+                    description: None,
                 },
             )
             .await
