@@ -1,5 +1,7 @@
 //! The software factory's merge queue.
 //!
+//! Layer: exec
+//!
 //! Every push an aura agent makes lands in its repo's queue
 //! ([`QueuedPush`] is the marker the push tools put in their results).
 //! The queue lands entries on the target branch one at a time: it

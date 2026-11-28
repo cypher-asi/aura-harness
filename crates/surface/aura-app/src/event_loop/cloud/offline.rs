@@ -26,6 +26,19 @@ impl CloudState {
     }
 }
 
+/// Read the cloud agents the hub saved into what the UI marks, so they
+/// show their cloud from the start, hub or no hub. Off the runtime.
+pub(super) async fn load_saved(state: &LoopState<'_>) {
+    let Some(home) = state.cloud.saved.clone() else {
+        return;
+    };
+    let read = move || aura_engine_cloud::hub::saved_placements(&home);
+    if let Ok(saved) = tokio::task::spawn_blocking(read).await {
+        info!(agents = saved.len(), "Read the cloud agents the hub saved");
+        *state.cloud.shared.saved.lock() = saved;
+    }
+}
+
 /// Before work for `agent` is placed: when the hub is down but the saved
 /// placements put `agent` on a cloud machine, connect the hub first.
 /// Returns whether the work may go on (to the cloud, or here when the
