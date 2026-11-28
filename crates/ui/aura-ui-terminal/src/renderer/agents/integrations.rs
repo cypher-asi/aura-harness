@@ -10,13 +10,13 @@
 //!      Provides  pull requests on the REPO tab · pushes from cloud machines
 //!      Connect  Configure  Test  Disconnect
 //!
-//!  ○ ☁ boxd
+//!  ● ☁ boxd
 //!      Cloud machines for cloud agents
 //! ```
 //!
-//! The dot is the state: connected in the success colour, not connected
-//! muted and hollow, failed in the error colour, an action running in
-//! the warning colour.
+//! The dot is the shared [`StatusDot`], as MEMBERS and QUEUE draw it:
+//! connected `Ok` (success), not connected `Off` (a hollow `○`, muted), failed
+//! `Failed` (error), a Connect or Test running `Busy` (warning).
 
 use crate::app::IntegrationButton;
 use crate::components::StatusDot;
@@ -25,7 +25,7 @@ use crate::renderer::text::display_width;
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -34,16 +34,14 @@ use ratatui::{
 /// Columns before a row's second line, under its name.
 const INDENT: &str = "     ";
 
-/// The dot for `state` and its colour: the shared status dot, so an
-/// integration reads as a merge in QUEUE does.
-pub(crate) fn state_dot(state: IntegrationState, theme: &Theme) -> (&'static str, Color) {
-    let dot = match state {
+/// The shared dot for `state`, as MEMBERS and QUEUE draw theirs.
+pub(crate) const fn state_dot(state: IntegrationState) -> StatusDot {
+    match state {
         IntegrationState::Connected => StatusDot::Ok,
         IntegrationState::NotConnected => StatusDot::Off,
         IntegrationState::Failed => StatusDot::Failed,
         IntegrationState::Busy => StatusDot::Busy,
-    };
-    (dot.glyph(), dot.color(theme))
+    }
 }
 
 /// Draw the list into `body`, recording where rows and actions fell.
@@ -134,7 +132,7 @@ fn row_lines(
     width: usize,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
-    let (dot, color) = state_dot(view.state, theme);
+    let dot = state_dot(view.state).span(theme);
     let name_style = Style::default().fg(theme.colors.foreground);
     let name_style = if selected {
         name_style.add_modifier(Modifier::BOLD)
@@ -145,7 +143,7 @@ fn row_lines(
     let mut lines = vec![
         Line::from(vec![
             Span::raw(" "),
-            Span::styled(dot, Style::default().fg(color)),
+            dot,
             Span::raw(" "),
             Span::styled(format!("{} ", view.icon), name_style),
             Span::styled(view.name.clone(), name_style),

@@ -74,6 +74,32 @@ own process, before and after the idle-session cap:
 At 200 members, most of that is the UI and the harness's own feeds, not
 sessions. The 50-member gap is run-to-run noise.
 
+### Heap versus resident memory in the app
+
+With the load harness under dhat (`--features dhat-heap`, see
+`event_loop/tests/load/heap.rs`), the Rust heap of the whole app at 200
+members is small next to its resident memory:
+
+| At 200 members                 | Rust heap live | Resident |
+|--------------------------------|---------------:|---------:|
+| End of the 2 s warm-up         | 8.4 MiB        |          |
+| End of the 10 s measured span  | 26.1 MiB       | 100 MiB  |
+| Peak                           | 28.0 MiB       |          |
+
+The rest of the resident memory is not allocated by Rust code: RocksDB's
+native memtables and block cache, thread stacks, and memory the system
+allocator holds after freeing. That is where to look next, not in more
+caps on Rust collections. The largest live sites at the peak, from
+`python3 scripts/dhat_top.py dhat-heap-200.json`:
+
+| MiB | Site |
+|----:|------|
+| 5.7 | `aura_agent_trace::recorder::RunRecorder::start` (each run's recorder and its buffers) |
+| 5.2 | `Message` chats on screen or still working (`VecDeque<Message>` growth) |
+| 2.3 | `Message::append`, the text of replies streaming |
+| 1.4 | the harness's mock provider |
+| 1.2 | `aura_agent_trace::records::RecordRow` |
+
 `an_idle_agent_off_screen_holds_little_however_long_its_chat` and
 `a_long_session_grows_with_the_chats_kept_not_with_the_agents` run with
 the tests and fail if an idle agent off screen holds more than 64 KiB.

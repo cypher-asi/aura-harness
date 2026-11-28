@@ -473,6 +473,7 @@ dependencies = [
  "blake3",
  "bytes",
  "chrono",
+ "dhat",
  "dirs",
  "flate2",
  "futures-util",

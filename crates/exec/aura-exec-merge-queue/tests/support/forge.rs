@@ -67,14 +67,10 @@ impl FakeForge {
     }
 
     pub fn pr_of(&self, branch: &str) -> FakePr {
-        self.prs
-            .lock()
-            .unwrap()
-            .iter()
-            .rev()
-            .find(|pr| pr.branch == branch)
-            .cloned()
-            .unwrap()
+        let mut prs = self.prs.lock().unwrap();
+        let pr = prs.iter_mut().rev().find(|pr| pr.branch == branch).unwrap();
+        self.view(pr);
+        pr.clone()
     }
 
     pub fn comments_on(&self, number: u64) -> Vec<String> {
@@ -121,6 +117,23 @@ impl FakeForge {
         if pr.state == PrState::Open {
             if let Some(tip) = self.tip(&pr.branch) {
                 pr.head = tip;
+            }
+            // As GitHub does: a PR whose head reached its base by a push
+            // is merged.
+            let on_base = !pr.head.is_empty()
+                && Command::new("git")
+                    .args([
+                        "merge-base",
+                        "--is-ancestor",
+                        &pr.head,
+                        &format!("refs/heads/{}", pr.target),
+                    ])
+                    .current_dir(&self.origin)
+                    .status()
+                    .is_ok_and(|status| status.success());
+            if on_base {
+                pr.state = PrState::Merged;
+                pr.merge_commit = Some(pr.head.clone());
             }
         }
         PullRequest {
@@ -187,6 +200,10 @@ impl Forge for FakeForge {
 
     async fn pr(&self, number: u64) -> Result<PullRequest, ForgeError> {
         self.up()?;
+        let hook = self.before_merge.lock().unwrap().take();
+        if let Some(hook) = hook {
+            hook();
+        }
         let mut prs = self.prs.lock().unwrap();
         let pr = prs.iter_mut().find(|pr| pr.number == number).unwrap();
         Ok(self.view(pr))

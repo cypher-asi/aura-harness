@@ -94,7 +94,7 @@ fn connected_and_not_connected_integrations_are_listed_with_their_dots() {
     let boxd = line_with(&rows, "☁ boxd");
     assert!(github < boxd);
     assert!(rows[github].contains('●'), "{}", rows[github]);
-    assert!(rows[boxd].contains('○'), "{}", rows[boxd]);
+    assert!(rows[boxd].contains('●'), "{}", rows[boxd]);
     let actions = line_with(&rows, "Connect  Configure");
     assert!(actions > github && actions < boxd, "under the selected row");
     let disconnect = line_with(&rows, "Disconnect");
@@ -107,6 +107,10 @@ fn connected_and_not_connected_integrations_are_listed_with_their_dots() {
     let (column, _) = find_cell(&buffer, dot_row, "●").unwrap();
     let theme = test_theme();
     assert_eq!(buffer[(column, dot_row)].fg, theme.colors.success);
+    // Not connected is the shared dot's Off: hollow, muted.
+    let boxd_row = row_of(&buffer, "☁ boxd");
+    let (column, _) = find_cell(&buffer, boxd_row, "○").unwrap();
+    assert_eq!(buffer[(column, boxd_row)].fg, theme.colors.muted);
 }
 
 #[test]

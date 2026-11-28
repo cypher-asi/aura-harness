@@ -50,6 +50,7 @@ futures-util = { workspace = true }
 async-trait = { workspace = true }
 dirs = { workspace = true }
 blake3 = { workspace = true }
+dhat = { version = "0.3", optional = true }
 bytes = { workspace = true }
 similar = "2"
 tempfile = { workspace = true }
@@ -69,6 +70,11 @@ rustix = { version = "1.1", default-features = false, features = ["std", "proces
 
 [build-dependencies]
 walkdir = { workspace = true }
+
+[features]
+# Heap-profile the load harness (`event_loop/tests/load/heap.rs`); test
+# builds only, as it replaces the allocator.
+dhat-heap = ["dep:dhat"]
 
 [dev-dependencies]
 # `test-support` lets the local store's tests stop a migration midway.
