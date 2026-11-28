@@ -60,7 +60,7 @@ mod boot;
 mod ended;
 #[cfg(test)]
 mod ended_tests;
-mod forward;
+pub(in crate::event_loop) mod forward;
 mod machine;
 mod member_start;
 mod moving;

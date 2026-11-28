@@ -11,7 +11,8 @@
 //!
 //! # Invariants
 //!
-//! * Working always wins over why an agent would be idle.
+//! * Working always wins over why an agent would be idle, but a turn
+//!   waiting on its machine says so: nothing of it runs yet.
 //! * Starting a turn clears a stall: the agent is no longer idle.
 
 use super::subagents::{lock, AgentHub};
@@ -129,10 +130,21 @@ impl Standings {
     }
 }
 
-/// What `agent`'s peers are told of it: `working`, `starting in the
-/// cloud`, `stalled` or `failed` (with why), `queued` or `idle`.
+/// What peers are told of an agent whose turn waits for the one already
+/// under way on its cloud machine, and why.
+pub(crate) const WAITING_STATE: &str = "waiting for its machine";
+const WAITING_WHY: &str =
+    "its machine is still running an earlier turn, which must end before this one starts";
+
+/// What `agent`'s peers are told of it: `waiting for its machine`,
+/// `working`, `starting in the cloud`, `stalled` or `failed` (with why),
+/// `queued` or `idle`.
 pub(crate) fn state_of(hub: &AgentHub, agent: AgentId) -> StateView {
     let view = |state, why| StateView { state, why };
+    // Its turn counts as working, but nothing of it runs yet.
+    if hub.status.is_waiting(agent) {
+        return view(WAITING_STATE, Some(WAITING_WHY.to_string()));
+    }
     if hub.is_working(agent) {
         return view("working", None);
     }

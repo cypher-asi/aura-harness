@@ -83,6 +83,10 @@ pub struct AgentSummary {
     /// needs before it can work
     #[serde(default)]
     pub starting: bool,
+    /// Whether its turn waits for the one already under way on its cloud
+    /// machine, which must end before this one starts
+    #[serde(default)]
+    pub waiting: bool,
 }
 
 impl AgentSummary {
