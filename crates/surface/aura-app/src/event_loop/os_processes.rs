@@ -239,10 +239,7 @@ mod tests {
             .process_group(0)
             .spawn()
             .unwrap();
-        let found = tagged_processes()
-            .into_iter()
-            .find(|p| p.agent_id == agent)
-            .expect("tagged child is listed");
+        let found = listed_soon(&agent).expect("tagged child is listed");
         assert_eq!(found.pid, child.id());
         assert_eq!(found.pgid, child.id());
         assert_eq!(found.ppid, std::process::id());
@@ -253,5 +250,23 @@ mod tests {
         kill(&found).unwrap();
         let status = child.wait().unwrap();
         assert!(!status.success());
+    }
+
+    /// The process tagged `agent`, once the scan lists it; `None` after
+    /// ten seconds. `spawn` returns as soon as the child's `execve`
+    /// closes its close-on-exec descriptors, before the kernel writes the
+    /// new program's environment and arguments, so `/proc/<pid>/environ`
+    /// can still read empty, untagged, for a moment, longer under load.
+    /// The scan then rightly skips it, and lists it the next time.
+    #[cfg(target_os = "linux")]
+    fn listed_soon(agent: &str) -> Option<OsProcess> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let found = tagged_processes().into_iter().find(|p| p.agent_id == agent);
+            if found.is_some() || std::time::Instant::now() >= deadline {
+                return found;
+            }
+            std::thread::yield_now();
+        }
     }
 }
