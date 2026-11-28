@@ -78,6 +78,7 @@ mod spawns_tests;
 mod submit;
 #[cfg(test)]
 mod tests;
+mod turn_marks;
 mod view;
 
 use boot::BootConsoleUi;

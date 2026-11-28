@@ -3,6 +3,8 @@
 //! again, or a turn followed after Aura restarted) has the chat rebuilt
 //! from the record as the hub copies it.
 
+pub(super) use super::turn_marks::WaitingMark;
+use super::turn_marks::{wakes, WAKING};
 use super::*;
 
 /// Applies a cloud chat's title.
@@ -127,42 +129,6 @@ impl TurnExtras {
     }
 }
 
-/// What a cloud turn of `agent` notes for its rows and its peers as it
-/// goes: that it waits for the one already under way on its machine (on
-/// while it does, off once anything else of the turn comes, and off when
-/// the turn ends), and that it implements. Its machine doesn't hold it to
-/// plan mode, so a turn asked to plan can start editing, committing or
-/// pushing; it is out of plan mode from that call on.
-pub(super) struct WaitingMark {
-    pub(super) hub: Arc<AgentHub>,
-    pub(super) agent: AgentId,
-}
-
-impl WaitingMark {
-    /// Note it on or off, `waiting`; the rows show it at once.
-    async fn set(&self, waiting: bool) {
-        if self.hub.status.set_waiting(self.agent, waiting) {
-            self.hub.send_agent_list().await;
-        }
-    }
-
-    /// Note what `event` says of the turn.
-    async fn see(&self, event: &RemoteEvent) {
-        self.set(says_waiting(event)).await;
-        if let RemoteEvent::ToolStart { name, .. } = event {
-            if crate::event_loop::modes::implements(name) {
-                // Its task builds now, whether or not a plan was written.
-                let built = self.hub.factory_flows.build_unplanned(self.agent);
-                let left =
-                    crate::event_loop::modes::leave_plan_mode_of(&self.hub, self.agent).await;
-                if built || left {
-                    info!(agent = %self.agent, tool = %name, "A cloud turn asked to plan implements; it builds, out of plan mode");
-                }
-            }
-        }
-    }
-}
-
 /// [`forward`] a turn of `agent` from `rx` to `ui`, noting in `hub` while
 /// it waits on its machine, as a cloud turn does: for tests outside this
 /// module.
@@ -178,12 +144,6 @@ pub(in crate::event_loop) async fn forward_marking_waits(
         ..TurnExtras::default()
     };
     forward(ui, rx, &mut extras, &CancellationToken::new()).await;
-}
-
-/// Whether `event` says its turn waits for the one under way on its
-/// machine.
-fn says_waiting(event: &RemoteEvent) -> bool {
-    matches!(event, RemoteEvent::Status(status) if status == crate::cloud::hub::WAITING)
 }
 
 /// How a cloud turn's stream ended.
@@ -228,6 +188,7 @@ pub(super) async fn forward(
         streaming: false,
         thinking: false,
         waking: None,
+        reconnect: false,
     };
     let mut end = TurnEnd::Failed(CLOSED_EARLY.to_string());
     while let Some(event) = rx.recv().await {
@@ -269,17 +230,31 @@ struct TurnChat<'a> {
     cancel: &'a CancellationToken,
     streaming: bool,
     thinking: bool,
-    /// A sleeping machine's wake, shown until the turn's first event.
+    /// A sleeping machine's wake, or a reconnect to a running one, shown
+    /// until the turn's first event.
     waking: Option<BootConsoleUi>,
+    /// Whether that console is a reconnect rather than a wake.
+    reconnect: bool,
 }
 
 impl TurnChat<'_> {
+    /// Show a boot step of the machine in a console, which says
+    /// "Waking cloud machine" when the steps begin with a wake and
+    /// "Reconnecting…" when the machine is already up and only its node
+    /// is claimed again (a turn picked up after a restart).
     async fn show_boot(&mut self, event: BootEvent) {
-        let ui = self.ui;
-        self.waking
-            .get_or_insert_with(|| BootConsoleUi::new(ui.clone(), "Waking cloud machine"))
-            .show(vec![event])
-            .await;
+        if self.waking.is_none() {
+            self.reconnect = !wakes(&event);
+            let title = if self.reconnect {
+                crate::cloud::hub::RECONNECTING
+            } else {
+                WAKING
+            };
+            self.waking = Some(BootConsoleUi::new(self.ui.clone(), title));
+        }
+        if let Some(console) = &self.waking {
+            console.show(vec![event]).await;
+        }
     }
 
     /// The turn's first event ends the wake's console.
@@ -293,9 +268,19 @@ impl TurnChat<'_> {
                     .end(false, "The turn was stopped.".to_string())
                     .await;
             }
+            RemoteEvent::Failed(err) if self.reconnect => {
+                console
+                    .end(false, format!("Could not reconnect to the machine: {err}"))
+                    .await;
+            }
             RemoteEvent::Failed(err) => {
                 console
                     .end(false, format!("Could not wake the machine: {err}"))
+                    .await;
+            }
+            _ if self.reconnect => {
+                console
+                    .end(true, "Reconnected; its turn runs on.".to_string())
                     .await;
             }
             _ => {
@@ -385,9 +370,12 @@ impl TurnChat<'_> {
     /// not, and complete the chat.
     async fn finish(self, extras: &mut TurnExtras) {
         if let Some(console) = self.waking {
-            console
-                .end(false, "The turn ended while the machine woke.".to_string())
-                .await;
+            let said = if self.reconnect {
+                "The turn ended while Aura reconnected to it."
+            } else {
+                "The turn ended while the machine woke."
+            };
+            console.end(false, said.to_string()).await;
         }
         if let Some(titles) = extras.titles.as_mut() {
             titles.finish().await;

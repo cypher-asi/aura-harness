@@ -12,9 +12,14 @@ use crate::cloud::hub::TurnMark;
 const FOLLOWED: &str = "This turn kept running on its cloud machine while Aura was closed. \
                         Its chat fills in as the machine's work is copied here.";
 
-/// Follow each turn `hub`'s machines were asked for that no hub saw end.
+/// Follow each turn `hub`'s machines were asked for that no hub saw end,
+/// the one of the agent on screen first. Each is picked up in the
+/// background: its machine is reconnected to, never woken
+/// ([`CloudHub::follow_turn`]).
 pub(super) async fn follow_unfinished(state: &LoopState<'_>, hub: &Arc<CloudHub>) {
-    for (agent, mark) in hub.unfinished_turns() {
+    let mut unfinished = hub.unfinished_turns();
+    unfinished.sort_by_key(|(agent, _)| *agent != state.active);
+    for (agent, mark) in unfinished {
         if state.cloud.is_running(agent) {
             continue;
         }
@@ -49,7 +54,11 @@ async fn follow(state: &LoopState<'_>, hub: &Arc<CloudHub>, agent: AgentId, mark
             .map(aura_engine::context_window_for_model),
         reload: Some(chat_reload(Arc::clone(&state.hub), ui.clone(), agent)),
         from_record: true,
-        waiting: None,
+        // Its row says it reconnects, as its chat does, until it does.
+        waiting: Some(super::forward::WaitingMark {
+            hub: Arc::clone(&state.hub),
+            agent,
+        }),
         cut_short: Some(super::forward::CutShort {
             notices: state.hub.notices.clone(),
             agent,

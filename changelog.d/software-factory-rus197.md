@@ -26,3 +26,14 @@
 - `.aura/tasks/*.json`, the task records the app writes for the TASKS
   tab, are no longer tracked: they are ignored and were removed from
   the index. The files stay on disk, so the TASKS tab is unchanged.
+
+### Restarting reconnects to running cloud turns
+
+##### Fixed
+
+- When the app restarts while cloud agents work, it reconnects to their
+  running machines instead of waking them. Their chat and channel row
+  say "Reconnecting…", not "Waking cloud machine". The agent on screen
+  is reconnected first, at most eight at a time, in the background. A
+  machine that can't be reached is tried again with backoff before its
+  turn is reported lost. A sleeping machine with no work is left asleep.
