@@ -104,6 +104,17 @@ pub enum CloudError {
         machine: String,
     },
 
+    #[error(
+        "the snapshot build at {commit} failed before, so it isn't tried again until the \
+         merge target moves or its lockfiles change: {error}"
+    )]
+    BuildFailedBefore {
+        /// The commit it was built at.
+        commit: String,
+        /// How it failed.
+        error: String,
+    },
+
     #[error("machine {machine} is {state}: cannot {op}")]
     BadState {
         /// Machine name.

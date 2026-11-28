@@ -28,14 +28,17 @@
 //!
 //! INFO is what the channel is, as an info document: its slug, title
 //! and description, who coordinates it, how many members it has, the
-//! project its agents work in and where the members it starts run. A
-//! right click anywhere in it opens the channel's menu, whose "Edit
-//! channel…" changes the project and where agents run.
+//! project its agents work in and where the members it starts run. Every
+//! part, the channel itself included, is a section header with its
+//! details on indented lines under it, and nothing is bold. A right click
+//! anywhere in it opens the channel's menu, whose "Edit channel…"
+//! changes the project and where agents run.
 //!
 //! ```text
-//! #zode
-//! Zode release
-//! Ship the zode crate and its docs.
+//! CHANNEL
+//!   #zode
+//!   Zode release
+//!   Ship the zode crate and its docs.
 //!
 //! COORDINATOR
 //!   Coordinator  CO
@@ -62,18 +65,15 @@ use super::chrome::{Body, ScrollView};
 use super::modals::placement_name;
 use super::side_list::render_empty;
 use super::text::display_width;
-use crate::animation::AURA_WIDTH;
 use crate::app::{AgentRowEnd, HoverTarget, PanelFocus, CHANNEL_MEMBER_ROWS};
-use crate::components::{
-    cell_style, tree_row, truncate_record_info, CellState, Info, StatusIcon, Value, ROW_INSET,
-};
+use crate::components::{cell_style, detail_row, tree_row, CellState, Info, StatusIcon, Value};
 use crate::events::{AgentSummary, ChannelSummary};
 use crate::host::PlacementView;
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
-    text::{Line, Span},
+    text::Line,
     Frame,
 };
 
@@ -188,7 +188,7 @@ fn member_rows<'a>(
     );
     let (said, color) = member_status(app, member, theme);
     let status = cell_style(theme, state, Style::default().fg(color));
-    let status_row = status_row(
+    let status_row = detail_row(
         width,
         &status_guides(&guides),
         &said,
@@ -275,28 +275,6 @@ fn status_guides(guides: &str) -> String {
     guides.replace('├', "│").replace('└', " ")
 }
 
-/// A member's second row: `guides`, then `status` where the name above
-/// starts, cut to fit, on the row's `bg` in its `text` style.
-fn status_row<'a>(
-    width: usize,
-    guides: &str,
-    status: &str,
-    (bg, text): (Option<Color>, Style),
-    theme: &Theme,
-) -> Line<'a> {
-    let fill = bg.map_or_else(Style::default, |bg| Style::default().bg(bg));
-    let lead = format!("{:ROW_INSET$}{guides}{}", "", " ".repeat(AURA_WIDTH + 1));
-    let lead_width = display_width(&lead);
-    // The row keeps its blanks at the right end, as the name's row does.
-    let status = truncate_record_info(status, width.saturating_sub(lead_width + ROW_INSET));
-    let padding = width.saturating_sub(lead_width + display_width(&status));
-    Line::from(vec![
-        Span::styled(lead, fill.fg(theme.colors.muted)),
-        Span::styled(status, fill.patch(text)),
-        Span::styled(" ".repeat(padding), fill),
-    ])
-}
-
 /// The member's own code (`RE36`), or, for an agent without one, the
 /// abbreviation of the permanent agent it is an instance of.
 fn member_code<'a>(app: &'a App, member: &'a AgentSummary) -> Option<&'a str> {
@@ -337,12 +315,15 @@ fn info_lines(
     theme: &Theme,
 ) -> Vec<Line<'static>> {
     let mut info = Info::new(width, theme);
-    info.note(&format!("#{}", channel.slug));
+    // The top reads like every section under it: a header, then the
+    // details indented under it.
+    info.section("CHANNEL", None);
+    info.item(&format!("#{}", channel.slug), None);
     if !channel.title.trim().is_empty() {
-        info.title(&channel.title);
+        info.text(&channel.title, Value::Plain);
     }
     if !channel.description.trim().is_empty() {
-        info.note(&channel.description);
+        info.text(&channel.description, Value::Quiet);
     }
 
     info.section("COORDINATOR", None);

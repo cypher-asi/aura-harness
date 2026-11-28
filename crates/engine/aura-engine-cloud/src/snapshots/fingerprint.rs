@@ -33,9 +33,36 @@ pub fn base_fingerprint(size: MachineSize, aura_version: &str) -> String {
     hasher.finalize().to_hex()[..16].to_string()
 }
 
-/// Fingerprint of a project snapshot. Reads the lockfiles (blocking).
+/// Fingerprint of a project snapshot. Reads the lockfiles of the working
+/// tree (blocking).
 #[must_use]
 pub fn project_fingerprint(project: &Path, base: &str, build_command: &str) -> String {
+    fingerprint_with(base, build_command, |file| {
+        std::fs::read(project.join(file)).ok()
+    })
+}
+
+/// [`project_fingerprint`] of the lockfiles at `commit`, the one the
+/// snapshot is built from (blocking).
+#[must_use]
+pub fn project_fingerprint_at(
+    project: &Path,
+    commit: &str,
+    base: &str,
+    build_command: &str,
+) -> String {
+    fingerprint_with(base, build_command, |file| {
+        crate::delta::file_at(project, commit, file)
+    })
+}
+
+/// The fingerprint of `base`, `build_command` and the lockfiles `read`
+/// gives.
+fn fingerprint_with(
+    base: &str,
+    build_command: &str,
+    read: impl Fn(&str) -> Option<Vec<u8>>,
+) -> String {
     let mut hasher = blake3::Hasher::new();
     for part in [base, build_command, crate::workspace::FORMAT] {
         hasher.update(part.as_bytes());
@@ -43,12 +70,12 @@ pub fn project_fingerprint(project: &Path, base: &str, build_command: &str) -> S
     }
     for file in FINGERPRINT_FILES {
         hasher.update(file.as_bytes());
-        match std::fs::read(project.join(file)) {
-            Ok(bytes) => {
+        match read(file) {
+            Some(bytes) => {
                 hasher.update(&[1]);
                 hasher.update(&bytes);
             }
-            Err(_) => {
+            None => {
                 hasher.update(&[0]);
             }
         }

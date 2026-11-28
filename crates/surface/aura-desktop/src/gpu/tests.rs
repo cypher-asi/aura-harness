@@ -321,6 +321,7 @@ fn the_gpu_paints_the_grid_at_every_zoom() {
             rows: ROWS,
             prose: &[],
             panes: &[],
+            bands: &[],
             cursor: Some(ratatui::layout::Position::new(3, 2)),
             metrics,
             palette,

@@ -7,6 +7,7 @@ mod activity;
 mod agent_row;
 mod boot;
 mod code_block;
+mod detail_row;
 mod diff;
 mod header;
 pub mod image_preview;
@@ -18,6 +19,7 @@ mod message;
 mod modal;
 mod progress;
 mod status;
+mod status_dot;
 pub mod syntax;
 mod tool_card;
 
@@ -31,6 +33,7 @@ pub use boot::{
 };
 pub use code_block::{highlight_code_line, CodeBlock};
 pub use code_block::{unframe_code, COPY_BUTTON};
+pub use detail_row::detail_row;
 pub use diff::{DiffLine, DiffLineType, DiffView};
 pub use header::HeaderBar;
 pub use info::{truncate_line, Info, Value};
@@ -47,4 +50,5 @@ pub use modal::{
 };
 pub use progress::ProgressBar;
 pub use status::StatusBar;
+pub use status_dot::StatusDot;
 pub use tool_card::{ToolCard, ToolStatus};

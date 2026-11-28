@@ -80,6 +80,12 @@ impl CloudHub {
         boot.fact("snapshot commit", short_commit(snapshot_commit));
         let dir = request.project_dir.clone();
         let base = snapshot_commit.to_string();
+        // A channel member starts from what is shipped, even when the
+        // machine can't fetch it: origin's target as the hub has it, never
+        // the hub's own commits.
+        let from = request
+            .clean
+            .then(|| format!("refs/remotes/origin/{target}"));
         let packed = boot
             .wait(
                 BootStage::SyncFiles,
@@ -88,7 +94,7 @@ impl CloudHub {
                     short_commit(snapshot_commit)
                 ),
                 None,
-                tokio::task::spawn_blocking(move || pack_project(&dir, &base)),
+                tokio::task::spawn_blocking(move || pack_project(&dir, &base, from.as_deref())),
             )
             .await
             .map_err(|err| {
@@ -319,15 +325,26 @@ fn report_pull(stdout: &str, boot: &BootReporter) {
     }
 }
 
-/// The project in `dir` packed for a machine whose snapshot is at `base`.
-fn pack_project(dir: &Path, base: &str) -> CloudResult<PackedProject> {
-    let head = delta::head_commit(dir)?;
+/// The project in `dir` packed for a machine whose snapshot is at `base`:
+/// its commits up to `from` (a ref; HEAD when `None` or `dir` lacks it).
+fn pack_project(dir: &Path, base: &str, from: Option<&str>) -> CloudResult<PackedProject> {
+    let target = from.and_then(|name| {
+        delta::has_commit(dir, name)
+            .then(|| delta::resolve_commit(dir, name))
+            .flatten()
+            .map(|commit| (name, commit))
+    });
+    let (rev, head) = match target {
+        Some((name, commit)) => (name, commit),
+        None => ("HEAD", delta::head_commit(dir)?),
+    };
     let bundle = if head == base {
         None
     } else {
-        delta::bundle_since(dir, base)?
+        delta::bundle_since_rev(dir, rev, base)?
     };
-    let changes = delta::collect(dir, &head)?;
+    // What stays on the hub uncommitted, against its own HEAD.
+    let changes = delta::collect(dir, &delta::head_commit(dir)?)?;
     let changed = changes.files.len() + changes.deleted.len();
     Ok(PackedProject {
         head,

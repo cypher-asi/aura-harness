@@ -16,7 +16,10 @@
 // Cell coordinates become pixel positions.
 #![allow(clippy::cast_precision_loss)]
 
+mod bands;
 mod brush;
+
+pub use bands::cell_in_bands;
 
 use crate::canvas::Canvas;
 use crate::chrome::Chrome;
@@ -25,7 +28,7 @@ use crate::grid::{Metrics, Palette};
 use crate::scene::{Layers, RowCache, Scene};
 use crate::tab_bar::{self, Bar};
 use crate::text::{self, TextSystem};
-use aura_ui_terminal::ProseRow;
+use aura_ui_terminal::{ListBand, ProseRow};
 use brush::{cut, prose_at, prose_columns, Brush, Row};
 use ratatui::buffer::Cell;
 use ratatui::layout::{Position, Rect};
@@ -44,6 +47,8 @@ pub struct View<'a> {
     /// The panels, in cells: rows are painted in pieces cut at their
     /// borders
     pub panes: &'a [Rect],
+    /// The single-line lists drawn at their taller pitch
+    pub bands: &'a [ListBand],
     /// The cell the cursor is on, while it shows
     pub cursor: Option<Position>,
     pub metrics: Metrics,
@@ -86,6 +91,8 @@ struct Basis {
 #[derive(Default)]
 pub struct Painter {
     rows: RowCache,
+    /// Pieces of the rows of lists, painted a list row tall
+    tall_rows: RowCache,
     basis: Option<Basis>,
     frame: Layers,
     /// What covers the rest of the frame, text included: a tooltip
@@ -175,7 +182,7 @@ impl Painter {
             self.frame
                 .extend_lowered(&self.scratch, top + i32::from(at.y) * height);
         }
-        self.built = self.rows.finish_frame();
+        self.built = self.rows.finish_frame() + self.tall_rows.finish_frame();
     }
 
     /// Drop the kept rows unless they were painted for the same metrics,
@@ -194,6 +201,7 @@ impl Painter {
         };
         if self.basis != Some(basis) {
             self.rows.clear();
+            self.tall_rows.clear();
             self.basis = Some(basis);
         }
     }
@@ -220,6 +228,7 @@ impl Painter {
                 prose: prose_at(view.prose, index),
                 top: row_top,
                 y,
+                bands: view.bands,
             };
             self.paint_row(brush, &row, view.panes, (body, false));
             row_top += height;
@@ -231,6 +240,7 @@ impl Painter {
                     prose: slide.next_prose,
                     top: top + i32::from(slide.body.bottom()) * height,
                     y: 0,
+                    bands: &[],
                 };
                 self.paint_row(brush, &row, &[], (Some(sliding), true));
             }
@@ -260,9 +270,15 @@ impl Painter {
             cells.len(),
             flow.as_ref(),
         );
+        bands::cut_bands(&mut self.cuts, row.bands, row.y, cells.len());
         let mut looks = None;
-        for piece in self.cuts.windows(2) {
+        let cuts = std::mem::take(&mut self.cuts);
+        for piece in cuts.windows(2) {
             let columns = piece[0]..piece[1];
+            if let Some(band) = bands::band_at(row.bands, row.y, &columns) {
+                self.paint_band_piece(brush, row, band, &columns);
+                continue;
+            }
             let inside = body.as_ref().filter(|(body, ..)| {
                 usize::from(body.x) <= columns.start && columns.end <= usize::from(body.right())
             });
@@ -284,6 +300,7 @@ impl Painter {
                 None => self.frame.extend_lowered(quads, row.top),
             }
         }
+        self.cuts = cuts;
     }
 }
 
@@ -299,6 +316,8 @@ struct Painted<'a> {
     top: i32,
     /// Its screen row
     y: u16,
+    /// The lists drawn at their taller pitch
+    bands: &'a [ListBand],
 }
 
 #[cfg(test)]

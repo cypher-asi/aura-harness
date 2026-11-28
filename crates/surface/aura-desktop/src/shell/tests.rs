@@ -157,6 +157,7 @@ pub(super) fn afresh(shell: &Shell) -> Vec<u8> {
         rows: shell.rows,
         prose: &shell.prose,
         panes: &shell.panes,
+        bands: shell.tabs.front().tui.list_bands(),
         cursor: shell.cursor.filter(|_| shell.cursor_shown),
         metrics: shell.metrics,
         palette: shell.palette,

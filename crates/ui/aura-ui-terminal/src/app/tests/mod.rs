@@ -28,6 +28,7 @@ mod channel_member_folds;
 mod channel_menu;
 mod channel_scroll;
 mod channel_side_panel;
+mod channel_task_agents;
 mod channel_tasks;
 mod chat_scrollbar;
 mod chat_switching_and_channels_tab;

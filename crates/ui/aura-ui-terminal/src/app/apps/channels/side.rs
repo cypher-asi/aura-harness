@@ -308,6 +308,29 @@ impl App {
         self.channels.queue_scroll.by(delta);
     }
 
+    /// Record where QUEUE drew each branch that opens its page this
+    /// frame, with the page.
+    pub(crate) fn set_channel_queue_links(&mut self, links: Vec<(Rect, String)>) {
+        self.channels.queue_links = links;
+    }
+
+    /// The page of the branch QUEUE drew at a screen cell, if any.
+    pub(in crate::app) fn channel_queue_link_at(&self, column: u16, row: u16) -> Option<&str> {
+        self.channels
+            .queue_links
+            .iter()
+            .find(|(area, _)| contains(Some(*area), column, row))
+            .map(|(_, url)| url.as_str())
+    }
+
+    /// A click on a branch of QUEUE opens its page on GitHub; anywhere
+    /// else on the tab does nothing.
+    pub(in crate::app) fn click_channel_queue(&mut self, column: u16, row: u16) {
+        if let Some(url) = self.channel_queue_link_at(column, row).map(str::to_string) {
+            self.open_link(&url);
+        }
+    }
+
     /// Keys of the QUEUE side tab, which scroll it.
     pub(in crate::app) fn handle_channel_queue_key(&mut self, key: KeyEvent) {
         self.channels.queue_scroll.key(key.code);

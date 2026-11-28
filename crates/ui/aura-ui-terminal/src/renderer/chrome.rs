@@ -9,7 +9,7 @@
 //! ([`ROW_INSET`](crate::components::ROW_INSET)), as do the heads over
 //! the columns of a list.
 
-use crate::Theme;
+use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
@@ -122,6 +122,13 @@ impl Body {
             rows,
             focused,
         }
+    }
+
+    /// The body of a single-line list in the panel bordered by `panel`,
+    /// its `rows` cut to those that fit at the list pitch (see
+    /// [`App::list_rows`]): a terminal keeps them all.
+    pub(super) fn list(app: &mut App, panel: Rect, rows: Rect, focused: bool) -> Self {
+        Self::new(panel, app.list_rows(panel, rows), focused)
     }
 
     /// Where the rows are drawn.

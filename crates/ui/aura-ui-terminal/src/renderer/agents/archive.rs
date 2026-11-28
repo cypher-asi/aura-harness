@@ -38,6 +38,7 @@ pub(super) fn render_archive(
     app: &mut App,
     theme: &Theme,
 ) {
+    let body = app.list_rows(area, body);
     let visible = usize::from(body.height);
     app.set_archived_rows_area(body);
     app.sync_archived_scroll(visible);

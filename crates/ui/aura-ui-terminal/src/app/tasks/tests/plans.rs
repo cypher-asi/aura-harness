@@ -150,8 +150,8 @@ fn enter_and_clicks_show_the_agent_and_fold_on_the_icon() {
     app.click_task_row(20, 7);
     assert_eq!(
         switched(&mut rx).as_deref(),
-        Some("lead"),
-        "an item shows the agent of its request"
+        Some("agent-p"),
+        "an item shows the agent of the task doing it, not its request's"
     );
     app.click_task_row(20, 6);
     assert_eq!(
