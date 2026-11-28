@@ -149,14 +149,8 @@ fn a_live_group_keeps_a_tail_of_a_finished_thought_and_command() {
         ToolStatus::Success,
         Some("fn main() {}"),
     );
-    let preview = Shown {
-        preview: true,
-        ..Shown::default()
-    };
-    let thought_lines =
-        texts(&super::super::activity_lines(&thought, preview, None, "⠋", 80, &Theme::default()).0);
     assert_eq!(
-        thought_lines,
+        preview_lines(&thought),
         [
             "  ▸ Thought 11s",
             "    │ thought 4",
@@ -164,8 +158,7 @@ fn a_live_group_keeps_a_tail_of_a_finished_thought_and_command() {
             "    │ thought 6",
         ]
     );
-    let command_lines =
-        texts(&super::super::activity_lines(&command, preview, None, "⠋", 80, &Theme::default()).0);
+    let command_lines = preview_lines(&command);
     assert!(
         command_lines[0].contains("Ran rg claim"),
         "{command_lines:?}"
@@ -174,9 +167,17 @@ fn a_live_group_keeps_a_tail_of_a_finished_thought_and_command() {
         command_lines[1..],
         ["    │ line 4", "    │ line 5", "    │ line 6"]
     );
-    let read_lines =
-        texts(&super::super::activity_lines(&read, preview, None, "⠋", 80, &Theme::default()).0);
+    let read_lines = preview_lines(&read);
     assert_eq!(read_lines.len(), 1, "a read stays a title: {read_lines:?}");
+}
+
+/// The rows `activity` shows in a live group's preview.
+fn preview_lines(activity: &Activity) -> Vec<String> {
+    let preview = Shown {
+        preview: true,
+        ..Shown::default()
+    };
+    texts(&super::super::activity_lines(activity, preview, None, "⠋", 80, &Theme::default()).0)
 }
 
 #[test]
