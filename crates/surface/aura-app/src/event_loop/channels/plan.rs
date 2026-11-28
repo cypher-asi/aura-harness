@@ -1,7 +1,8 @@
 //! `/plan` in a channel's chat. A coordinator can't read the code or write
 //! a plan, so a new member of its channel plans instead: it starts in plan
 //! mode with its own chat on screen, gets the request there, and builds
-//! the plan from that chat once told to.
+//! the plan from that chat once told to. The request is also kept as a
+//! plan post of the channel, for its HISTORY ([`post_plan_request`]).
 
 use super::*;
 use crate::event_loop::agent_events::AgentUi;
@@ -74,6 +75,8 @@ pub(crate) async fn start_planner(
             .await;
     }
     if !text.trim().is_empty() {
+        // Kept for the channel's HISTORY, which the planner's chat is not.
+        post_plan_request(state, coordinator, planner, &text).await;
         deliver_with_images(state, planner, SteerSource::User, text, images, false).await;
     }
 }
