@@ -239,8 +239,9 @@ fn clear_chat_rows(app: &mut App, padded: Rect) {
     app.set_chat_rows(Some((padded, 0)));
 }
 
-/// Draw the loading line while the agent's history is on its way, or
-/// nothing while there is nothing to show; returns whether it did.
+/// Draw the loading line while the agent's history is on its way, an
+/// empty channel's welcome, or nothing while there is nothing to show;
+/// returns whether it did.
 fn render_waiting(
     frame: &mut Frame,
     app: &mut App,
@@ -259,6 +260,9 @@ fn render_waiting(
     }
     if app.pane_is_empty() && tail.lines.is_empty() {
         clear_chat_rows(app, padded);
+        if let Some(welcome) = app.channel_welcome() {
+            super::channel_welcome::render_channel_welcome(frame, padded, &welcome, theme);
+        }
         return true;
     }
     false
