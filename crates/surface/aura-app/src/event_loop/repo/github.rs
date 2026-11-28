@@ -282,11 +282,16 @@ struct ApiRef {
 
 impl Api {
     fn from_env() -> Self {
-        let token = ["GH_TOKEN", "GITHUB_TOKEN"].into_iter().find_map(|name| {
-            std::env::var(name)
-                .ok()
-                .filter(|token| !token.trim().is_empty())
-        });
+        // The environment first, as before, then a token stored in the
+        // Integrations panel.
+        let token = ["GH_TOKEN", "GITHUB_TOKEN"]
+            .into_iter()
+            .find_map(|name| {
+                std::env::var(name)
+                    .ok()
+                    .filter(|token| !token.trim().is_empty())
+            })
+            .or_else(|| crate::integrations::get().and_then(|i| i.github_token()));
         Self { token }
     }
 
