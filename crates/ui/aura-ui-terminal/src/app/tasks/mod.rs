@@ -31,17 +31,17 @@
 //!
 //! ```text
 //! ▾  Auth rework              1/3     a plan
-//! ☒  Add session table                its todos
-//! ▣  Write the login handler
+//! ✓  Add session table                its todos
+//! ◐  Write the login handler
 //!   ⢎⡱ Write the login handler  → coder    the task doing it
 //! ☐  Wire the middleware
 //! ▾  Build the auth           2/2     an earlier round
-//! ☒  Add the login form               its items
+//! ✓  Add the login form               its items
 //!   ✗  Add the login form  → coder    a failed try, stale
 //!   ✓  Add the login form  → coder
-//! ☒  Add the logout button
+//! ✓  Add the logout button
 //! ▾  No Plan
-//! ☒  Find the uses  → explorer        a request's items
+//! ✓  Find the uses  → explorer        a request's items
 //!   ✓  Find the uses  → explorer
 //! ☐  Rename the crate
 //! ✓  Fix the typo  → coder            a task doing no item

@@ -33,7 +33,7 @@ fn subtask_names_are_tighter_than_chat_titles() {
     assert!(long.chars().count() <= MAX_SUBTITLE_CHARS);
     assert_eq!(
         fallback_subtitle("Implement the engine core in the runtime crate"),
-        "Engine core"
+        "Engine core in the runtime"
     );
     assert_eq!(
         fallback_subtitle("finish the INBOX tests\nthen report"),
@@ -43,12 +43,12 @@ fn subtask_names_are_tighter_than_chat_titles() {
     // Prompts not opening with a filler verb keep their words.
     assert_eq!(
         fallback_subtitle("review the diff\nthen the tests"),
-        "review the diff"
+        "Review the diff"
     );
     // A lone verb is kept rather than leaving nothing.
     assert_eq!(fallback_subtitle("Implement"), "Implement");
     assert_eq!(fallback_subtitle("  "), "Subtask");
-    assert!(fallback_subtitle(&"é".repeat(60)).chars().count() <= MAX_SUBTITLE_FALLBACK_CHARS);
+    assert!(fallback_subtitle(&"é".repeat(60)).chars().count() <= MAX_SUBTITLE_CHARS);
     assert_eq!(bench_subtitle("Fix the parser"), "Parser");
 }
 

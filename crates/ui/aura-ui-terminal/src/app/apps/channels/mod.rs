@@ -42,6 +42,7 @@
 //! the list: the right column hides, and the chat asks for a channel to
 //! be picked.
 
+mod fold;
 mod list;
 mod side;
 
@@ -51,7 +52,7 @@ use crate::app::scroll::{ChatPlace, InfoScroll};
 use crate::app::{AgentsTab, App, ChatTab, SidePanelTab};
 use crate::events::{ChannelPostView, ChannelSummary, MergeQueueView, UiEvent};
 use ratatui::layout::Rect;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// What the CHANNELS app knows about channels, and where it is in them.
 #[derive(Debug, Default)]
@@ -75,10 +76,14 @@ pub(crate) struct ChannelState {
     /// until it comes the agent before it is still on screen; that agent
     /// is not a member, but it is not the user leaving either.
     awaiting_member: bool,
-    /// Highlighted row of the MEMBERS side tab
+    /// Highlighted member of the MEMBERS side tab, an index into the open
+    /// channel's members; always one that is shown
     member_selected: usize,
-    /// First visible row of the MEMBERS side tab
+    /// First visible row of the MEMBERS side tab, among the members shown
     pub(in crate::app) member_scroll: usize,
+    /// Members unfolded over their subagents, by id; every other member
+    /// with subagents is folded (see `fold`)
+    unfolded_members: HashSet<String>,
     /// Where the MEMBERS side tab's rows were drawn this frame
     member_rows_area: Option<Rect>,
     /// How far the INFO side tab is scrolled
@@ -130,17 +135,26 @@ impl ChannelState {
     }
 
     /// Members of the open channel: none with no channel open.
-    fn open_members(&self) -> usize {
+    fn members(&self) -> &[crate::events::AgentSummary] {
         self.open_channel()
-            .map_or(0, |channel| channel.members.len())
+            .map_or(&[], |channel| channel.members.as_slice())
+    }
+
+    /// The open channel's members shown on MEMBERS, as indices into them.
+    fn shown_members(&self) -> Vec<usize> {
+        fold::shown_members(self.members(), &self.unfolded_members)
     }
 
     fn set_selected(&mut self, row: usize) {
         self.selected = row.min(self.list.len());
     }
 
-    fn set_member_selected(&mut self, row: usize) {
-        self.member_selected = row.min(self.open_members().saturating_sub(1));
+    /// Highlight member `index` (clamped), or the folded member it is
+    /// hidden under.
+    fn set_member_selected(&mut self, index: usize) {
+        let members = self.members();
+        let index = index.min(members.len().saturating_sub(1));
+        self.member_selected = fold::shown_member_of(members, &self.unfolded_members, index);
     }
 
     /// Where the views were drawn is only good for the frame that drew

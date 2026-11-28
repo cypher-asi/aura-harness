@@ -77,7 +77,7 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         needs_args: false,
     },
     command("init", "Have the agent write or improve AGENTS.md"),
-    command("todos", "Fold or open the to-do drawer"),
+    command("todos", "Fold or open the to-do drawer; `/todos history` shows the finished ones"),
     command("cost", "Show tokens and cost of the session"),
     SlashCommand {
         name: "agent",

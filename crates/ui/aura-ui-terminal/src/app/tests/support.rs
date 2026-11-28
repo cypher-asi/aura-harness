@@ -387,6 +387,8 @@ pub(super) fn app_in_channel(active: &str) -> (tempfile::TempDir, App) {
         ],
         ..ChannelSummary::default()
     }]));
+    // These tests are about the subagent's rows too: show them.
+    app.unfold_channel_members();
     app.process_command(UiCommand::SetActiveAgent(active.to_string()));
     app.open_channel_by_id("c1");
     // Opening puts the coordinator on screen; the session confirms it,

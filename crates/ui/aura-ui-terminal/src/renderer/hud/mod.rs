@@ -14,13 +14,12 @@ pub(super) use notice::{notice_icon, render_notice};
 use super::text::display_width;
 use crate::app::format::format_tokens;
 use crate::app::hud::{Hud, SessionStats};
-use crate::events::TodoView;
 use crate::mode_command::PermissionMode;
 use crate::{App, Theme};
 use notice::MIN_NOTICE_WIDTH;
 use ratatui::{
     layout::{Alignment, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -255,64 +254,6 @@ pub(super) fn render_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Th
     } else {
         left_of_status
     }
-}
-
-/// `⬢ Working on 3 to-dos` while the agent is `working`, with `Working`
-/// shimmering on an animation `frame`; `⬢ 3 to-dos` otherwise.
-pub(super) fn checklist_header(
-    hud: &Hud,
-    theme: &Theme,
-    working: bool,
-    frame: Option<usize>,
-) -> Line<'static> {
-    let (_, total) = hud.todo_progress();
-    let plural = if total == 1 { "" } else { "s" };
-    let label_style = Style::default().add_modifier(Modifier::BOLD);
-    let mut header = vec![Span::styled("⬢ ", Style::default().fg(theme.colors.faint))];
-    if !working {
-        header.push(Span::styled(
-            format!("{total} to-do{plural}"),
-            label_style.fg(theme.colors.foreground),
-        ));
-        return Line::from(header);
-    }
-    match frame {
-        Some(frame) => header.extend(crate::animation::shimmer_spans(
-            "Working",
-            frame,
-            label_style,
-            (theme.colors.muted, theme.colors.foreground),
-        )),
-        None => header.push(Span::styled(
-            "Working",
-            label_style.fg(theme.colors.foreground),
-        )),
-    }
-    header.push(Span::styled(
-        format!(" on {total} to-do{plural}"),
-        Style::default().fg(theme.colors.secondary),
-    ));
-    Line::from(header)
-}
-
-/// `▣ Write the parser`: a to-do's box, under the header's `⬢`, then its
-/// text.
-pub(super) fn todo_line(todo: &TodoView, room: usize, theme: &Theme) -> Line<'static> {
-    let mark = super::plans::marker(todo.state);
-    let mark_color = super::plans::marker_color(todo.state, theme);
-    let text_style = super::plans::todo_style(todo.state, theme);
-    let agent = todo
-        .assignee
-        .as_deref()
-        .map(|agent| format!("  → {agent}"))
-        .filter(|agent| display_width(agent) + 8 <= room)
-        .unwrap_or_default();
-    let room = room.saturating_sub(display_width(&agent));
-    Line::from(vec![
-        Span::styled(format!("{mark} "), Style::default().fg(mark_color)),
-        Span::styled(truncate(&todo.content, room), text_style),
-        Span::styled(agent, Style::default().fg(theme.colors.faint)),
-    ])
 }
 
 /// `text` cut to `width` columns, ending in `…` when cut.

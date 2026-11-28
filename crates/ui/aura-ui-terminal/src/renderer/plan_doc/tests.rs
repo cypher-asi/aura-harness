@@ -40,7 +40,7 @@ fn a_plan_lays_out_as_a_document_without_its_source() {
         .iter()
         .map(|&row| rows[row].as_str())
         .collect();
-    assert_eq!(todos, ["☒ first", "☐ second"]);
+    assert_eq!(todos, ["✓ first", "☐ second"]);
     assert_eq!(laid.prose.len(), laid.lines.len());
     assert_eq!(laid.prose[0], Some(0), "the title is prose");
     assert_eq!(
@@ -99,7 +99,7 @@ fn an_open_plan_reads_as_a_document_with_prose_rows() {
     let text = screen(&mut app);
     assert!(text.contains("PLAN Read plans"), "{text}");
     assert!(text.contains("1/2 TODOS"), "{text}");
-    assert!(text.contains("☒ first"), "{text}");
+    assert!(text.contains("✓ first"), "{text}");
     assert!(text.contains("Plans read like a diff"), "{text}");
     assert!(!text.contains("s source"), "no keys: {text}");
     for source in ["name:", "<!--", "- [x]"] {

@@ -189,6 +189,9 @@ impl App {
             }
             (SidePanelTab::Sandbox, KeyCode::Char(' ')) => self.sandbox.toggle_selected(),
             (SidePanelTab::Repo, KeyCode::Char(' ')) => self.toggle_repo_changes(),
+            (SidePanelTab::ChannelMembers, KeyCode::Char(' ')) => {
+                self.toggle_channel_member(self.selected_channel_member());
+            }
             (SidePanelTab::Repo, KeyCode::Char('[')) => self.step_repo_filter(false),
             (SidePanelTab::Repo, KeyCode::Char(']')) => self.step_repo_filter(true),
             (SidePanelTab::Repo, KeyCode::Char('o')) => self.open_selected_repo_page(),

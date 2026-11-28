@@ -47,6 +47,9 @@ struct ChildIdentityPayload {
     parent_agent_id: Option<AgentId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     originating_user_id: Option<String>,
+    /// What the child works on, in a few words, when its spawner said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +88,7 @@ impl SpawnHook for KernelSpawnHook {
             system_prompt_override: child.system_prompt_override.clone(),
             parent_agent_id: Some(*parent_agent_id),
             originating_user_id: originating_user_id.map(ToString::to_string),
+            description: child.description.clone(),
         };
         let identity_bytes = serde_json::to_vec(&identity_payload)
             .map_err(|e| SpawnError::Serialization(format!("child identity: {e}")))?;
@@ -194,6 +198,8 @@ pub struct SpawnedAs {
     pub role: String,
     /// The agent that spawned it.
     pub parent: Option<AgentId>,
+    /// What it works on, in a few words, when its spawner said.
+    pub description: Option<String>,
 }
 
 /// [`SpawnedAs`] for `agent`, from the identity row at the head of its
@@ -210,6 +216,7 @@ pub fn spawned_as<S: ReadStore + ?Sized>(store: &S, agent: AgentId) -> Option<Sp
         name: row.identity.name,
         role: row.role,
         parent: row.parent_agent_id,
+        description: row.description,
     })
 }
 
@@ -277,6 +284,7 @@ mod tests {
                     system_prompt_override: Some("be fast".into()),
                     preassigned_agent_id: None,
                     initial_prompt: None,
+                    description: None,
                 },
             )
             .await
@@ -328,6 +336,7 @@ mod tests {
                     system_prompt_override: None,
                     preassigned_agent_id: Some(child),
                     initial_prompt: None,
+                    description: Some("Parser escapes".into()),
                 },
             )
             .await
@@ -343,6 +352,7 @@ mod tests {
                 name: "explore".into(),
                 role: "subagent:explore".into(),
                 parent: Some(parent),
+                description: Some("Parser escapes".into()),
             })
         );
         assert_eq!(
@@ -350,6 +360,20 @@ mod tests {
             None,
             "a record that starts with something else"
         );
+    }
+
+    #[test]
+    fn an_identity_row_written_before_descriptions_still_parses() {
+        let parent = AgentId::generate();
+        let identity = Identity::new(parent.spawn_zns(), "explore");
+        let old = serde_json::json!({
+            "identity": identity,
+            "role": "subagent:explore",
+            "parent_agent_id": parent,
+        });
+        let row: ChildIdentityPayload = serde_json::from_value(old).unwrap();
+        assert_eq!(row.description, None);
+        assert_eq!(row.role, "subagent:explore");
     }
 
     #[tokio::test]
@@ -375,6 +399,7 @@ mod tests {
                     system_prompt_override: None,
                     preassigned_agent_id: None,
                     initial_prompt: None,
+                    description: None,
                 },
             )
             .await

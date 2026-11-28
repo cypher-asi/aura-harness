@@ -65,9 +65,11 @@ themes keep working:
 - **Benchmarks** never use `warning`: a stopped or cancelled benchmark,
   a run that errored and the detail's notes read in the accent, and a
   failed check is an accent `▓` in the progress bar.
-- **To-dos**: `☒` done in `faint`, `▣` in progress in bold `foreground`,
-  `☐` pending in `muted`, cancelled `☐` struck through in `faint`. Past
-  ten, the rest are counted on a `muted` `+N more` row. The TASKS tab
+- **To-dos**: `☐` pending in `muted`, `◐` in progress in bold
+  `foreground`, `✓` done in `faint`, `⊘` cancelled in `faint` and struck
+  through. Each state has its own shape, never only a fill, so an item in
+  progress can't read as checked: no filled or crossed boxes. Past ten,
+  the rest are counted on a `muted` `+N more` row. The TASKS tab
   draws a plan's todos and the agents' todo items the same way, with
   their boxes right under their group header's fold arrow. What the
   user asked has no row: each request's items stand for it, merged per
@@ -282,9 +284,9 @@ under a fold arrow, then the timeline, newest first.
 │                                              │
 │  ⬢ Thinking… 12s                             │
 ├──────────────────────────────────────────────┤
-│  ⬢ Working on 2 to-dos  1/2               —  │
-│ ☒ Read the handler                           │
-│ ▣ Fix the redirect                           │
+│  ⬢ Working on 1 active · 1 done           —  │
+│ ◐ Fix the redirect     → FEN6 · working 4m   │
+│ ▸ Task history  1                            │
 ├──────────────────────────────────────────────┤
 │  →  Add a follow-up                          │
 └──────────────────────────────────────────────┘
@@ -328,16 +330,24 @@ under a fold arrow, then the timeline, newest first.
   a turn and between turns, a drawer sits under the Chat body in the
   same column of borders, above the benchmark and queue panels. In an
   open channel it shows the coordinator's list. Its
-  header is `⬢` `faint`, then `Working` bold `foreground` with the count
-  `secondary` during a turn, or `N to-dos` bold `foreground` when idle,
-  then `done/total` in `muted`, and the `—`/`+` toggle at the right,
-  `muted` and `foreground` under the pointer. Clicking the header or
-  `/todos` folds it to that one row, which then also shows the item in
-  progress. Open, it lists up to ten items one row each, starting at the
-  item in progress so it stays in view, with a `muted` `+N more` row for
-  the rest. It gives up rows before the queue, the benchmark panel and
+  header is `⬢` `faint`, then `Working` bold `foreground` with `on N
+  active` `secondary` during a turn, or `N active` bold `foreground` when
+  idle, then `· N done` (and `· N dropped`) in `muted` when there are
+  any, and the `—`/`+` toggle at the right, `muted` and `foreground` under
+  the pointer. Clicking the header or `/todos` folds it to that one row,
+  which then also shows the item in progress. Open, it lists only the
+  items still open (pending and in progress), one row each, each with
+  `→ CODE · working 4m` (or `idle`) in `faint` for the agent it was given
+  to: its code, whether it works, and how long the item has been in
+  progress. The item's text is cut before the agent is; a narrow row
+  keeps `→ CODE`. Done and cancelled items sit under a `muted`
+  `▸ Task history  N` row, folded by default; a click on it, `Alt+H` or
+  `/todos history` opens it (`▾`), listing each with its agent and
+  `done` or `cancelled`. Up to ten rows show, starting at the item in
+  progress so it stays in view and keeping the history row, with a
+  `muted` `+N more` row for the rest. It gives up rows before the queue, the benchmark panel and
   the chat on a short screen. A list with every item closed hides it;
-  `/todos` brings it back.
+  `/todos` brings it back with its history open.
 - **Input box**: as wide as the Chat panel, bordered like it, with a
   `muted` `→ ` prompt and a `muted` placeholder (`Ask anything`, then
   `Add a follow-up`) set one column past the cursor so the cursor never

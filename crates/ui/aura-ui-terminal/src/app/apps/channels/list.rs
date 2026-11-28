@@ -104,9 +104,8 @@ impl App {
             self.channels.selected = row;
         }
         self.channels.selected = self.channels.selected.min(self.channels.list.len());
-        let members = self.channels.open_members();
-        self.channels.member_selected =
-            self.channels.member_selected.min(members.saturating_sub(1));
+        let selected = self.channels.member_selected;
+        self.channels.set_member_selected(selected);
         self.leave_dropped_member_chat(member_chat_was_open);
         if self.channel_app() && !self.channel_open() {
             if let Some(id) = self.channel_to_show() {
