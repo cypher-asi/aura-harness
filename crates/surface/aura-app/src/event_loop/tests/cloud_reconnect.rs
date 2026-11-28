@@ -23,6 +23,22 @@ fn sent_to(commands: &mut mpsc::Receiver<UiCommand>, agent: AgentId) -> Vec<UiCo
     out
 }
 
+/// What `agent`'s chat was sent, collected until `done` holds of it or
+/// five seconds pass; what came by then either way.
+async fn sent_until(
+    commands: &mut mpsc::Receiver<UiCommand>,
+    agent: AgentId,
+    done: impl Fn(&[UiCommand]) -> bool,
+) -> Vec<UiCommand> {
+    let mut shown = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !done(&shown) && tokio::time::Instant::now() < deadline {
+        shown.extend(sent_to(commands, agent));
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    shown
+}
+
 /// The title of every boot console begun in `commands`.
 fn console_titles(commands: &[UiCommand]) -> Vec<String> {
     commands
@@ -75,7 +91,15 @@ async fn a_picked_up_turn_says_reconnecting_in_its_chat_and_row_until_reached() 
         "reconnecting on its row",
     )
     .await;
-    let shown = sent_to(&mut commands, member);
+    // The row and the chat are told separately: the chat's status may
+    // still be on its way when the row has it.
+    let shown = sent_until(&mut commands, member, |shown| {
+        shown
+            .iter()
+            .any(|c| matches!(c, UiCommand::SetStatus(s) if s == RECONNECTING))
+            && !console_titles(shown).is_empty()
+    })
+    .await;
     assert!(
         shown
             .iter()
@@ -113,6 +137,9 @@ async fn a_machine_that_wakes_still_says_waking() {
     tx.send(RemoteEvent::Boot(wake)).await.unwrap();
     drop(tx);
     turn.await.unwrap();
-    let shown = sent_to(&mut commands, member);
+    let shown = sent_until(&mut commands, member, |shown| {
+        !console_titles(shown).is_empty()
+    })
+    .await;
     assert_eq!(console_titles(&shown), ["Waking cloud machine"]);
 }

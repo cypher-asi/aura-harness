@@ -238,5 +238,6 @@ mod mail_acks;
 mod reconnects;
 mod seeding;
 mod spawns;
+mod task_branches;
 mod updates;
 mod wire;
