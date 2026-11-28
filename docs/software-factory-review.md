@@ -145,6 +145,14 @@ has.
   subcommand #84 had added outside the queue. Main was red for every
   entry, and the queue failed whichever came next, which sent that agent
   to fix someone else's break (#109 did).
+- It happened again while this review was in the queue. Its own entry
+  (`3e461ec4`) failed on three Landlock confinement tests in
+  `aura-exec-tools` (`confine::tests::*` and
+  `test_confined_run_command_cannot_write_above_the_workspace`). The
+  branch touches none of them: the tests picked an "outside" folder the
+  hub could still write to, and failed on `main` itself until #129 fixed
+  them. The queue bounced an innocent entry and told its agent to fix
+  it, which is the case the broken-target check is built for.
 - `cargo test --workspace` on `main` fails two targets on every cloud
   machine (`-p aura --test e2e_full` and `--test e2e_live`: 503 where 400
   is expected) and passes on the hub. `tests/common/server.rs` built its
