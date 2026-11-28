@@ -7,7 +7,7 @@
 //! │  ⬢ Working on 2 active · 1 done           —  │
 //! │ ◐ Write the lexer       → FEN6 · working 4m  │
 //! │ ☐ Run the tests         → REV6 · idle        │
-//! │ ▸ Task history  1                            │
+//! │ ▸ Finished to-dos  1                            │
 //! ├──────────────────────────────────────────────┤
 //! │  → Add a follow-up                           │
 //! ```
@@ -20,7 +20,7 @@
 //! `—` to fold the drawer to the header, `+` to open it. Folded, the item
 //! in progress follows the count, so the current step stays in sight.
 //! Open, each item still open is one row, with the agent it was given to
-//! ([`rows`]). Closed items only show under the "Task history" row, once
+//! ([`rows`]). Closed items only show under the "Finished to-dos" row, once
 //! it is opened. Past [`MAX_TODO_ROWS`] rows, or past the rows the screen
 //! leaves it, the rows on screen start at the item in progress so it
 //! stays in view, keep the history row, and a `+N more` row counts the

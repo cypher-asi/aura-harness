@@ -203,6 +203,7 @@ impl App {
         self.chat_tab() == ChatTab::Chat
             && (self.chat_loading()
                 || self.chat_fading().is_some()
+                || self.chat_jumping()
                 || self.messages.iter().rev().any(Message::is_live_boot))
     }
 

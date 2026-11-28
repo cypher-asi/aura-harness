@@ -64,10 +64,7 @@ fn start_turn(app: &mut App) {
 /// Press the left button on the cell where `needle` starts on its row.
 fn click_on(app: &mut App, rows: &[String], needle: &str) {
     let (at, row) = row_with(rows, needle).unwrap_or_else(|| panic!("no {needle:?}"));
-    let column = row
-        .find(needle)
-        .map(|x| row[..x].chars().count())
-        .unwrap_or(0);
+    let column = row.find(needle).map_or(0, |x| row[..x].chars().count());
     for kind in [
         MouseEventKind::Down(MouseButton::Left),
         MouseEventKind::Up(MouseButton::Left),
@@ -117,7 +114,7 @@ fn the_drawer_lists_only_open_items_and_folds_the_rest_into_history() {
         rows[at + 2]
     );
     assert!(
-        rows[at + 3].contains("│ ▸ Task history  1"),
+        rows[at + 3].contains("│ ▸ Finished to-dos  1"),
         "{:?}",
         rows[at + 3]
     );
@@ -153,10 +150,10 @@ fn a_click_on_the_history_row_opens_and_folds_it() {
     ]));
     let before = rows(&mut app);
     assert!(!app.todo_history_open(), "folded by default");
-    click_on(&mut app, &before, "Task history");
+    click_on(&mut app, &before, "Finished to-dos");
     assert!(app.todo_history_open());
     let open = rows(&mut app);
-    let (at, _) = row_with(&open, "▾ Task history").expect("open history");
+    let (at, _) = row_with(&open, "▾ Finished to-dos").expect("open history");
     assert!(
         open[at + 1].contains("✓ Read the parser  done"),
         "{:?}",
@@ -168,7 +165,7 @@ fn a_click_on_the_history_row_opens_and_folds_it() {
         open[at + 2]
     );
     assert!(!app.todo_drawer_folded(), "the drawer itself stays open");
-    click_on(&mut app, &open, "Task history");
+    click_on(&mut app, &open, "Finished to-dos");
     assert!(!app.todo_history_open());
     assert!(row_with(&rows(&mut app), "Read the parser").is_none());
 }
@@ -195,7 +192,7 @@ fn alt_h_and_the_todos_command_open_and_fold_the_history() {
         TodoState::Pending,
     )]));
     app.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::ALT));
-    assert!(row_with(&rows(&mut app), "Task history").is_none());
+    assert!(row_with(&rows(&mut app), "Finished to-dos").is_none());
 }
 
 #[test]
@@ -214,7 +211,7 @@ fn a_click_on_the_header_folds_the_drawer_to_one_row() {
         "the item in progress follows the count: {header_row:?}"
     );
     assert!(rows[at + 1].contains('├'), "{:?}", rows[at + 1]);
-    assert!(row_with(&rows, "Task history").is_none());
+    assert!(row_with(&rows, "Finished to-dos").is_none());
 
     // A new empty list opens the drawer for the next one.
     app.process_command(UiCommand::SetTodos(Vec::new()));
@@ -263,7 +260,7 @@ fn a_long_list_keeps_the_item_in_progress_and_the_history_in_view() {
     assert!(rows[at + 1].contains("◐ Step 3 "), "{:?}", rows[at + 1]);
     assert!(rows[at + 8].contains("☐ Step 10"), "{:?}", rows[at + 8]);
     assert!(
-        rows[at + 9].contains("▸ Task history  3"),
+        rows[at + 9].contains("▸ Finished to-dos  3"),
         "{:?}",
         rows[at + 9]
     );

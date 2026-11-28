@@ -64,6 +64,17 @@ pub enum ChannelPostAuthor {
     },
 }
 
+/// Characters past which a message the user posted gets a one-line
+/// summary in the channel's HISTORY tab; shorter ones show as they are.
+pub const POST_SUMMARY_MIN_CHARS: usize = 80;
+
+/// Whether the user's post `text` is long enough to be summarized
+/// ([`POST_SUMMARY_MIN_CHARS`]).
+#[must_use]
+pub fn wants_summary(text: &str) -> bool {
+    text.trim().chars().count() > POST_SUMMARY_MIN_CHARS
+}
+
 /// One post in a channel.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelPostView {

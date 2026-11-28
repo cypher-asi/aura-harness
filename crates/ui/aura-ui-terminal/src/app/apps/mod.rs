@@ -53,7 +53,7 @@ pub use bench::{
     BY_DIFFICULTY, DEFAULT_AGAINST, DIFFICULTIES,
 };
 pub(super) use channels::ChannelState;
-pub(crate) use channels::CHANNEL_MEMBER_ROWS;
+pub(crate) use channels::{HistoryItem, CHANNEL_MEMBER_ROWS, HISTORY_ROWS};
 
 use super::{contains, tab_at, App, ChatTab, HoverTarget, LastSelection, ProjectPick};
 use crate::terminal::KeyResult;
