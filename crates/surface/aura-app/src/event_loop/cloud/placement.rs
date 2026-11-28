@@ -328,9 +328,18 @@ async fn host_action_note(
     Some(note)
 }
 
-/// `/cloud setup`: sign in to boxd and store a key in `AURA_HOME/.env`.
+/// `/cloud setup`: sign in to boxd and store a key in `AURA_HOME/.env`,
+/// unless the Integrations panel holds one already.
 pub(in crate::event_loop) async fn handle_setup(state: &mut LoopState<'_>) {
     let agent = state.active;
+    // A key stored in the Integrations panel wins over `.env`; minting
+    // another into `.env` would change nothing.
+    if crate::integrations::get().is_some_and(|i| i.has_stored_boxd_key()) {
+        let note = "boxd's key is stored in the Integrations panel and cloud mode uses it; \
+                    nothing to set up. Disconnect boxd there to set up a new one.";
+        system(state, agent, note.to_string()).await;
+        return;
+    }
     system(
         state,
         agent,

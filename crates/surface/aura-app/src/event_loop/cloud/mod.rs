@@ -338,7 +338,10 @@ async fn ensure_hub(
             BootStage::Connect,
             "reading the cloud settings",
             None,
-            tokio::task::spawn_blocking(aura_config::CloudConfig::reload),
+            // The panel's stored key over the environment's (blocking IO).
+            tokio::task::spawn_blocking(|| {
+                aura_config::CloudConfig::reload().map(crate::integrations::cloud::cloud_config)
+            }),
         )
         .await
         .map_err(|err| err.to_string())?

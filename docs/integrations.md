@@ -13,7 +13,7 @@ plug in a service.
 | GitHub (local) | `gh` CLI login, or `GH_TOKEN`/`GITHUB_TOKEN`, read in `aura-app/src/event_loop/repo/github.rs` (`Api::from_env`) | none | git tools in `aura-exec-tools/src/git_tool`, not GitHub's API | the REPO tab says "Sign in with gh auth login…" on failure | REPO tab only |
 | GitHub (cloud) | GitHub App key path in `.env` (`AURA_GITHUB_APP_*`, `aura-config/src/cloud`); per-repository installation tokens kept as boxd host-bound secrets (`aura-engine-cloud/src/github`, `repos.rs`) | `.env` | `git_ship` and pushes on machines | none | none |
 | boxd | `BOXD_API_KEY` or `BOXD_TOKEN`, written in plain text to `~/.aura/.env` by `aura cloud setup` (`aura-config/src/cloud/credential.rs`) | `.env` (`BOXD_API_URL`, ...) | none | `aura cloud status` (CLI only) | cloud mark on agents |
-| Model plans (`aura auth`) | `aura-auth` vault: OS keychain, plain `0600` fallback file | `auth/index.json` | none | `aura whoami` | header dot |
+| Model plans (`aura auth`) | `aura-auth` vault: OS keychain, plain `0600` fallback file (sealed since; see "Linked plans without a keychain") | `auth/index.json` | none | `aura whoami` | header dot |
 | Trusted integrations (Notion, GitHub, Linear, Slack, Brave, Resend, Google) | sent per request by aura-os in `installed_integrations` / `installed_tools` (`aura-core-types` `InstalledToolRuntimeIntegration`), run by `aura-exec-tools/src/resolver/trusted` | aura-os | yes, behind the kernel's `integration_gate` | none | none |
 | Plugin connectors | `aura-plugin` manifest `connectors` (id and endpoint only) | `config.toml` | none (registry only) | none | `aura plugins list` |
 
@@ -195,6 +195,44 @@ adds a sealed place for a token or key entered in the panel.
   agent's `Access` allow. Each call checks both again.
 - The REPO tab reads GitHub's stored token after `GH_TOKEN` and
   `GITHUB_TOKEN`.
+- **Cloud mode uses boxd's stored key** (`integrations/cloud.rs`). When
+  the hub starts, the key stored in the panel wins. Without one, cloud
+  mode uses `BOXD_TOKEN`, then `BOXD_API_KEY`, from the environment or a
+  `.env` file, as before. The stored key wins because it is the one boxd's
+  status and Test already use, so the key that passes Test is the one
+  cloud mode starts with. The log says which source it took (`Cloud
+  mode's boxd key`, `source = …`), never the key. `aura cloud status`
+  prints the source too, and `aura cloud setup` and `/cloud setup` stop
+  when the panel already holds a key. The key is the hub's own credential
+  for boxd's API; no machine gets it.
+
+### Linked plans without a keychain
+
+When the OS keychain is missing, `aura-auth`'s vault falls back to a
+file per secret: the zOS session (`~/.aura/credentials.json`) and each
+linked plan's tokens (`~/.aura/auth/secrets/<link>.json`). These files
+are now sealed with the same `SealCipher` as the local store (#93).
+
+- **The key** is in `AURA_STATE_KEY_FILE` when that is set (the local
+  store's and `aura-node`'s key file). Otherwise it is in
+  `~/.aura/auth/vault.key`, created `0600` the first time a token is
+  sealed.
+- **A plain file from before** is sealed on its first read:
+  1. The sealed copy is written next to it (`<file>.sealing`).
+  2. The copy is read back and opened to the same token.
+  3. Only then is the copy renamed over the plain file.
+
+  If any step fails or is cut off, the plain file stays and still signs
+  in, and sealing is tried again on the next read.
+- **A sealed file whose key is missing or different** is an error naming
+  the key file. It is never treated as signed out, and nothing overwrites
+  it.
+- **What it protects:** the key file sits on the same disk as the
+  tokens. That keeps the tokens out of plain-text files, and out of
+  backups and logs of those files. It doesn't keep them from the user's
+  own account. The local store's key, when it falls back to
+  `.aura-store-key`, stays as it is: sealing one key with another kept
+  beside it would add nothing.
 
 ## The Integrations panel
 
@@ -352,11 +390,11 @@ Runpod.
 
 These are not done yet:
 
-- **`aura cloud setup`** should write boxd's key into the sealed store
-  instead of `~/.aura/.env`. Until then, an existing `.env` key keeps
-  working, and wins over a stored one.
-- **The `aura-auth` vault's fallback file** (used when there is no
-  keychain) is still plain `0600` JSON and should be sealed the same way.
+- **`aura cloud setup` still mints into `~/.aura/.env`.** That key is
+  global, while the panel's store belongs to one data directory, so a
+  key minted by setup stays in `.env`. Setup now says so and stops when
+  the panel already holds a key. Minting straight into the sealed store
+  needs the store to be global first.
 - **aura-os trusted integrations** (`resolver/trusted`) and **plugin
   connectors** should be listed through the same registry.
 - **Access changed mid-session.** An agent whose kernel was built before
@@ -366,9 +404,5 @@ These are not done yet:
   don't append their tools to the model's list yet; agents' own turns do.
 - **Channel access in the app.** Kernels pass no channel id yet, so
   `Access::Only { channels }` only applies where a caller passes one.
-- **boxd's sealed key in cloud mode.** Cloud mode still reads its key from
-  the environment and `.env`. A key stored in the panel shows as
-  connected and passes Test, but cloud mode starts with it only once
-  `aura cloud setup` and `CloudConfig` read the sealed store.
 - **OAuth sign-in flows** (`AuthKind::OAuth` is declared only), and
   **GitHub agent tools** (pull requests, issues).

@@ -39,6 +39,20 @@ pub enum AuthError {
     /// don't know how to recover from. (Wave 5 / T5.)
     #[error("keyring error: {0}")]
     CredentialKeyring(String),
+
+    /// A sealed credentials file can't be opened (its key is missing or
+    /// another), or one can't be sealed.
+    #[error(
+        "credentials file {} is sealed but {reason}. Restore that key file \
+         (or point AURA_STATE_KEY_FILE at it), or sign in again",
+        path.display()
+    )]
+    CredentialSealed {
+        /// The credentials or key file
+        path: PathBuf,
+        /// What is wrong
+        reason: String,
+    },
 }
 
 impl From<AuthError> for aura_core_auth::AuthError {

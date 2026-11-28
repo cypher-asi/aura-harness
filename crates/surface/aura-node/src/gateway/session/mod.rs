@@ -24,6 +24,7 @@ pub(crate) mod cross_agent_hook;
 mod generation;
 mod helpers;
 mod partial_json;
+mod skills;
 mod state;
 mod subagent_stream;
 #[cfg(test)]
