@@ -285,6 +285,7 @@ async fn post_from_user(
         mentions: mentioned.to_vec(),
         reply_to: None,
         at_ms: now_ms(),
+        planner: None,
     };
     let post = append(&state.hub, &channel.id, new).await?;
     send_post(state.commands, &state.hub, channel.coordinator, &post).await;
@@ -346,6 +347,7 @@ fn post_view(registry: &AgentRegistry, post: &ChannelPost) -> ChannelPostView {
         mentions: post.mentions.iter().map(AgentId::to_hex).collect(),
         reply_to: post.reply_to,
         at_ms: post.at_ms,
+        planner: post.planner.map(|id| id.to_hex()),
     }
 }
 
@@ -358,6 +360,7 @@ impl ChannelChat {
 }
 
 mod digest;
+mod plan_post;
 mod replies;
 #[cfg(test)]
 mod tests;
@@ -365,6 +368,7 @@ mod tests;
 #[cfg(test)]
 pub(crate) use digest::render_digest;
 pub(crate) use digest::{send_posts_of, take_digest};
+pub(crate) use plan_post::post_plan_request;
 #[cfg(test)]
 use replies::{answer_to, asked_at};
 pub(crate) use replies::{drop_unanswered, drop_unanswered_from, post_replies, post_replies_from};

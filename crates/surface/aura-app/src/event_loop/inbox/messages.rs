@@ -227,6 +227,8 @@ pub(in crate::event_loop) async fn deliver(
     info!(agent = %to, %shown, "Delivering an inbox message");
     if kind == InboxKind::Assignment {
         crate::event_loop::factory::hooks::on_assignment(state, to);
+        // A member may have joined: every placed member reaches it now.
+        crate::event_loop::cloud::refresh_reach(state).await;
     }
     // A member that can't have its machine fails, and its senders are
     // told: the message must not run here instead.

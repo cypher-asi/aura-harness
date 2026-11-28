@@ -160,6 +160,7 @@ async fn finish_turn(state: &mut LoopState<'_>, agent_id: AgentId, failure: Opti
         channels::drop_unanswered(state, agent_id);
         if interrupted && !failed {
             info!(%agent_id, "The user stopped the turn; its inbox answers wait for the next one");
+            state.hub.inbox.park(agent_id);
         } else {
             inbox::give_up(state, agent_id, failure.unwrap_or("it was stopped"));
             inbox::give_up_if_archived(&state.hub, agent_id);

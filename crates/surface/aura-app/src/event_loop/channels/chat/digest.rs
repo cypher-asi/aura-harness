@@ -97,7 +97,11 @@ pub(crate) async fn take_digest(hub: &AgentHub, agent_id: AgentId) -> Option<Str
     };
     save_seen(hub, &channel.id, now).await;
     let posts = read_posts(hub, &channel.id, since).await?;
-    let posts: Vec<_> = posts.into_iter().filter(|p| p.at_ms <= now).collect();
+    // A `/plan` request went to its planner, not the coordinator.
+    let posts: Vec<_> = posts
+        .into_iter()
+        .filter(|p| p.at_ms <= now && p.planner.is_none())
+        .collect();
     let lines: Vec<String> = {
         let registry = lock(&hub.registry);
         posts

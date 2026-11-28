@@ -75,6 +75,7 @@ mod executor;
 mod push;
 mod redact;
 mod sandbox;
+mod seed;
 mod ship;
 mod tools;
 mod tools_ship;
@@ -156,6 +157,17 @@ pub enum GitToolError {
     )]
     MergeConflict { target: String, files: Vec<String> },
 
+    /// The agent changed files that carry the hub's uncommitted work its
+    /// cloud machine was seeded with, so they can't be committed without
+    /// pushing that work too. Nothing was committed.
+    #[error(
+        "not committed: {} carry the hub's uncommitted changes this machine started with, and \
+         you changed them too. Undo your edits to them, or ask the user to commit them on the \
+         hub first, then commit again",
+        files.join(", ")
+    )]
+    SeededHubChanges { files: Vec<String> },
+
     /// The remote refused the credentials or they grant no access to
     /// the repository. Not retried.
     #[error(
@@ -212,7 +224,8 @@ impl From<GitToolError> for ToolError {
             | GitToolError::ProtectedBranch { .. }) => Self::InvalidArguments(err.to_string()),
             err @ (GitToolError::NoOrigin
             | GitToolError::Unauthorized { .. }
-            | GitToolError::MergeConflict { .. }) => Self::CommandFailed(err.to_string()),
+            | GitToolError::MergeConflict { .. }
+            | GitToolError::SeededHubChanges { .. }) => Self::CommandFailed(err.to_string()),
             GitToolError::RemoteStorageExhausted { op, stderr } => Self::CommandFailed(format!(
                 "git {op} failed: remote storage exhausted ({stderr}). \
                  Free space on the remote (or switch remotes) before retrying."

@@ -56,6 +56,7 @@ pub(crate) async fn post_replies_from(
             mentions: Vec::new(),
             reply_to: Some(asked.seq),
             at_ms: now_ms(),
+            planner: None,
         };
         if let Some(post) = append(&state.hub, &asked.channel_id, new).await {
             send_post(state.commands, &state.hub, asked.coordinator, &post).await;

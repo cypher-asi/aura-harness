@@ -120,6 +120,10 @@ pub struct ChannelPostView {
     pub reply_to: Option<u64>,
     /// When it was posted, in Unix milliseconds
     pub at_ms: u64,
+    /// For the user's `/plan` request, the member planning it (hex id):
+    /// the channel's chat leaves such a post out, its HISTORY lists it
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planner: Option<String>,
 }
 
 /// One entry of a coordinator's chat: a message of its conversation or a

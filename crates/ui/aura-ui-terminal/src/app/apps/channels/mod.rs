@@ -48,9 +48,9 @@ mod list;
 mod side;
 mod welcome;
 
-#[cfg(test)]
-pub(crate) use history::HistoryKind;
 pub(crate) use history::{HistoryItem, HISTORY_ROWS};
+#[cfg(test)]
+pub(crate) use history::{HistoryKind, PLANNER_GONE};
 pub(crate) use side::CHANNEL_MEMBER_ROWS;
 pub(crate) use welcome::ChannelWelcome;
 
@@ -69,6 +69,10 @@ pub(crate) struct ChannelState {
     open: Option<String>,
     /// Posts of each channel, by `seq`, by channel id
     posts: HashMap<String, Vec<ChannelPostView>>,
+    /// The user's `/plan` requests of each channel, by `seq`, by channel
+    /// id: kept apart from `posts`, as the chat shows none of them and
+    /// only HISTORY lists them
+    plan_posts: HashMap<String, Vec<ChannelPostView>>,
     /// Highlighted row of the list; `list.len()` is "+ New channel"
     selected: usize,
     /// First visible row of the list
@@ -180,6 +184,11 @@ impl ChannelState {
     /// Posts of channel `channel_id`, oldest first.
     fn posts_of(&self, channel_id: &str) -> &[ChannelPostView] {
         self.posts.get(channel_id).map_or(&[], Vec::as_slice)
+    }
+
+    /// The user's `/plan` requests in channel `channel_id`, by `seq`.
+    fn plan_posts_of(&self, channel_id: &str) -> &[ChannelPostView] {
+        self.plan_posts.get(channel_id).map_or(&[], Vec::as_slice)
     }
 }
 

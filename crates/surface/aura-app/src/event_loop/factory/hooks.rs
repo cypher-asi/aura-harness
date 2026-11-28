@@ -26,6 +26,24 @@ pub(crate) const SHIP_PROMPT: &str = "Your plan is built. Ship it now: call git_
     short commit message. It commits every change, pulls the merge queue's target branch, pushes \
     your branch and puts it in the merge queue. Then end your turn with your report.";
 
+/// What a cloud agent is told instead when its machine's node offers no
+/// `git_ship` (one from before the merge queue, until the hub updates
+/// it). The hub queues the push itself ([`super::observe::push_of`]).
+pub(crate) const FALLBACK_SHIP_PROMPT: &str = "Your plan is built. Ship it now: call \
+    git_commit_push with a short commit message to commit every change and push your branch; the \
+    hub puts the push in the merge queue, which merges it into main once the build and tests \
+    pass. Do not open a pull request and never push main. Then end your turn with your report.";
+
+/// The ship prompt for an agent whose node offers `git_ship` or not.
+#[must_use]
+pub(crate) const fn ship_prompt(offers_ship: bool) -> &'static str {
+    if offers_ship {
+        SHIP_PROMPT
+    } else {
+        FALLBACK_SHIP_PROMPT
+    }
+}
+
 /// A task reached `agent` through its inbox: a channel member plans it
 /// first, once its work starts.
 pub(crate) fn on_assignment(state: &LoopState<'_>, agent: AgentId) {
@@ -124,7 +142,8 @@ pub(crate) async fn after_local_turn(
                 .await;
             return false;
         }
-        Next::AskToShip => Some(ship_work()),
+        // A local agent runs this aura, which has `git_ship`.
+        Next::AskToShip => Some(ship_work(true)),
         Next::LeftPlanning => {
             if state.hub.mode_of(agent) == PermissionMode::Plan {
                 let back = state.hub.exit_plan_mode(agent);
@@ -176,7 +195,10 @@ pub(crate) fn after_cloud_turn(
                 shown: false,
             })
         }
-        Next::AskToShip => Some(ship_work()),
+        Next::AskToShip => {
+            let offers = crate::event_loop::cloud::node_offers_ship(state, agent);
+            Some(ship_work(offers))
+        }
         Next::LeftPlanning => {
             leave_plan_mode(&state.hub, agent);
             None
@@ -190,10 +212,11 @@ pub(crate) fn after_cloud_turn(
     next.defers_answer()
 }
 
-/// The turn asking an agent to ship what it built.
-fn ship_work() -> Work {
+/// The turn asking an agent to ship what it built, with `git_ship` when
+/// its node `offers_ship`, else with `git_commit_push`.
+fn ship_work(offers_ship: bool) -> Work {
     Work::Prompt {
-        prompt: Prompt::inbox(SHIP_PROMPT.to_string(), Request::Resume),
+        prompt: Prompt::inbox(ship_prompt(offers_ship).to_string(), Request::Resume),
         shown: false,
     }
 }
@@ -221,4 +244,21 @@ fn shares_folder(hub: &AgentHub, agent: AgentId, folder: &Path) -> bool {
             });
             !coordinator && registry.project_folder(other).as_deref() == Some(folder)
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_node_without_git_ship_is_asked_to_ship_with_git_commit_push() {
+        let fallback = ship_prompt(false);
+        assert!(fallback.contains("git_commit_push"), "{fallback}");
+        assert!(
+            !fallback.contains("git_ship"),
+            "it has no git_ship: {fallback}"
+        );
+        assert!(fallback.contains("merge queue"));
+        assert!(ship_prompt(true).contains("call git_ship"));
+    }
 }

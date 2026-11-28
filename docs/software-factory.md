@@ -265,17 +265,17 @@ views in `aura_ui::events::{MergeQueueView, MergeEntryView}`.
 
 ## 6. A new cloud machine starts on the latest code
 
-A machine starts from its project's snapshot plus the hub's HEAD and
-uncommitted changes, or, for a fork, from its parent's disk. Either can be
+A machine starts from its project's snapshot plus the hub's HEAD, or, for
+a fork, from its parent's disk. It never gets the hub's uncommitted
+changes (see "Machines and the hub's uncommitted work" below). Either can be
 behind GitHub, because the merge queue lands other agents' work on
 `origin`'s target branch and not in the hub's checkout. So every new
 agent's machine pulls the latest target (main unless the committed
 config names another; the hub resolves it when it places the agent)
 from GitHub on top of what it has, before the agent's first turn:
 
-1. The agent's branch is checked out at the hub's HEAD, `origin` is set to
-   the project's GitHub repository, and the hub's uncommitted changes are
-   unpacked (`workspace::start_branch`). A fork instead moves its parent's
+1. The agent's branch is checked out at the hub's HEAD and `origin` is set
+   to the project's GitHub repository (`workspace::start_branch`). A fork instead moves its parent's
    disk to its own branch (`workspace::fork_branch`).
 2. `git fetch origin <target>` runs with the machine's credentials (from
    its claim), bounded by 120 seconds. Then `origin/<target>` is merged into the
@@ -289,14 +289,58 @@ The pull never fails a placement and never loses work:
 
 - **Skipped:** without `origin`, without a `main` on it, or without
   access, nothing changes.
-- **Refused:** a merge that would touch the hub's uncommitted changes is
-  refused by git before it changes anything.
+- **Refused:** a merge that would touch uncommitted changes in the
+  workspace is refused by git before it changes anything.
 - **Aborted:** a merge that conflicts is aborted, so the branch is left
   as it was. The agent then merges main itself when it ships
   (`git_ship`), and the queue merges it with main anyway.
 
 The outcome shows as the `github` fact of the machine's boot ("merged
 origin/main at 1a2b3c4d", "up to date with origin/main" or "skipped: …").
+
+### Machines and the hub's uncommitted work
+
+Machines used to start with the hub's uncommitted changes unpacked in
+their workspace. A ship commits every change it finds, so it pushed that
+unfinished work too. Two things stop that now:
+
+- **New machines start from commits only.** The hub no longer seeds a
+  machine with its uncommitted files (`hub/seed.rs`), and says how many
+  stayed home in the `changes` boot fact: commit them to share them.
+  This is the safer of the two options, because nothing uncommitted from
+  the hub ever reaches a machine, so nothing has to be told apart later.
+- **Machines seeded before that never commit the seed.** Their starting
+  point is the commit at `refs/aura/base`, and its diff against its
+  parent is exactly the seeded files. After staging, `git_commit`,
+  `git_commit_push` and `git_ship` unstage the seeded files the agent
+  left as they were. A seeded file the agent changed too fails the
+  commit (`SeededHubChanges`), since its edits can't be told apart from
+  the hub's (`git_tool/seed.rs`).
+
+### Machines from before the merge queue
+
+Machines made before the merge queue run an older aura. It has no
+`git_ship`, its pushes carry no queue marker, and its prompt still says
+to open a pull request. Three things keep them in the queue:
+
+1. **They are updated.** A node now reports its git tools when it is
+   claimed (`NodeClaimed::tools`). When a turn or session is about to
+   start on a node without `git_ship`, and the machine does no work, the
+   hub uploads its own cloud build, installs it once it starts on the
+   machine, restarts the node and claims it again
+   (`fleet/update.rs`, `CloudHub::current_node`). A running turn is
+   never cut off: a busy machine waits for its next turn. The node's
+   store stays on disk, so the conversation survives. If the update
+   fails, the old node keeps running.
+2. **The ship prompt fits the node.** Before asking a cloud agent to
+   ship, the hub checks whether its node offered `git_ship`. If not, it
+   asks for `git_commit_push` and says not to open a pull request
+   (`FALLBACK_SHIP_PROMPT`).
+3. **Their pushes are queued anyway.** A push tool's result from an old
+   node (`{"pushed": true, "branch", "commits": [...]}`) is read as a
+   push of its newest commit to `origin` (`QueuedPush::from_legacy_output`),
+   both live and when the turn ends, so it lands in the queue like any
+   other. A push made by hand (`run_command git push`) is still not seen.
 
 ## 7. Isolation of parallel agents
 
@@ -322,4 +366,4 @@ origin/main at 1a2b3c4d", "up to date with origin/main" or "skipped: …").
 | How many processors? | One per repo, enforced in the process and across processes. |
 | What happens on failure? | The entry is marked failed with its reason, and the reason goes to the owning agent, which is prompted to fix and re-ship. It also shows in the channel's QUEUE tab. |
 | Which branches are protected? | `main` and `master`. Agents can never push them. |
-| What does a new cloud machine start on? | The hub's HEAD and uncommitted changes, with GitHub's latest merge queue target (`main` by default) merged on top. If the merge isn't clean, it starts on the hub's code alone and says why. |
+| What does a new cloud machine start on? | The hub's HEAD, never its uncommitted changes, with GitHub's latest merge queue target (`main` by default) merged on top. If the merge isn't clean, it starts on the hub's commits alone and says why. |

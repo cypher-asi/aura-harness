@@ -129,6 +129,7 @@ pub(super) fn post(text: &str, at_ms: u64) -> NewPost {
         mentions: Vec::new(),
         reply_to: None,
         at_ms,
+        planner: None,
     }
 }
 

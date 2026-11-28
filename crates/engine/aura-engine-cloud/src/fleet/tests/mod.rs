@@ -36,6 +36,7 @@ fn claimed(claim: &NodeClaim, protocol: u32) -> crate::ExecOutput {
         port: 8080,
         sealed: claim.seal.len(),
         protocol,
+        tools: vec!["git_ship".to_string()],
     };
     crate::ExecOutput {
         exit_code: 0,
@@ -136,3 +137,4 @@ fn fact<'a>(events: &'a [BootEvent], wanted: &str) -> Option<&'a str> {
 mod claims;
 mod machines;
 mod provisioning;
+mod updates;
