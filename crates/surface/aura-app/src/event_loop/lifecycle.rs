@@ -102,10 +102,14 @@ pub(super) async fn handle_work_done(state: &mut LoopState<'_>, done: WorkDone) 
         }
     }
     state.in_flight = state.in_flight.saturating_sub(1);
+    let parked = session.is_some();
     if let Some(session) = session {
         state.idle.insert(agent_id, session);
     }
     finish_turn(state, agent_id, failure.as_deref()).await;
+    if parked {
+        super::idle_sessions::left_idle(state, agent_id).await;
+    }
 
     if let Some(problem) = failure {
         let ui = AgentUi::new(state.commands.clone(), agent_id);

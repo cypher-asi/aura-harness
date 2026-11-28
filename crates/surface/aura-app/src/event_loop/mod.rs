@@ -28,6 +28,7 @@ pub(crate) mod gate;
 pub(crate) mod handlers;
 pub(crate) mod host;
 pub(crate) mod hud;
+mod idle_sessions;
 pub(crate) mod inbox;
 mod lifecycle;
 mod log_view;
@@ -144,6 +145,9 @@ pub(super) struct LoopState<'a> {
     /// Sessions of the opened agents with no work in flight. An agent at
     /// work has its session on the task doing the work.
     pub(super) idle: HashMap<AgentId, AgentSession>,
+    /// The idle agents, the most recently left idle first (see
+    /// [`idle_sessions`])
+    idle_order: std::collections::VecDeque<AgentId>,
     /// Work waiting for busy agents, oldest first
     queued: queue::WorkQueues,
     /// Where agent work reports that it ended
@@ -199,6 +203,7 @@ impl LoopState<'_> {
             let agent_id = session.agent_id();
             self.idle.insert(agent_id, session);
             start_next(self, agent_id).await;
+            idle_sessions::left_idle(self, agent_id).await;
         }
         for agent_id in self.hub.take_abandoned() {
             if self.idle.contains_key(&agent_id) || self.hub.is_running(agent_id) {
@@ -329,6 +334,7 @@ impl<'a> LoopState<'a> {
             cloud: cloud::CloudState::new(cloud_store),
             open_channel: None,
             side_panels: None,
+            idle_order: std::collections::VecDeque::new(),
         };
         (state, process_completions, quit)
     }
