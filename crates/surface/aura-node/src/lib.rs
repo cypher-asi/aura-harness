@@ -169,7 +169,8 @@ pub use aura_core_protocol::{
     UserMessage, WorkspaceLocation,
 };
 
-#[cfg(feature = "test-support")]
+/// What other crates' tests need to serve a node in-process.
+#[doc(hidden)]
 pub mod test_support {
     pub use crate::gateway::{create_router, RouterState, RouterStateConfig};
     pub use aura_engine::scheduler::Scheduler;

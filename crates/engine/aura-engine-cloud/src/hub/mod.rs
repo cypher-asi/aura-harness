@@ -85,7 +85,7 @@ mod session;
 pub mod setup;
 mod state;
 pub mod store;
-#[cfg(feature = "test-support")]
+#[doc(hidden)]
 pub mod test_support;
 mod turn;
 

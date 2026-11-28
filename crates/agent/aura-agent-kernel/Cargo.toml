@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 aura-core-types = { path = "../../core/aura-core-types" }
 aura-core-modes = { path = "../../core/aura-core-modes" }
@@ -25,6 +28,7 @@ blake3 = { workspace = true }
 bytes = { workspace = true }
 async-trait = { workspace = true }
 futures-util = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -17,6 +17,7 @@ pub use config::{anthropic_api_base, openrouter_api_base, AnthropicConfig, ENV_F
 pub use provider::exp_backoff_with_jitter;
 
 use crate::error::ReasonerError;
+use aura_core_types::ErrorChain;
 use std::time::Duration;
 
 // ============================================================================
@@ -180,12 +181,16 @@ impl AnthropicProvider {
             .timeout(std::time::Duration::from_millis(config.timeout_ms))
             .tcp_keepalive(std::time::Duration::from_secs(30))
             .build()
-            .map_err(|e| ReasonerError::Internal(format!("HTTP client creation failed: {e}")))?;
+            .map_err(|e| {
+                ReasonerError::Internal(format!("HTTP client creation failed: {}", ErrorChain(&e)))
+            })?;
         let streaming_client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(15))
             .tcp_keepalive(std::time::Duration::from_secs(30))
             .build()
-            .map_err(|e| ReasonerError::Internal(format!("HTTP client creation failed: {e}")))?;
+            .map_err(|e| {
+                ReasonerError::Internal(format!("HTTP client creation failed: {}", ErrorChain(&e)))
+            })?;
         Ok(Self {
             client,
             streaming_client,

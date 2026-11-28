@@ -50,7 +50,7 @@ pub enum AgentStoreError {
         source: serde_json::Error,
     },
     /// A failure injected by [`AgentStore::apply_with_fault`].
-    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
     #[error("injected fault: {0:?}")]
     InjectedFault(crate::FaultAt),
 }

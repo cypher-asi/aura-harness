@@ -15,7 +15,7 @@
 //! [`MemoryConsolidator`] take `Arc<dyn aura_model::ModelProvider>`
 //! directly. The runtime-side adapter that bridges the agent loop's
 //! `AgentLoopResult` + `TurnObserver` to this crate lives in
-//! `aura_node::memory_observer`. `tests/layer_boundary.rs` now
+//! `aura_node::memory_observer`. `tests/it/layer_boundary.rs` now
 //! fails on any `aura-context-memory -> aura-agent` edge.
 
 #![forbid(unsafe_code)]

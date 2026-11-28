@@ -206,7 +206,10 @@ where
     use axum::extract::ws::Message as WsMessage;
     use futures_util::SinkExt;
     match serde_json::to_string(msg) {
-        Ok(json) => sink.send(WsMessage::Text(json)).await.map_err(|_| ()),
+        Ok(json) => sink
+            .send(WsMessage::Text(json.into()))
+            .await
+            .map_err(|_| ()),
         Err(e) => {
             tracing::warn!(error = %e, "Failed to serialize outbound chat message");
             Ok(())

@@ -2,17 +2,19 @@
 FROM rust:1.86-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libclang-dev llvm-dev cmake pkg-config libssl-dev libdbus-1-dev \
+        libclang-dev llvm-dev cmake pkg-config libdbus-1-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 
 # The workspace is self-contained — every dependency (including the
-# WebSocket `aura-core-protocol` types) lives under ./crates. Copy the whole
-# tree so all workspace members resolve.
+# WebSocket `aura-core-protocol` types) lives under ./crates, plus the
+# hakari-managed ./workspace-hack. Copy both trees so all workspace
+# members resolve.
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY src        src/
 COPY crates     crates/
+COPY workspace-hack workspace-hack/
 
 RUN cargo build --release --bin aura --no-default-features \
     && strip target/release/aura
@@ -33,7 +35,7 @@ ENV AURA_HARNESS_GIT_SHA=${GIT_SHA}
 # the image: runc-isolated agents run non-root with escalation denied,
 # so the bundled sudo is inert there.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libssl3 ca-certificates curl libdbus-1-3 \
+        ca-certificates curl libdbus-1-3 \
         sudo git build-essential python3 python3-pip nodejs npm \
     && rm -rf /var/lib/apt/lists/*
 

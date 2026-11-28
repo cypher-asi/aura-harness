@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 aura-agent = { path = "../../agent/aura-agent" }
 aura-config = { path = "../../config/aura-config" }
@@ -15,10 +18,9 @@ aura-gate-route = { path = "../aura-gate-route" }
 aura-model = { path = "../../model/aura-model" }
 async-trait = { workspace = true }
 serde_json = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [dev-dependencies]
-# The way tests fill their tables with `test-support`'s builder.
-aura-gate-route = { path = "../aura-gate-route", features = ["test-support"] }
 tokio = { workspace = true }
 
 [lints]

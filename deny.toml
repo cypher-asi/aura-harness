@@ -44,14 +44,8 @@ yanked = "warn"
 # Phase 9 keeps the Phase 4–6 set; new ignores require a phase
 # reference in the comment block and a follow-up issue.
 ignore = [
-  # `rustls-pemfile` unmaintained; transitive via tonic/reqwest ecosystem.
-  "RUSTSEC-2025-0134",
   # `serial` (transitive via portable-pty on Windows). No safe upgrade path.
   "RUSTSEC-2017-0008",
-  # `h2 0.3.27` is transitive via reqwest 0.11 / hyper 0.14. The advisory is
-  # fixed only in h2 0.4.16+, so remediation requires the Phase 10 reqwest /
-  # hyper migration rather than an in-place lockfile update.
-  "RUSTSEC-2026-0258",
 ]
 
 # ---------------------------------------------------------------------------
@@ -98,8 +92,8 @@ license-files = [
 #   * `openssl-sys` is denied; the workspace standardises on `rustls`
 #     so we don't link the native OpenSSL stack.
 #
-# Existing duplicate noise (windows-sys / base64 / hashbrown / bitflags
-# / itertools / getrandom) is still allowed via `skip` because the
+# Existing duplicate noise (windows-sys / hashbrown / bitflags /
+# itertools / getrandom) is still allowed via `skip` because the
 # upstream dep graph hasn't settled. Each `skip` entry is a TODO for a
 # future cleanup wave.
 # ---------------------------------------------------------------------------
@@ -114,25 +108,15 @@ highlight = "all"
 workspace-default-features = "allow"
 external-default-features = "allow"
 allow = []
-# Phase 9 ban-list — aspirational entries flagged as TODOs:
-#
-#   - `openssl-sys` — the workspace's intent is to standardise on
-#     `rustls`. Today's `reqwest 0.11.27` dep ships with
-#     default-tls (which pulls in native-tls and openssl-sys);
-#     flipping reqwest to `rustls-tls` is tracked as Phase 10
-#     follow-up. Once that migration lands, uncomment the entry
-#     below so cargo-deny enforces the policy.
-#
 # Note: duplicate-major detection for `tokio` and `serde` is
 # tracked separately by the `multiple-versions` toggle above
 # combined with `highlight = "all"`. The workspace's two
 # hottest cross-cutting deps surface in the report and a
 # duplicated major is treated as a fix-it pass during review.
 deny = [
-  # TODO(phase-10-rustls-migration): re-enable once reqwest
-  # switches to `rustls-tls` features and the openssl-sys
-  # transitive is gone.
-  # { name = "openssl-sys" },
+  # reqwest runs on rustls; a crate that turns on a native-tls
+  # feature would bring OpenSSL back.
+  { name = "openssl-sys" },
 ]
 
 # Known duplicate crates that ship today. Each entry is a TODO: when
@@ -143,7 +127,6 @@ skip = [
   { name = "windows-targets" },
   { name = "windows_x86_64_gnu" },
   { name = "windows_x86_64_msvc" },
-  { name = "base64" },
   { name = "hashbrown" },
   { name = "bitflags" },
   { name = "itertools" },

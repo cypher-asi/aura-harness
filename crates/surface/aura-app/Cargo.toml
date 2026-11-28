@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 aura-core-modes = { path = "../../core/aura-core-modes" }
 aura-config = { path = "../../config/aura-config" }
@@ -64,6 +67,7 @@ parking_lot = { workspace = true }
 which = { workspace = true }
 # Zeroizes the local store's key once its cipher is built.
 zeroize = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 # Lowers the agents' threads below the UI's (`priority`).
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -81,26 +85,12 @@ dhat-heap = ["dep:dhat"]
 load-mimalloc = ["dep:mimalloc"]
 
 [dev-dependencies]
-# `test-support` lets the local store's tests stop a migration midway.
-aura-store-db = { path = "../../store/aura-store-db", features = ["test-support"] }
-# `test-support` lets the app's tests fill Gate's table by hand.
-aura-gate = { path = "../../gate/aura-gate", features = ["test-support"] }
-# `test-support` lets the app's tests read the registry's store.
-aura-engine-registry = { path = "../../engine/aura-engine-registry", features = ["test-support"] }
-# `test-support` lets the hub's end-to-end tests reach into the hub.
-aura-engine-cloud = { path = "../../engine/aura-engine-cloud", features = ["test-support"] }
-# `test-support` serves a claimed cloud node in-process for the hub's
-# client tests.
-aura-node = { path = "../aura-node", features = ["test-support"] }
+# Serves a claimed cloud node in-process for the hub's client tests.
+aura-node = { path = "../aura-node" }
 tower = { workspace = true }
 # The load harness runs the real terminal UI on a test screen.
 aura-ui-terminal = { path = "../../ui/aura-ui-terminal" }
 ratatui = { workspace = true }
-# `test-util` enables tokio's paused-clock test helpers
-# (`#[tokio::test(start_paused = true)]`), so the shutdown-grace tests of
-# `session::SessionTask::finish` run without real waits. Tests only; the
-# production build is unaffected.
-tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

@@ -1,0 +1,51 @@
+---
+source: tests/it/gate_cli.rs
+expression: "printed(&[\"--routed\"])"
+---
+tests/fixtures/gate_eval.jsonl
+1 lines could not be read and are left out
+3 attempts logged (3 routed by Gate), 3 later shown right or wrong: 1 right, 2 wrong
+Gate let stand 2 of them: 1 right, 1 wrong (0 it counted as passed, 1 it had nothing to judge by)
+Gate counted 0 as failed whose work was right
+
+Per model, attempts Gate let stand:
+  model                     stood  wrong  share wrong
+  claude/claude-sonnet-5-5      2      1          50%
+
+Signs of failure, scored on the 2 attempts Gate let stand (1 wrong, 1 right):
+  sign                        raised  caught  of wrong  false alarms  of right  precision
+  masked_check                     0       0        0%             0        0%          -
+  check_output_failures            0       0        0%             0        0%          -
+  masked_check_with_failures       0       0        0%             0        0%          -
+  reply_unverified                 0       0        0%             0        0%          -
+  reply_failures                   0       0        0%             0        0%          -
+  no_check                         1       1      100%             0        0%       100%
+  no_changes                       0       0        0%             0        0%          -
+  gave_up                          0       0        0%             0        0%          -
+  hit_limit                        0       0        0%             0        0%          -
+  shell_edit                       0       0        0%             0        0%          -
+  stale_check                      0       0        0%             0        0%          -
+  reply_not_covered                0       0        0%             0        0%          -
+  no_test_changed                  0       0        0%             0        0%          -
+  own_tests_only                   0       0        0%             0        0%          -
+
+What each sign has earned, on the 2 routed attempts below the strongest tier whose work is known (1 wrong):
+  sign                        raised  wrong  by chance  tier      next
+  masked_check                     0      0        0.0  log only  5 more raises
+  check_output_failures            0      0        0.0  log only  5 more raises
+  masked_check_with_failures       0      0        0.0  log only  5 more raises
+  reply_unverified                 0      0        0.0  log only  5 more raises
+  reply_failures                   0      0        0.0  log only  5 more raises
+  no_check                         1      1        0.5  log only  4 more raises
+  no_changes                       0      0        0.0  log only  5 more raises
+  gave_up                          0      0        0.0  log only  5 more raises
+  hit_limit                        0      0        0.0  log only  5 more raises
+  shell_edit                       0      0        0.0  log only  5 more raises
+  stale_check                      0      0        0.0  log only  5 more raises
+  reply_not_covered                0      0        0.0  log only  5 more raises
+  no_test_changed                  0      0        0.0  log only  5 more raises
+  own_tests_only                   0      0        0.0  log only  5 more raises
+  review: raised 5 times or more, and wrong 2 times as often as attempts of the same difficulty; acts: raised 10 times or more, and wrong 4 times in 5
+
+Failed work Gate let stand:
+   · claude/claude-sonnet-5-5 · gate: unavailable · no_check

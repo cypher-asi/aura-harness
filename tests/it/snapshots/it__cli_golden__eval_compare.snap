@@ -1,0 +1,48 @@
+---
+source: tests/it/cli_golden.rs
+expression: help
+---
+Compare recorded eval runs across arms
+
+Usage: aura eval compare [OPTIONS]
+
+Options:
+      --mode <MODE>
+          Session mode for the desktop window or terminal. Overrides the daemon default (`AURA_DEFAULT_MODE`); the kernel denies any tool call the mode does not allow
+
+          Possible values:
+          - agent: Full unrestricted operation subject to user permissions
+          - plan:  Read + markdown writes + read-only subprocesses
+          - ask:   Read-only (the terminal's `read-only` mode)
+          - debug: Read + sandboxed probes only
+
+      --suite <SUITE>
+          Only runs of this suite
+
+      --approval <APPROVAL>
+          What tool calls ask first: `yolo` runs everything with commands confined to writing inside the working folder, `ask` asks for anything not on the allow list, `strict` asks for everything but reads. Overrides `AURA_TUI_APPROVAL`; `-p` defaults to `yolo` in agent mode
+
+          Possible values:
+          - yolo:   Run everything; commands can write only inside the working folder
+          - ask:    Ask for anything not on the project's allow list
+          - strict: Ask for everything except reads, even what the allow list covers
+
+      --arm <ARMS>
+          Arms to compare, baseline first; repeatable (default: all)
+
+      --tolerance <TOLERANCE>
+          Relative change tolerated before a metric counts as a regression
+          
+          [default: 0.1]
+
+      --fail-on-regression
+          Exit with an error when any arm regresses against the baseline
+
+      --baseline <BASELINE>
+          Compare against this baseline file instead of the first arm
+
+      --write-baseline <WRITE_BASELINE>
+          Write the first arm's numbers to this baseline file
+
+  -h, --help
+          Print help (see a summary with '-h')

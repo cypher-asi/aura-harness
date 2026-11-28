@@ -8,7 +8,6 @@
 //! The directory is re-read before every turn, so edits made outside the
 //! terminal apply to the next turn without a restart.
 
-use aura_context_skills::prompt::{inject_full_skills, SkillPromptEntry};
 use aura_context_skills::SkillManager;
 use aura_exec_tools::agents::get_agent_state::GET_AGENT_STATE_TOOL_NAME;
 use aura_exec_tools::agents::list_agents::LIST_AGENTS_TOOL_NAME;
@@ -26,6 +25,9 @@ pub use crate::error::AgentDefinitionError;
 use files::{create_dir, read_definition, read_seeded, refresh_retired, write_file};
 
 mod files;
+mod skills;
+
+pub use skills::SkillsIn;
 
 const DEFINITIONS_DIR: &str = "agent_defs";
 const MAX_NAME_LEN: usize = 40;
@@ -175,10 +177,21 @@ impl AgentDefinition {
         })
     }
 
-    /// Append this definition's identity, rules and skills to `prompt`.
+    /// Append this definition's identity, rules and skills to `prompt`,
+    /// each skill in full.
     ///
     /// Skills that are not installed are skipped with a warning.
     pub fn extend_system_prompt(&self, prompt: &mut String, skills: &SkillManager) {
+        self.extend_system_prompt_with(prompt, skills, SkillsIn::Full);
+    }
+
+    /// [`Self::extend_system_prompt`], with its skills as `how` says.
+    pub fn extend_system_prompt_with(
+        &self,
+        prompt: &mut String,
+        skills: &SkillManager,
+        how: SkillsIn,
+    ) {
         prompt.push_str(&format!(
             "\n\n<agent_definition name=\"{}\">\nYou are an instance of the permanent agent \"{}\".",
             self.name, self.name
@@ -191,30 +204,7 @@ impl AgentDefinition {
             prompt.push_str(&self.rules);
         }
         prompt.push_str("\n</agent_definition>");
-
-        let found: Vec<_> = self
-            .skills
-            .iter()
-            .filter_map(|name| match skills.get(name) {
-                Ok(skill) => Some(skill),
-                Err(e) => {
-                    warn!(definition = %self.name, skill = %name, error = %e, "Skill not found");
-                    None
-                }
-            })
-            .collect();
-        let entries: Vec<SkillPromptEntry<'_>> = found
-            .iter()
-            .map(|skill| SkillPromptEntry {
-                name: &skill.frontmatter.name,
-                description: &skill.frontmatter.description,
-                body: &skill.body,
-                dir_path: &skill.dir_path,
-                agent_target_id: None,
-                agent_target_name: None,
-            })
-            .collect();
-        inject_full_skills(prompt, &entries);
+        self.push_skills(prompt, skills, how);
     }
 
     /// The subset of `tools` its instances may use.

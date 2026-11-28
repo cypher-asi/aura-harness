@@ -18,6 +18,7 @@
 //! for every model request opens a Secret Service session each time,
 //! and gnome-keyring-daemon aborts under that churn.
 
+mod sealed;
 mod slot;
 
 use crate::error::AuthError;
@@ -112,11 +113,14 @@ impl Vault {
     }
 
     fn slot(&self, keyring_user: &str, path: PathBuf) -> SecretSlot {
-        if self.use_keyring {
+        let slot = if self.use_keyring {
             SecretSlot::keyring(keyring_user, path)
         } else {
             SecretSlot::file(path)
-        }
+        };
+        // A file-only vault (tests, sandboxes) keeps its key under its
+        // root, whatever the environment names.
+        slot.sealed(sealed::FileSeal::for_root(&self.root, self.use_keyring))
     }
 
     fn zos_slot(&self) -> SecretSlot {

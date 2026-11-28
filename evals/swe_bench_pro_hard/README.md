@@ -64,7 +64,7 @@ reference fix (this pulls their images):
 
 ```
 AURA_SWE_BENCH_PRO_TASKS=nodebb-8168c6c4,flipt-2ca5dfb3 \
-    cargo test --test eval_suite swe_bench_pro -- --include-ignored
+    cargo test --test it eval_suite::swe_bench_pro -- --include-ignored
 ```
 
 ## Tasks

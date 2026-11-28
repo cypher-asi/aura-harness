@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 aura-core-types = { path = "../../core/aura-core-types" }
 aura-gate-evidence = { path = "../aura-gate-evidence" }
@@ -14,6 +17,7 @@ aura-gate-judge = { path = "../aura-gate-judge" }
 aura-model = { path = "../../model/aura-model" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [lints]
 workspace = true

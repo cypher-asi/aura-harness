@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aura_agent_kernel::{ChildAgentSpec, KernelSpawnHook, SpawnError, SpawnHook, SpawnOutcome};
-use aura_core_types::AgentId;
+use aura_core_types::{AgentId, ErrorChain};
 use aura_exec_tools::{AgentControlHook, AgentMessage, AgentReadHook};
 use aura_store_db::Store;
 
@@ -125,7 +125,10 @@ impl AuraServerSpawnHook {
             .send()
             .await
             .map_err(|e| {
-                SpawnError::Other(format!("spawn_agent: aura-os-server callback failed: {e}"))
+                SpawnError::Other(format!(
+                    "spawn_agent: aura-os-server callback failed: {}",
+                    ErrorChain(&e)
+                ))
             })?;
         if !response.status().is_success() {
             let message = AuraServerAgentHook {
@@ -138,7 +141,10 @@ impl AuraServerSpawnHook {
             return Err(SpawnError::Other(message));
         }
         let body = response.json::<Value>().await.map_err(|e| {
-            SpawnError::Other(format!("spawn_agent: invalid aura-os-server JSON: {e}"))
+            SpawnError::Other(format!(
+                "spawn_agent: invalid aura-os-server JSON: {}",
+                ErrorChain(&e)
+            ))
         })?;
         body.get("agent_id")
             .or_else(|| body.get("agentId"))
@@ -222,7 +228,12 @@ impl AgentControlHook for AuraServerAgentHook {
             }))
             .send()
             .await
-            .map_err(|e| format!("send_to_agent: aura-os-server callback failed: {e}"))?;
+            .map_err(|e| {
+                format!(
+                    "send_to_agent: aura-os-server callback failed: {}",
+                    ErrorChain(&e)
+                )
+            })?;
 
         let status = response.status();
         let headers = response.headers().clone();
@@ -253,7 +264,12 @@ impl AgentControlHook for AuraServerAgentHook {
             .bearer_auth(self.bearer()?)
             .send()
             .await
-            .map_err(|e| format!("agent_lifecycle: aura-os-server callback failed: {e}"))?;
+            .map_err(|e| {
+                format!(
+                    "agent_lifecycle: aura-os-server callback failed: {}",
+                    ErrorChain(&e)
+                )
+            })?;
         if !response.status().is_success() {
             return Err(self.error_from_response("agent_lifecycle", response).await);
         }
@@ -280,7 +296,12 @@ impl AgentControlHook for AuraServerAgentHook {
             }))
             .send()
             .await
-            .map_err(|e| format!("delegate_task: aura-os-server callback failed: {e}"))?;
+            .map_err(|e| {
+                format!(
+                    "delegate_task: aura-os-server callback failed: {}",
+                    ErrorChain(&e)
+                )
+            })?;
         if !response.status().is_success() {
             return Err(self.error_from_response("delegate_task", response).await);
         }
@@ -319,17 +340,21 @@ impl AgentReadHook for AuraServerAgentHook {
         if let Some(org_id) = org_id {
             request = request.query(&[("org_id", org_id)]);
         }
-        let response = request
-            .send()
-            .await
-            .map_err(|e| format!("list_agents: aura-os-server callback failed: {e}"))?;
+        let response = request.send().await.map_err(|e| {
+            format!(
+                "list_agents: aura-os-server callback failed: {}",
+                ErrorChain(&e)
+            )
+        })?;
         if !response.status().is_success() {
             return Err(self.error_from_response("list_agents", response).await);
         }
-        response
-            .json::<Value>()
-            .await
-            .map_err(|e| format!("list_agents: invalid aura-os-server JSON: {e}"))
+        response.json::<Value>().await.map_err(|e| {
+            format!(
+                "list_agents: invalid aura-os-server JSON: {}",
+                ErrorChain(&e)
+            )
+        })
     }
 
     async fn snapshot(&self, target_agent_id: &str) -> Result<Value, String> {
@@ -340,14 +365,21 @@ impl AgentReadHook for AuraServerAgentHook {
             .bearer_auth(self.bearer()?)
             .send()
             .await
-            .map_err(|e| format!("get_agent_state: aura-os-server callback failed: {e}"))?;
+            .map_err(|e| {
+                format!(
+                    "get_agent_state: aura-os-server callback failed: {}",
+                    ErrorChain(&e)
+                )
+            })?;
         if !response.status().is_success() {
             return Err(self.error_from_response("get_agent_state", response).await);
         }
-        response
-            .json::<Value>()
-            .await
-            .map_err(|e| format!("get_agent_state: invalid aura-os-server JSON: {e}"))
+        response.json::<Value>().await.map_err(|e| {
+            format!(
+                "get_agent_state: invalid aura-os-server JSON: {}",
+                ErrorChain(&e)
+            )
+        })
     }
 }
 

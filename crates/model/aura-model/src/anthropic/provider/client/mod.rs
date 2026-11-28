@@ -4,6 +4,7 @@ mod send;
 use super::body_cap::fit_body_under_cap;
 use crate::anthropic::AnthropicProvider;
 use crate::ModelRequest;
+use aura_core_types::ErrorChain;
 use std::time::Duration;
 use tracing::warn;
 
@@ -83,7 +84,7 @@ impl AnthropicProvider {
                     || status.is_redirection()
             }
             Err(e) => {
-                warn!(error = %e, "Anthropic health check failed");
+                warn!(error = %ErrorChain(&e), "Anthropic health check failed");
                 false
             }
         }

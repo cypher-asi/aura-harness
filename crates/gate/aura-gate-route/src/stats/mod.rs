@@ -28,7 +28,6 @@ use std::collections::HashMap;
 
 use aura_core_types::{AgentId, Hash, RecordEntry};
 
-#[cfg(any(test, feature = "test-support"))]
 mod learn;
 mod observe;
 mod query;

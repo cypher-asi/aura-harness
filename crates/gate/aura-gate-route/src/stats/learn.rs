@@ -1,5 +1,5 @@
 //! Filling a table with outcomes, for the tests of this crate and of the
-//! crates that build on it (the `test-support` feature).
+//! crates that build on it.
 
 use aura_core_types::{
     AgentId, OutcomePayload, OutcomeSignal, PromptPayload, RecordEntry, Route, RouteLevel,

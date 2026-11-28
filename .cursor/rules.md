@@ -95,7 +95,7 @@ Recommended CI checks (add when feasible):
 - `cargo deny check`
 
 6) Unused deps (optional, can be noisy)  
-- `cargo machete`
+- `cargo machete --skip workspace-hack` (cargo-machete 0.10 or newer; `workspace-hack` depends on crates only for their features)
 
 7) Coverage (optional)  
 - `cargo llvm-cov --all --all-features --lcov --output-path lcov.info`
@@ -105,10 +105,19 @@ Recommended CI checks (add when feasible):
 Developers should run this before pushing:
 
 - `cargo fmt`
-- `cargo clippy --all-targets --all-features -- -D warnings`
-- `cargo test --all --all-features`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test --workspace`
 
 If you use a pre-commit hook, it must be fast and deterministic.
+
+Locally, don't add `--all-features`, don't set `RUSTFLAGS` for one command, and don't run `cargo check` next to `cargo clippy`. Each of the first two rebuilds the whole workspace; clippy already runs every check `cargo check` does. CI's `--all-features` adds only the TypeScript bindings export.
+
+### 1.6 Dependencies and features
+
+- After adding, removing or changing a dependency, run `cargo hakari generate && cargo hakari manage-deps` (install: `cargo install cargo-hakari --locked`). CI fails while `workspace-hack` is out of date.
+- Never put test helpers behind a cargo feature (no `test-support` features). Compile them in and mark them `#[doc(hidden)]`; a test-only feature rebuilds the crate and every crate above it each time you switch between `cargo test` and `cargo run`.
+- Integration tests are modules of the crate's one test binary: add `tests/it/<name>.rs` and a `mod <name>;` line in `tests/it/main.rs`, never a second file directly under `tests/`, unless the test swaps the global allocator to measure memory (as `aura-ui-terminal/tests/ui_memory.rs` does). In a crate whose one test file still sits directly under `tests/`, move that file into `tests/it/` alongside yours. Run them with `cargo test -p <crate> --test it <name>::`.
+- Crates set `[lib] doctest = false`. A doc example meant to run as a test needs that line removed from its crate; otherwise write it as a unit test.
 
 ---
 

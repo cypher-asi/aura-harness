@@ -81,18 +81,18 @@ pub(super) fn strict_routes() -> Router<RouterState> {
     };
 
     let strict_small_body = Router::new()
-        .route("/v1/run/:run_id/pause", post(run_pause_handler))
-        .route("/v1/run/:run_id/stop", post(run_stop_handler))
+        .route("/v1/run/{run_id}/pause", post(run_pause_handler))
+        .route("/v1/run/{run_id}/stop", post(run_stop_handler))
         .route(
-            "/workspace/:workspace_key/safe/:session_id",
+            "/workspace/{workspace_key}/safe/{session_id}",
             post(prepare_safe_workspace_handler),
         )
         .route(
-            "/workspace/:workspace_key/safe/:session_id/checkpoints/:checkpoint_id/restore",
+            "/workspace/{workspace_key}/safe/{session_id}/checkpoints/{checkpoint_id}/restore",
             post(restore_safe_workspace_handler),
         )
         .route(
-            "/workspace/:workspace_key/safe/:session_id/apply",
+            "/workspace/{workspace_key}/safe/{session_id}/apply",
             post(apply_safe_workspace_handler),
         )
         .route_layer(body_limit_4k());
@@ -127,15 +127,15 @@ pub(super) fn file_routes() -> Router<RouterState> {
             post(import_workspace_handler).route_layer(body_limit_12m()),
         )
         .route(
-            "/workspace/:workspace_key",
+            "/workspace/{workspace_key}",
             delete(delete_workspace_handler).route_layer(body_limit_16k()),
         )
         .route(
-            "/workspace/:workspace_key/safe/:session_id",
+            "/workspace/{workspace_key}/safe/{session_id}",
             get(safe_workspace_status_handler).route_layer(body_limit_1k()),
         )
         .route(
-            "/workspace/:workspace_key/safe/:session_id/checkpoints/:checkpoint_id/diff",
+            "/workspace/{workspace_key}/safe/{session_id}/checkpoints/{checkpoint_id}/diff",
             get(safe_workspace_diff_handler).route_layer(body_limit_1k()),
         )
 }
@@ -144,30 +144,30 @@ pub(super) fn file_routes() -> Router<RouterState> {
 pub(super) fn agent_routes() -> Router<RouterState> {
     Router::new()
         .route(
-            "/tx/status/:agent_id/:tx_id",
+            "/tx/status/{agent_id}/{tx_id}",
             get(tx_status_handler).route_layer(body_limit_1k()),
         )
         .route(
-            "/agents/:agent_id/head",
+            "/agents/{agent_id}/head",
             get(get_head_handler).route_layer(body_limit_1k()),
         )
         .route(
-            "/agents/:agent_id/record",
+            "/agents/{agent_id}/record",
             get(scan_record_handler).route_layer(body_limit_16k()),
         )
         .route(
-            "/agents/:agent_id/tool_calls/:tool_use_id/audit",
+            "/agents/{agent_id}/tool_calls/{tool_use_id}/audit",
             get(tool_call_audit_handler).route_layer(body_limit_1k()),
         )
         .route(
-            "/users/:user_id/tool-defaults",
+            "/users/{user_id}/tool-defaults",
             get(get_user_tool_defaults_handler).put(put_user_tool_defaults_handler),
         )
         .route(
-            "/agents/:agent_id/tool-permissions",
+            "/agents/{agent_id}/tool-permissions",
             get(get_agent_tool_permissions_handler).put(put_agent_tool_permissions_handler),
         )
-        .route("/agents/:agent_id/tools", get(get_agent_tools_handler))
+        .route("/agents/{agent_id}/tools", get(get_agent_tools_handler))
 }
 
 /// WebSocket streams and run read routes.
@@ -175,16 +175,16 @@ pub(super) fn stream_and_run_routes() -> Router<RouterState> {
     Router::new()
         .route("/ws/terminal", get(terminal_ws_handler))
         .route(
-            "/ws/preview/tcp/:port",
+            "/ws/preview/tcp/{port}",
             get(crate::gateway::handlers::preview_tcp::preview_tcp_ws),
         )
-        .route("/stream/:run_id", get(run_ws_handler))
+        .route("/stream/{run_id}", get(run_ws_handler))
         .route(
             "/v1/run/list",
             get(run_list_handler).route_layer(body_limit_1k()),
         )
         .route(
-            "/v1/run/:run_id/status",
+            "/v1/run/{run_id}/status",
             get(run_status_handler).route_layer(body_limit_1k()),
         )
 }
@@ -198,13 +198,13 @@ fn memory_crud_routes(prefix: &str) -> Router<RouterState> {
             get(memory::list_facts).post(memory::create_fact),
         )
         .route(
-            &format!("{prefix}/facts/:id"),
+            &format!("{prefix}/facts/{{id}}"),
             get(memory::get_fact)
                 .put(memory::update_fact)
                 .delete(memory::delete_fact),
         )
         .route(
-            &format!("{prefix}/facts/by-key/:key"),
+            &format!("{prefix}/facts/by-key/{{key}}"),
             get(memory::get_fact_by_key),
         )
         .route(
@@ -212,7 +212,7 @@ fn memory_crud_routes(prefix: &str) -> Router<RouterState> {
             get(memory::list_events).post(memory::create_event),
         )
         .route(
-            &format!("{prefix}/events/:id"),
+            &format!("{prefix}/events/{{id}}"),
             delete(memory::delete_event),
         )
         .route(
@@ -224,7 +224,7 @@ fn memory_crud_routes(prefix: &str) -> Router<RouterState> {
             get(memory::list_procedures).post(memory::create_procedure),
         )
         .route(
-            &format!("{prefix}/procedures/:id"),
+            &format!("{prefix}/procedures/{{id}}"),
             get(memory::get_procedure)
                 .put(memory::update_procedure)
                 .delete(memory::delete_procedure),
@@ -244,11 +244,11 @@ fn memory_crud_routes(prefix: &str) -> Router<RouterState> {
 /// Memory CRUD: canonical paths plus the aliases the aura-os proxy uses
 /// (`/api/agents/:id/memory/...`).
 pub(super) fn memory_routes() -> Router<RouterState> {
-    let canonical = memory_crud_routes("/memory/:agent_id")
-        .route("/memory/:agent_id/snapshot", get(memory::snapshot))
-        .route("/memory/:agent_id/wipe", post(memory::wipe));
-    let aliases = memory_crud_routes("/api/agents/:agent_id/memory").route(
-        "/api/agents/:agent_id/memory",
+    let canonical = memory_crud_routes("/memory/{agent_id}")
+        .route("/memory/{agent_id}/snapshot", get(memory::snapshot))
+        .route("/memory/{agent_id}/wipe", post(memory::wipe));
+    let aliases = memory_crud_routes("/api/agents/{agent_id}/memory").route(
+        "/api/agents/{agent_id}/memory",
         get(memory::snapshot).delete(memory::wipe),
     );
     canonical.merge(aliases)
@@ -261,23 +261,23 @@ pub(super) fn skill_routes() -> Router<RouterState> {
             "/api/skills",
             get(skills::list_skills).post(skills::create_skill),
         )
-        .route("/api/skills/:name", get(skills::get_skill))
-        .route("/api/skills/:name/activate", post(skills::activate_skill))
+        .route("/api/skills/{name}", get(skills::get_skill))
+        .route("/api/skills/{name}/activate", post(skills::activate_skill))
         .route(
-            "/api/agents/:agent_id/skills",
+            "/api/agents/{agent_id}/skills",
             get(skills::list_agent_skills).post(skills::install_agent_skill),
         )
         .route(
-            "/api/agents/:agent_id/skills/:name",
+            "/api/agents/{agent_id}/skills/{name}",
             delete(skills::uninstall_agent_skill),
         )
         // Legacy compatibility aliases for older harness callers.
         .route(
-            "/api/harness/agents/:agent_id/skills",
+            "/api/harness/agents/{agent_id}/skills",
             get(skills::list_agent_skills).post(skills::install_agent_skill),
         )
         .route(
-            "/api/harness/agents/:agent_id/skills/:name",
+            "/api/harness/agents/{agent_id}/skills/{name}",
             delete(skills::uninstall_agent_skill),
         )
 }
@@ -290,7 +290,7 @@ pub(super) fn secret_routes() -> Router<RouterState> {
     Router::new()
         .route("/secrets", get(list_secrets_handler))
         .route(
-            "/secrets/:name",
+            "/secrets/{name}",
             get(get_secret_handler)
                 .put(put_secret_handler)
                 .delete(delete_secret_handler)
@@ -311,14 +311,14 @@ pub(super) fn process_routes() -> Router<RouterState> {
             get(list_processes_handler).post(create_process_handler),
         )
         .route(
-            "/v1/processes/:id",
+            "/v1/processes/{id}",
             get(get_process_handler)
                 .put(update_process_handler)
                 .delete(delete_process_handler),
         )
-        .route("/v1/processes/:id/trigger", post(trigger_process_handler))
+        .route("/v1/processes/{id}/trigger", post(trigger_process_handler))
         .route(
-            "/v1/processes/:id/runs",
+            "/v1/processes/{id}/runs",
             get(list_process_runs_handler).route_layer(body_limit_16k()),
         )
 }
@@ -336,15 +336,15 @@ pub(super) fn cloud_routes() -> Router<RouterState> {
             "/v1/sync/import",
             post(cloud::sync_import_handler).route_layer(import_limit),
         )
-        .route("/v1/sync/seal/:agent_id", post(cloud::sync_seal_handler))
+        .route("/v1/sync/seal/{agent_id}", post(cloud::sync_seal_handler))
         .route(
-            "/v1/sync/session/:agent_id",
+            "/v1/sync/session/{agent_id}",
             put(cloud::sync_session_put_handler)
                 .get(cloud::sync_session_get_handler)
                 .route_layer(import_limit),
         )
         .route(
-            "/v1/sync/session/:agent_id/new",
+            "/v1/sync/session/{agent_id}/new",
             post(cloud::sync_session_new_handler),
         )
         .route("/v1/sync/traces", get(cloud::sync_traces_handler))

@@ -12,7 +12,7 @@ use aura_core_protocol::cloud::{
     HostStats, MeshMail, SealResponse, SessionSaved, SessionStarted, SyncImport, SyncImported,
     TracePage, WorkspacePatch,
 };
-use aura_core_types::{AgentId, RecordEntry};
+use aura_core_types::{AgentId, ErrorChain, RecordEntry};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
@@ -113,7 +113,7 @@ impl NodeClient {
             .bearer_auth(self.token.expose())
             .send()
             .await
-            .map_err(|err| self.fail(op, err))?;
+            .map_err(|err| self.fail(op, ErrorChain(&err)))?;
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
@@ -122,7 +122,10 @@ impl NodeClient {
                 format!("{status}: {}", body.chars().take(300).collect::<String>()),
             ));
         }
-        response.json::<T>().await.map_err(|err| self.fail(op, err))
+        response
+            .json::<T>()
+            .await
+            .map_err(|err| self.fail(op, ErrorChain(&err)))
     }
 
     /// Whether the node answers `/health`.
@@ -289,7 +292,7 @@ impl NodeClient {
         let response = request
             .send()
             .await
-            .map_err(|err| self.fail("list files", err))?;
+            .map_err(|err| self.fail("list files", ErrorChain(&err)))?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(Vec::new());
         }
@@ -304,7 +307,7 @@ impl NodeClient {
         let listing: Listing = response
             .json()
             .await
-            .map_err(|err| self.fail("list files", err))?;
+            .map_err(|err| self.fail("list files", ErrorChain(&err)))?;
         Ok(listing.entries)
     }
 
@@ -372,7 +375,7 @@ impl NodeClient {
             .timeout(Duration::from_secs(15))
             .send()
             .await
-            .map_err(|err| self.fail("processes", err))?;
+            .map_err(|err| self.fail("processes", ErrorChain(&err)))?;
         let status = response.status();
         if status == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
@@ -383,7 +386,7 @@ impl NodeClient {
         let rows = response
             .json()
             .await
-            .map_err(|err| self.fail("processes", err))?;
+            .map_err(|err| self.fail("processes", ErrorChain(&err)))?;
         Ok(Some(rows))
     }
 
@@ -400,7 +403,7 @@ impl NodeClient {
             .bearer_auth(self.token.expose())
             .send()
             .await
-            .map_err(|err| self.fail("run status", err))?;
+            .map_err(|err| self.fail("run status", ErrorChain(&err)))?;
         let status = response.status();
         if status == reqwest::StatusCode::NOT_FOUND {
             return Ok(false);
@@ -457,10 +460,13 @@ impl NodeClient {
             .bearer_auth(self.token.expose())
             .send()
             .await
-            .map_err(|err| self.fail("run", err))?;
+            .map_err(|err| self.fail("run", ErrorChain(&err)))?;
         let status = response.status();
         if status.is_success() {
-            let started = response.json().await.map_err(|err| self.fail("run", err))?;
+            let started = response
+                .json()
+                .await
+                .map_err(|err| self.fail("run", ErrorChain(&err)))?;
             return Ok(RunStart::Started(started));
         }
         let body = response.text().await.unwrap_or_default();

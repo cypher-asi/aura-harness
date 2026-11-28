@@ -7,10 +7,14 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 aura-core-modes = { path = "../aura-core-modes" }
 serde = { workspace = true }
 thiserror = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [dev-dependencies]
 serde_json = { workspace = true }

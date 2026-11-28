@@ -25,7 +25,8 @@ use tracing::debug;
 /// Returns an error if the transaction cannot be serialized.
 ///
 /// Exposed as `pub` so the invariant test suite in
-/// `crates/aura-kernel/tests/invariant_determinism.rs` (Phase 10 / Wave 7)
+/// `crates/agent/aura-agent-kernel/tests/it/invariant_determinism.rs`
+/// (Phase 10 / Wave 7)
 /// can assert Invariant §6 directly against the canonical function without
 /// going through `ContextBuilder`. The function is pure — it has no side
 /// effects and no hidden state — so widening its visibility does not expand

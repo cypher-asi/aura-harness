@@ -4,6 +4,7 @@
 
 use super::output::truncate_chars;
 use super::{ApiKeySource, RunpodError, RunpodSettings};
+use aura_core_types::ErrorChain;
 use reqwest::{Method, Response, StatusCode};
 use serde_json::Value;
 use std::sync::Arc;
@@ -102,7 +103,7 @@ impl RunpodClient {
             .user_agent(USER_AGENT)
             .connect_timeout(settings.connect_timeout)
             .build()
-            .map_err(|e| RunpodError::Client(e.to_string()))?;
+            .map_err(|e| RunpodError::Client(ErrorChain(&e).to_string()))?;
         Ok(Self {
             http,
             settings: Arc::new(settings),

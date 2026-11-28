@@ -29,6 +29,7 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock, RwLock};
 use tracing::{info, warn};
 
+pub mod cloud;
 mod ui;
 pub(crate) use ui::act;
 
@@ -47,6 +48,9 @@ pub struct Integrations {
     github_token: RwLock<Option<Secret>>,
     /// What each integration's last action said, for the panel
     notes: RwLock<std::collections::HashMap<String, (bool, String)>>,
+    /// Whether boxd had a stored key at the last refresh, for the cloud
+    /// views ([`cloud::cloud_configured`])
+    boxd_stored: std::sync::atomic::AtomicBool,
 }
 
 /// Open this process's integrations under `data_dir`, once; later calls
@@ -119,6 +123,7 @@ impl Integrations {
             connected: RwLock::default(),
             github_token: RwLock::default(),
             notes: RwLock::default(),
+            boxd_stored: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -150,6 +155,21 @@ impl Integrations {
             Err(_) => None,
         };
         *write(&self.github_token) = token;
+        let registry = Arc::clone(&self.registry);
+        let boxd = tokio::task::spawn_blocking(move || registry.stored_secret("boxd"))
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .flatten()
+            .is_some();
+        self.boxd_stored
+            .store(boxd, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether boxd had a stored key at the last [`Self::refresh`].
+    #[must_use]
+    pub fn has_stored_boxd_key(&self) -> bool {
+        self.boxd_stored.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Register on `executor` the tools agent `agent` (hex id) may use,

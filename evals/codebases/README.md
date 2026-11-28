@@ -37,7 +37,7 @@ commit before the fix and passes with the fix:
 scripts/import_repo_tasks.py --repo tobymao/sqlglot --list
 scripts/import_repo_tasks.py --repo pelletier/go-toml --per-repo 5
 scripts/import_repo_tasks.py --pr tobymao/sqlglot#9243
-cargo test --test eval_suite codebase -- --include-ignored
+cargo test --test it eval_suite::codebase -- --include-ignored
 ```
 
 ## Tasks

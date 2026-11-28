@@ -109,9 +109,9 @@ impl AgentRegistry {
         persist::appended_row(&self.file, agent)
     }
 
-    /// The store the registry is kept in. Writers outside the registry
-    /// get it through [`Self::place_agents`].
-    #[cfg(any(test, feature = "test-support"))]
+    /// The store the registry is kept in, for tests to read the rows.
+    /// Writers outside the registry get it through [`Self::place_agents`].
+    #[doc(hidden)]
     pub fn store(&self) -> &aura_store_db::AgentStore {
         &self.store
     }

@@ -6,6 +6,7 @@
 //! log, view or error.
 
 use async_trait::async_trait;
+use aura_core_types::ErrorChain;
 use serde::Deserialize;
 use std::process::Stdio;
 use std::sync::OnceLock;
@@ -307,12 +308,12 @@ impl Api {
             .header("X-GitHub-Api-Version", "2022-11-28")
             .send()
             .await
-            .map_err(|e| Failure::Failed(format!("GitHub: {}", e.without_url())))?;
+            .map_err(|e| Failure::Failed(format!("GitHub: {}", ErrorChain(&e.without_url()))))?;
         let status = response.status();
         let body = response
             .text()
             .await
-            .map_err(|e| Failure::Failed(format!("GitHub: {}", e.without_url())))?;
+            .map_err(|e| Failure::Failed(format!("GitHub: {}", ErrorChain(&e.without_url()))))?;
         if status.is_success() {
             return Ok(body);
         }
@@ -379,7 +380,7 @@ fn client() -> Result<&'static reqwest::Client, String> {
                 .timeout(TIMEOUT)
                 .user_agent(concat!("aura/", env!("CARGO_PKG_VERSION")))
                 .build()
-                .map_err(|e| format!("GitHub: {e}"))
+                .map_err(|e| format!("GitHub: {}", ErrorChain(&e)))
         })
         .as_ref()
         .map_err(Clone::clone)

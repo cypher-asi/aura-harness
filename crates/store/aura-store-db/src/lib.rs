@@ -48,7 +48,7 @@ pub use processes::{
     NewProcess, ProcessError, ProcessRecord, ProcessRunRecord, ProcessRunStatus, ProcessStore,
     ProcessTriggerMeta, ProcessUpdate,
 };
-#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
 pub use rocks_store::FaultAt;
 pub use rocks_store::RocksStore;
 pub use rocks_store::NativeMemory;

@@ -293,7 +293,7 @@ How long the app takes to start with many agents
 (`crates/surface/aura-app/tests/startup_perf.rs`):
 
 ```text
-cargo test --release -p aura-app --test startup_perf -- --ignored --nocapture
+cargo test --release -p aura-app --test it startup_perf:: -- --ignored --nocapture
 ```
 
 The test writes N agents with 400 turns each (about 2 KB per message)

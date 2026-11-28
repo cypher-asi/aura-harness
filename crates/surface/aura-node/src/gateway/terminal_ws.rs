@@ -188,19 +188,19 @@ async fn pump_pty_outbound(
         tokio::select! {
             Some(data) = output_rx.recv() => {
                 let msg = serde_json::json!({"type":"output","data": B64.encode(&data)});
-                if ws_write.send(Message::Text(msg.to_string())).await.is_err() {
+                if ws_write.send(Message::Text(msg.to_string().into())).await.is_err() {
                     break;
                 }
             }
             Some(code) = exit_rx.recv() => {
                 let _ = ws_write.send(Message::Text(
-                    serde_json::json!({"type":"exit","code":code}).to_string(),
+                    serde_json::json!({"type":"exit","code":code}).to_string().into(),
                 )).await;
                 break;
             }
             Some(err_msg) = error_rx.recv() => {
                 let msg = serde_json::json!({"type":"error","message": err_msg});
-                if ws_write.send(Message::Text(msg.to_string())).await.is_err() {
+                if ws_write.send(Message::Text(msg.to_string().into())).await.is_err() {
                     break;
                 }
             }
@@ -288,17 +288,17 @@ async fn wait_for_spawn(socket: &mut WebSocket) -> Option<SpawnMsg> {
                 });
             }
             let err = serde_json::json!({"type": "error", "message": "expected spawn message"});
-            let _ = socket.send(Message::Text(err.to_string())).await;
+            let _ = socket.send(Message::Text(err.to_string().into())).await;
         } else {
             let err = serde_json::json!({"type": "error", "message": "invalid JSON"});
-            let _ = socket.send(Message::Text(err.to_string())).await;
+            let _ = socket.send(Message::Text(err.to_string().into())).await;
         }
     }
     None
 }
 
 async fn send_json(socket: &mut WebSocket, value: &serde_json::Value) -> Result<(), axum::Error> {
-    socket.send(Message::Text(value.to_string())).await
+    socket.send(Message::Text(value.to_string().into())).await
 }
 
 // `output_tx` and `exit_tx` are intentionally passed by value:

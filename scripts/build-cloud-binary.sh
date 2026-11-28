@@ -12,8 +12,13 @@
 # produces a binary that needs a newer glibc (e.g. on a rolling-release
 # distro), it rebuilds inside a Debian bookworm container (glibc 2.36).
 #
-# Usage: scripts/build-cloud-binary.sh [--docker]
+# Usage: scripts/build-cloud-binary.sh [--docker] [--release]
 #   --docker   skip the native attempt and build in the container.
+#   --release  build with the release profile (thin LTO, one codegen unit)
+#              for a binary you ship. Without it the cloud-dev profile
+#              builds the same optimizations without those two, so a
+#              rebuild after a node change takes about 30 s on 8 cores,
+#              where the release profile takes about 3 minutes.
 #
 # Override the install location with AURA_CLOUD_BINARY_OUT=/path/to/aura.
 set -euo pipefail
@@ -29,9 +34,14 @@ if [ "$(uname -s)" != "Linux" ] || [ "$(uname -m)" != "x86_64" ]; then
 else
   FORCE_DOCKER=0
 fi
-if [ "${1:-}" = "--docker" ]; then
-  FORCE_DOCKER=1
-fi
+PROFILE=cloud-dev
+for arg in "$@"; do
+  case "$arg" in
+    --docker) FORCE_DOCKER=1 ;;
+    --release) PROFILE=release ;;
+    *) echo "usage: $0 [--docker] [--release]" >&2; exit 2 ;;
+  esac
+done
 
 # Highest GLIBC_2.<minor> the binary asks for (0 when none).
 glibc_minor() {
@@ -47,10 +57,10 @@ compatible() {
 }
 
 build_native() {
-  echo "==> native release build (target/cloud)" >&2
-  (cd "$ROOT" && cargo build --release --locked --no-default-features --bin aura \
+  echo "==> native $PROFILE build (target/cloud)" >&2
+  (cd "$ROOT" && cargo build --profile "$PROFILE" --locked --no-default-features --bin aura \
     --target-dir target/cloud)
-  echo "$ROOT/target/cloud/release/aura"
+  echo "$ROOT/target/cloud/$PROFILE/aura"
 }
 
 build_docker() {
@@ -58,7 +68,7 @@ build_docker() {
     echo "docker is needed to build for glibc 2.${MAX_GLIBC_MINOR}" >&2
     exit 1
   }
-  echo "==> release build in $IMAGE (target/cloud-docker)" >&2
+  echo "==> $PROFILE build in $IMAGE (target/cloud-docker)" >&2
   docker run --rm --platform linux/amd64 \
     -v "$ROOT":/src -w /src \
     -v aura-cloud-cargo-registry:/usr/local/cargo/registry \
@@ -67,13 +77,13 @@ build_docker() {
       set -e
       apt-get update -qq
       DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-        clang libclang-dev llvm-dev cmake pkg-config libssl-dev libdbus-1-dev >/dev/null
+        clang libclang-dev llvm-dev cmake pkg-config libdbus-1-dev >/dev/null
       rustup show active-toolchain >/dev/null
-      cargo build --release --locked --no-default-features --bin aura
-      strip target/cloud-docker/release/aura
+      cargo build --profile $PROFILE --locked --no-default-features --bin aura
+      strip target/cloud-docker/$PROFILE/aura
       chown -R $(id -u):$(id -g) target/cloud-docker
     " >&2
-  echo "$ROOT/target/cloud-docker/release/aura"
+  echo "$ROOT/target/cloud-docker/$PROFILE/aura"
 }
 
 BIN=""

@@ -1,0 +1,7 @@
+---
+source: tests/it/gate_cli.rs
+expression: text
+---
+no-such-data-dir/gate/attempts.jsonl
+0 attempts logged (0 routed by Gate), 0 later shown right or wrong: 0 right, 0 wrong
+Nothing to score yet: run /compare on benchmark tasks, whose own checks say whether each run's work was right.

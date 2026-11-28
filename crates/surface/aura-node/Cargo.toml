@@ -6,13 +6,13 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+doctest = false
+
 [[bin]]
 name = "aura-node"
 path = "src/main.rs"
-
-[features]
-default = []
-test-support = []
+test = false
 
 [dependencies]
 aura-core-types = { path = "../../core/aura-core-types" }
@@ -85,15 +85,12 @@ colored = { workspace = true }
 # Sealed state-at-rest boot flow (Swarm TEE phase 5): the per-agent DEK
 # fetched from the CoCo CDH/KBS is held in zeroizing buffers only.
 zeroize = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [dev-dependencies]
 aura-plugin = { path = "../../plugin/aura-plugin" }
 tempfile = { workspace = true }
 insta = { workspace = true }
-# `test-util` enables tokio's paused-clock test helpers
-# (`#[tokio::test(start_paused = true)]`) used by the chat tool-approval
-# auto-deny-timeout test, without affecting the production build.
-tokio = { workspace = true, features = ["test-util"] }
 
 # Phase 9: `aura-context-skills` is held as a direct dep so the
 # runtime can reach into the Phase 8 plugin-skills wiring without an

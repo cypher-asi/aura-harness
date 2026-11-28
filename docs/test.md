@@ -198,7 +198,7 @@ The root `Cargo.toml` has `features default = ["desktop"]`. If the user built wi
 
 ### 11. Config Boundary Test Is Fragile
 
-**File:** `tests/config_boundary.rs`
+**File:** `tests/it/config_boundary.rs`
 
 **Risk:** Text-based scanning misses changes.
 

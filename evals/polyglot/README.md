@@ -13,7 +13,7 @@ The layout is that of `evals/gate_cost`: `workspace/` holds the stub,
 `checks/.gate_checks/` the exercise's tests (copied in only for the
 check), `solution/` Exercism's example solution, and `task.toml` the
 prompt (the exercise's instructions) and the check command. The Rust
-checks run the tests Exercism marks `#[ignore]` too. `tests/eval_suite.rs`
+checks run the tests Exercism marks `#[ignore]` too. `tests/it/eval_suite.rs`
 proves every task fails as shipped and passes when solved.
 
 ## Importing more

@@ -345,7 +345,7 @@ impl ChannelStore {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
 impl ChannelStore {
     /// Fault-injected variant of [`Self::create`]; see
     /// [`crate::FaultAt`]. `BeforeBatchWrite` writes nothing,

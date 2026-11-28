@@ -15,6 +15,7 @@ use crate::{
     StreamEventStream,
 };
 use async_trait::async_trait;
+use aura_core_types::ErrorChain;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
@@ -106,8 +107,8 @@ impl ModelProvider for AnthropicProvider {
                         // No output has escaped yet, so retry its transport
                         // failure; a complete but invalid JSON body stays Parse.
                         let is_transport = is_retryable_transport_error(&e);
-                        error!(error = %e, "Failed to read Anthropic response");
-                        let err_str = e.to_string();
+                        error!(error = %ErrorChain(&e), "Failed to read Anthropic response");
+                        let err_str = ErrorChain(&e).to_string();
                         crate::console::anthropic_failure_block(
                             &crate::console::AnthropicFailureView {
                                 status_code: Some(200),
@@ -124,7 +125,8 @@ impl ModelProvider for AnthropicProvider {
                             classify_transport_error(&e, "Failed to read Anthropic response")
                         } else {
                             ApiError::Other(ReasonerError::Parse(format!(
-                                "Failed to parse Anthropic response: {e}"
+                                "Failed to parse Anthropic response: {}",
+                                ErrorChain(&e)
                             )))
                         });
                     }

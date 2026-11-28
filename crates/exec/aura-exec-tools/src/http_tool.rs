@@ -33,7 +33,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use aura_core_types::{ToolDefinition, ToolResult};
+use aura_core_types::{ErrorChain, ToolDefinition, ToolResult};
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
 use reqwest::Method;
@@ -82,7 +82,10 @@ fn default_http_tool_client() -> Result<reqwest::Client, ToolError> {
         .connect_timeout(HTTP_TOOL_CONNECT_TIMEOUT)
         .build()
         .map_err(|e| {
-            ToolError::CommandFailed(format!("failed to build default HTTP tool client: {e}"))
+            ToolError::CommandFailed(format!(
+                "failed to build default HTTP tool client: {}",
+                ErrorChain(&e)
+            ))
         })?;
     // set() may race with another caller; either way, whichever client
     // wins is fine — both have identical config.
@@ -345,10 +348,9 @@ impl Tool for HttpToolDefinition {
 
     async fn execute(&self, _ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
         let req = self.build_request(&args)?;
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| ToolError::CommandFailed(format!("http request failed: {e}")))?;
+        let resp = req.send().await.map_err(|e| {
+            ToolError::CommandFailed(format!("http request failed: {}", ErrorChain(&e)))
+        })?;
         let status = resp.status();
         let body = read_bounded_body(resp, HTTP_TOOL_MAX_RESPONSE_BYTES).await?;
 
@@ -440,8 +442,9 @@ async fn read_bounded_body(
     let mut stream = resp.bytes_stream();
     let mut buf: Vec<u8> = Vec::new();
     while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|e| ToolError::CommandFailed(format!("read response body: {e}")))?;
+        let chunk = chunk.map_err(|e| {
+            ToolError::CommandFailed(format!("read response body: {}", ErrorChain(&e)))
+        })?;
         if buf.len().saturating_add(chunk.len()) > limit {
             return Err(ToolError::SizeLimitExceeded {
                 actual: buf.len() + chunk.len(),

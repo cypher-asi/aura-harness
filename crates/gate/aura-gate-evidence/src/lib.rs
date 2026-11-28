@@ -15,8 +15,7 @@
 //! - [`Evidence`] and [`flags`]: what an attempt left behind, and the
 //!   signs of a failed attempt read out of it
 //! - [`verifiable`]: which kinds of work a check verifies
-//! - `test_support`: builders of a turn's messages, for tests (feature
-//!   `test-support`)
+//! - `test_support`: builders of a turn's messages, for tests
 
 mod category;
 pub mod checks;
@@ -24,7 +23,7 @@ pub mod coverage;
 mod evidence;
 pub mod outcome;
 pub mod own_check;
-#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
 pub mod test_support;
 pub mod transcript;
 

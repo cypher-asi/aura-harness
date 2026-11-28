@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 aura-core-types = { path = "../../core/aura-core-types" }
 aura-core-protocol = { path = "../../core/aura-core-protocol" }
@@ -31,9 +34,9 @@ async-trait = { workspace = true }
 dashmap = { workspace = true }
 parking_lot = { workspace = true }
 tokio-util = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["test-util"] }
 tempfile = { workspace = true }
 insta = { workspace = true }
 

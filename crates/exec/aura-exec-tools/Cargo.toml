@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 aura-core-types = { path = "../../core/aura-core-types" }
 aura-exec-traits = { path = "../aura-exec-traits" }
@@ -36,6 +39,7 @@ uuid = { workspace = true }
 # Timestamps on plans (`plan_tools::origin`)
 chrono = { workspace = true }
 portable-pty = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = { workspace = true }

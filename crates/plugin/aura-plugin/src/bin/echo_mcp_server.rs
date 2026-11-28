@@ -1,5 +1,5 @@
 //! Tiny stdio echo "MCP server" used exclusively by the
-//! `tests/mcp_echo.rs` integration test.
+//! `tests/it/mcp_echo.rs` integration test.
 //!
 //! Reads newline-delimited JSON-RPC requests on stdin, extracts the
 //! `id` field, and writes back `{"jsonrpc":"2.0","id":<id>,"result":<params>}`.

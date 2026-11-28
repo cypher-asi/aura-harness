@@ -7,12 +7,14 @@
 //! per-integration handler still calls them by name.
 
 use super::super::runtime_headers::{
-    apply_runtime_auth, apply_runtime_headers, runtime_url_with_auth,
+    apply_runtime_auth, apply_runtime_headers, replace_content_type, runtime_url_with_auth,
 };
 use super::super::TRUSTED_PROVIDER_REQUEST_TIMEOUT;
 use super::ToolResolver;
 use crate::error::ToolError;
-use aura_core_types::{InstalledToolRuntimeIntegration, InstalledToolRuntimeProviderExecution};
+use aura_core_types::{
+    ErrorChain, InstalledToolRuntimeIntegration, InstalledToolRuntimeProviderExecution,
+};
 use reqwest::Method;
 use serde_json::Value;
 
@@ -90,16 +92,22 @@ impl ToolResolver {
         request = apply_runtime_auth(request, integration);
         request = match body {
             ProviderRequestBody::None => request,
-            ProviderRequestBody::Json(value) => request.json(&value),
-            ProviderRequestBody::Form(fields) => request.form(&fields),
+            ProviderRequestBody::Json(value) => {
+                replace_content_type(request, "application/json").json(&value)
+            }
+            ProviderRequestBody::Form(fields) => {
+                replace_content_type(request, "application/x-www-form-urlencoded").form(&fields)
+            }
         };
-        let response = request
-            .send()
-            .await
-            .map_err(|e| ToolError::ExternalToolError(format!("provider request failed: {e}")))?;
+        let response = request.send().await.map_err(|e| {
+            ToolError::ExternalToolError(format!("provider request failed: {}", ErrorChain(&e)))
+        })?;
         let status = response.status();
         let text = response.text().await.map_err(|e| {
-            ToolError::ExternalToolError(format!("reading provider response failed: {e}"))
+            ToolError::ExternalToolError(format!(
+                "reading provider response failed: {}",
+                ErrorChain(&e)
+            ))
         })?;
         if !status.is_success() {
             return Err(ToolError::ExternalToolError(format!(

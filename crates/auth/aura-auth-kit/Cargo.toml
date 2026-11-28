@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 aura-core-auth = { path = "../../core/aura-core-auth" }
 aura-core-types = { path = "../../core/aura-core-types" }
@@ -21,6 +24,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 url = "2.5"
 uuid = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [dev-dependencies]
 tokio = { workspace = true }

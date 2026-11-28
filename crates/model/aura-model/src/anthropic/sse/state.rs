@@ -21,6 +21,7 @@
 use super::parse::{parse_sse_event, pop_event_block, MAX_SSE_BUFFER_SIZE};
 use crate::error::ReasonerError;
 use crate::StreamEvent;
+use aura_core_types::ErrorChain;
 use futures_util::Stream;
 use std::future::Future;
 use std::pin::Pin;
@@ -147,7 +148,8 @@ where
                 Poll::Ready(Some(Err(e))) => {
                     self.finished = true;
                     return Poll::Ready(Some(Err(ReasonerError::Request(format!(
-                        "Stream error: {e}"
+                        "Stream error: {}",
+                        ErrorChain(&e)
                     )))));
                 }
                 Poll::Ready(None) => {

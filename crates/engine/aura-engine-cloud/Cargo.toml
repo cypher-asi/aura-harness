@@ -7,6 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 aura-agent = { path = "../../agent/aura-agent" }
 aura-agent-kernel = { path = "../../agent/aura-agent-kernel" }
@@ -43,20 +46,18 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 # The hub drives each node's run stream and mesh socket.
 tokio-tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
-tonic = { version = "0.12", default-features = false, features = ["transport", "codegen", "prost", "tls", "tls-webpki-roots"] }
+# The client transport only (`channel`): aura serves no gRPC, so tonic's
+# server and its axum router stay out of the build.
+tonic = { version = "0.13", default-features = false, features = ["channel", "codegen", "prost", "tls-ring", "tls-webpki-roots"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
 which = { workspace = true }
 zeroize = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [build-dependencies]
 protox = "0.7"
-tonic-build = { version = "0.12", default-features = false, features = ["prost", "transport"] }
-
-[features]
-# Exposes `hub::test_support` so dependents' tests can drive a hub
-# against a node served in-process.
-test-support = []
+tonic-build = { version = "0.13", default-features = false, features = ["prost", "transport"] }
 
 [dev-dependencies]
 axum = { workspace = true }

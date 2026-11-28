@@ -1,8 +1,8 @@
 //! Stopping a migration at a chosen step, for tests.
 //!
-//! With `test-support` (or in this crate's tests) a fault armed for a
-//! database path fails the next migration of that path once, right
-//! after the step it names. Without them [`check`] compiles to nothing.
+//! A fault armed for a database path fails the next migration of that
+//! path once, right after the step it names. Only tests arm one; outside
+//! them [`check`] finds the list empty.
 
 use std::path::Path;
 
@@ -21,12 +21,10 @@ pub enum FailAt {
     AfterMarker,
 }
 
-#[cfg(any(test, feature = "test-support"))]
 static ARMED: std::sync::Mutex<Vec<(std::path::PathBuf, FailAt)>> =
     std::sync::Mutex::new(Vec::new());
 
 /// Fail the next migration of the database at `db_path` after `at`.
-#[cfg(any(test, feature = "test-support"))]
 pub fn arm(db_path: &Path, at: FailAt) {
     ARMED
         .lock()
@@ -35,7 +33,6 @@ pub fn arm(db_path: &Path, at: FailAt) {
 }
 
 /// The armed fault for `db_path` at `at`, disarmed as it fires.
-#[cfg(any(test, feature = "test-support"))]
 pub(super) fn check(db_path: &Path, at: FailAt) -> Result<(), SealMigrationError> {
     let mut armed = ARMED
         .lock()
@@ -50,11 +47,4 @@ pub(super) fn check(db_path: &Path, at: FailAt) -> Result<(), SealMigrationError
         }
         None => Ok(()),
     }
-}
-
-#[cfg(not(any(test, feature = "test-support")))]
-#[inline]
-#[allow(clippy::unnecessary_wraps)] // Mirrors the test build's signature.
-pub(super) const fn check(_db_path: &Path, _at: FailAt) -> Result<(), SealMigrationError> {
-    Ok(())
 }

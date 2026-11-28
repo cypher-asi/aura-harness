@@ -1,8 +1,8 @@
 //! Fault-injection helpers (Wave 7 / T2 — invariant_atomicity suite).
 //!
-//! These helpers are gated on `#[cfg(any(test, feature = "test-support"))]`
-//! so they are never compiled into non-test builds unless a caller
-//! explicitly opts into the `test-support` feature. They exist solely to
+//! Only tests call these. They are in every build, hidden from the docs,
+//! so the app and the tests of every crate share one build of this crate
+//! instead of a feature that rebuilds it. They exist solely to
 //! exercise Invariant §10 against `RocksStore::append_entry_atomic` —
 //! specifically to prove that a record-write and the paired inbox-delete
 //! either both commit or both roll back, under every simulated fault
@@ -75,6 +75,7 @@ pub(crate) fn write_batch_with_fault(
     }
 }
 
+#[doc(hidden)]
 impl RocksStore {
     /// Fault-injected variant of `append_entry_atomic`. See [`FaultAt`].
     ///

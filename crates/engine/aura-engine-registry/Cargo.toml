@@ -7,6 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 aura-core-types = { path = "../../core/aura-core-types" }
 aura-store-db = { path = "../../store/aura-store-db" }
@@ -21,10 +24,7 @@ serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
-
-[features]
-# Exposes `AgentRegistry::store` so dependents' tests can read the rows.
-test-support = []
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

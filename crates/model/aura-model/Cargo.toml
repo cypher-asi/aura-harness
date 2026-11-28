@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 aura-config = { path = "../../config/aura-config" }
 aura-core-auth = { path = "../../core/aura-core-auth" }
@@ -17,11 +20,12 @@ serde_json = { workspace = true }
 bytes = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
-reqwest = { version = "0.11", features = ["json", "stream"] }
+reqwest = { workspace = true, features = ["stream"] }
 async-trait = "0.1"
 futures-util = "0.3"
 colored = { workspace = true }
 terminal_size = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 # HTTP for direct API calls (more reliable than SDK wrappers)
 
