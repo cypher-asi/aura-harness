@@ -45,6 +45,8 @@ image = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# Heap profiling for the memory budget tests (tests/ui_memory.rs); test-only.
+dhat = "0.3"
 
 [lints]
 workspace = true
