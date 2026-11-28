@@ -92,6 +92,7 @@ mod allowlists;
 mod hooks;
 mod pipes;
 mod platform;
+mod pushes;
 mod results;
 mod running;
 mod shell_scripts;

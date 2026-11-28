@@ -4,7 +4,7 @@
 //! ## Invariants
 //!
 //! - The queue file is the queue. Every change is made to the file under
-//!   its lock ([`QueueStore::update`]) and only then announced, so
+//!   its lock ([`QueueStore::update_archiving`]) and only then announced, so
 //!   processes sharing a queue never overwrite each other and the
 //!   announcements never run ahead of the file.
 //! - Only a [`Processor`], which holds the repo's [`ProcessorLock`] for
@@ -46,7 +46,8 @@ pub struct Limits {
     pub entry_timeout: Duration,
     /// Longest an entry may wait after its branch's last push
     pub queued_ttl: chrono::Duration,
-    /// Finished entries kept for the Queue tab
+    /// Finished entries kept in the queue file; older ones move to the
+    /// history file, which keeps every one
     pub keep_finished: usize,
 }
 
@@ -56,7 +57,7 @@ impl Default for Limits {
             max_attempts: 3,
             entry_timeout: Duration::from_secs(3 * 60 * 60),
             queued_ttl: chrono::Duration::hours(24),
-            keep_finished: 1_000,
+            keep_finished: 100,
         }
     }
 }
@@ -166,6 +167,33 @@ impl MergeQueue {
         }
     }
 
+    /// The live entries and the newest `finished` finished ones, oldest
+    /// first, from the queue file and then its history; and how many
+    /// finished entries are older still. What this process saw last when
+    /// the files can't be read (logged).
+    pub async fn page(&self, finished: usize) -> QueuePage {
+        let store = self.inner.store.clone();
+        let read = blocking(move || {
+            let (state, _) = store.load()?;
+            let page = page_of(&state, finished, |skip, take| {
+                store.history().newest(state.history, skip, take)
+            })?;
+            Ok((state, page))
+        })
+        .await;
+        match read {
+            Ok((state, page)) => {
+                *self.inner.seen.lock().await = state;
+                page
+            }
+            Err(error) => {
+                tracing::warn!(%error, "Could not read the merge queue; showing the last one read");
+                let seen = self.inner.seen.lock().await.clone();
+                page_of(&seen, finished, |_, _| Ok(Vec::new())).unwrap_or_default()
+            }
+        }
+    }
+
     /// Queue `request` and wake the processor.
     ///
     /// # Errors
@@ -240,20 +268,25 @@ impl MergeQueue {
         }
     }
 
-    /// Apply `edit` to the queue file under its lock; remember the result.
+    /// Apply `edit` to the queue file under its lock, archiving finished
+    /// entries past [`Limits::keep_finished`]; remember the result.
     async fn change<T: Send + 'static>(
         &self,
         edit: impl FnOnce(&mut QueueState) -> T + Send + 'static,
     ) -> Result<T, QueueError> {
         let store = self.inner.store.clone();
-        let (state, result) = blocking(move || store.update(edit)).await?;
+        let keep = self.inner.limits.keep_finished;
+        let (state, result) = blocking(move || store.update_archiving(keep, edit)).await?;
         *self.inner.seen.lock().await = state;
         Ok(result)
     }
 
     fn announce(&self, event: QueueEvent) {
-        // No one listening is fine: the file has the change.
-        let _ = self.inner.events.send(event);
+        // `send` fails only with no one listening, which is fine: the
+        // file has the change, and a listener reads it when it comes.
+        if self.inner.events.send(event).is_err() {
+            tracing::trace!("No one listens to the merge queue's changes");
+        }
     }
 
     fn announce_finished(&self, entries: Vec<MergeEntry>) {
@@ -261,6 +294,52 @@ impl MergeQueue {
             self.announce(QueueEvent::Finished(Box::new(entry)));
         }
     }
+}
+
+/// A page of a queue: what [`MergeQueue::page`] returns.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct QueuePage {
+    /// The entries, oldest first
+    pub entries: Vec<MergeEntry>,
+    /// Finished entries older than these
+    pub older: u64,
+}
+
+/// The page of `state` with its newest `finished` finished entries,
+/// reading older ones with `history(skip, take)` (newest first).
+fn page_of(
+    state: &QueueState,
+    finished: usize,
+    history: impl FnOnce(u64, usize) -> Result<Vec<MergeEntry>, QueueError>,
+) -> Result<QueuePage, QueueError> {
+    let in_state = state.finished_count();
+    let mut drop = in_state.saturating_sub(finished);
+    let mut entries: Vec<MergeEntry> = state
+        .entries
+        .iter()
+        .filter(|entry| {
+            if drop > 0 && entry.status.is_finished() {
+                drop -= 1;
+                return false;
+            }
+            true
+        })
+        .cloned()
+        .collect();
+    let wanted = finished.saturating_sub(in_state);
+    let mut archived = if wanted > 0 {
+        history(0, wanted)?
+    } else {
+        Vec::new()
+    };
+    let shown = in_state.min(finished) as u64 + archived.len() as u64;
+    let older = (in_state as u64 + state.history.count).saturating_sub(shown);
+    archived.reverse();
+    archived.append(&mut entries);
+    Ok(QueuePage {
+        entries: archived,
+        older,
+    })
 }
 
 /// The one processor of a repo's queue, for as long as it lives.
@@ -303,14 +382,9 @@ impl Processor {
                 Ok(outcome) => outcome,
                 Err(_) => self.timed_out(&entry, limit).await,
             };
-        let keep = queue.inner.limits.keep_finished;
         let id = entry.id.clone();
         let finished = queue
-            .change(move |state| {
-                let finished = state.finish(&id, outcome, Utc::now());
-                state.prune(keep);
-                finished
-            })
+            .change(move |state| state.finish(&id, outcome, Utc::now()))
             .await?;
         if let Some(finished) = &finished {
             tracing::info!(entry = %finished.id, status = finished.status.label(), "Merge ended");

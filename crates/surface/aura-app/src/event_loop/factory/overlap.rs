@@ -18,7 +18,7 @@
 use crate::event_loop::notices::Notice;
 use crate::event_loop::subagents::{lock, AgentHub};
 use aura_core_types::AgentId;
-use aura_exec_merge_queue::config::GIT_TIMEOUT;
+use aura_exec_merge_queue::GIT_TIMEOUT;
 use aura_exec_merge_queue::overlap::{self, Overlap, Work};
 use aura_exec_merge_queue::{EntryId, MergeEntry, MergeQueue, RepoPaths};
 use chrono::Utc;

@@ -235,6 +235,10 @@ fn wants_color_flag(_program: &str, _args: &[String]) -> bool {
 /// Look like an interactive color terminal, but never page or prompt:
 /// nobody can type into this terminal.
 fn apply_terminal_env(builder: &mut CommandBuilder, cols: u16) {
+    // No push to a remote from a command: they go through the merge queue.
+    for (key, value) in super::push_guard::PUSH_BLOCK_ENV {
+        builder.env(key, value);
+    }
     builder.env("TERM", "xterm-256color");
     builder.env("COLUMNS", cols.to_string());
     builder.env("LINES", ROWS.to_string());

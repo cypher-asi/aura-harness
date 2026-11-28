@@ -41,13 +41,7 @@ fn zode_queue() -> crate::events::MergeQueueView {
         target: "main".to_string(),
         repo: "/src/zode".to_string(),
         entries: vec![
-            MergeEntryView {
-                overlaps: vec![
-                    "q2 fix/escapes (RE36): src/lexer.rs".to_string(),
-                    "worktree feat/tokens (RE37): src/lexer.rs, src/token.rs".to_string(),
-                ],
-                ..entry("q3", "feat/lexer", MergeStateView::Running)
-            },
+            entry("q3", "feat/lexer", MergeStateView::Running),
             MergeEntryView {
                 finished_at: Some(FINISHED_AT.to_string()),
                 attempts: 2,
@@ -60,6 +54,7 @@ fn zode_queue() -> crate::events::MergeQueueView {
                 ..entry("q1", "docs/readme", MergeStateView::Merged)
             },
         ],
+        older: 0,
     }
 }
 
@@ -162,11 +157,33 @@ fn test_queue_tab_without_merges_says_where_they_come_from() {
             target: "main".to_string(),
             repo: "/src/zode".to_string(),
             entries: Vec::new(),
+            older: 0,
         },
     });
     let rows = render_rows(&mut app, 140);
     let header = line_with(&rows, "Merges into main");
     assert!(line_with(&rows, "No merges yet.") > header);
+}
+
+#[test]
+fn test_an_empty_queue_names_its_own_target() {
+    use crate::events::{MergeQueueView, UiCommand};
+    let mut app = queue_app();
+    app.process_command(UiCommand::SetMergeQueue {
+        channel_id: "c1".to_string(),
+        queue: MergeQueueView {
+            target: "trunk".to_string(),
+            repo: "/src/zode".to_string(),
+            ..MergeQueueView::default()
+        },
+    });
+    let screen = render_rows(&mut app, 200).join("\n");
+    assert!(screen.contains("Merges into trunk"), "{screen}");
+    let queue = app.open_channel_queue().cloned();
+    let lines = super::super::channel_queue::queue_lines(queue.as_ref(), 400, &test_theme());
+    let text: String = lines.iter().map(ToString::to_string).collect();
+    assert!(text.contains("merges into `trunk` one at a time"), "{text}");
+    assert!(!text.contains("main"), "{text}");
 }
 
 #[test]
@@ -220,10 +237,95 @@ fn test_a_time_that_does_not_parse_is_cut_to_its_minutes() {
     assert_eq!(compact_time(QUEUED_AT), local(QUEUED_AT));
 }
 
+/// `#zode`'s queue with `older` merges not sent yet.
+fn paged_queue(older: u64) -> crate::events::MergeQueueView {
+    crate::events::MergeQueueView {
+        older,
+        ..zode_queue()
+    }
+}
+
+#[test]
+fn test_older_merges_are_counted_and_asked_for_once_at_the_end() {
+    use crate::events::{UiCommand, UiEvent};
+    let mut app = queue_app();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    app.link.event_tx = Some(tx);
+    app.process_command(UiCommand::SetMergeQueue {
+        channel_id: "c1".to_string(),
+        queue: paged_queue(150),
+    });
+    // Tall enough that the whole tab, its end too, is on screen.
+    let screen = render_rows_sized(&mut app, 140, 60).join("\n");
+    assert!(screen.contains("150 older merges"), "{screen}");
+    render_rows_sized(&mut app, 140, 60);
+    let asked: Vec<UiEvent> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    assert_eq!(asked.len(), 1, "once per page shown: {asked:?}");
+    assert!(
+        matches!(&asked[0], UiEvent::LoadOlderMerges { channel_id } if channel_id == "c1"),
+        "{asked:?}"
+    );
+
+    // The next page came: one more ask once its end shows.
+    let mut more = paged_queue(50);
+    more.entries.extend(zode_queue().entries);
+    app.process_command(UiCommand::SetMergeQueue {
+        channel_id: "c1".to_string(),
+        queue: more,
+    });
+    render_rows_sized(&mut app, 140, 80);
+    assert_eq!(std::iter::from_fn(|| rx.try_recv().ok()).count(), 1);
+}
+
+#[test]
+fn test_a_whole_history_asks_for_nothing() {
+    use crate::events::UiCommand;
+    let mut app = queue_app();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    app.link.event_tx = Some(tx);
+    app.process_command(UiCommand::SetMergeQueue {
+        channel_id: "c1".to_string(),
+        queue: paged_queue(0),
+    });
+    let screen = render_rows_sized(&mut app, 140, 60).join("\n");
+    assert!(!screen.contains("older merge"), "{screen}");
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn test_older_merges_wait_until_the_tab_is_scrolled_to_its_end() {
+    use crate::events::UiCommand;
+    let mut app = queue_app();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    app.link.event_tx = Some(tx);
+    let mut long = paged_queue(10);
+    for _ in 0..6 {
+        long.entries.extend(zode_queue().entries);
+    }
+    app.process_command(UiCommand::SetMergeQueue {
+        channel_id: "c1".to_string(),
+        queue: long,
+    });
+    render_rows_sized(&mut app, 140, 30);
+    assert!(rx.try_recv().is_err(), "the end is not on screen yet");
+}
+
 #[test]
 fn test_queue_tab_lists_an_entrys_overlaps_under_it() {
+    use crate::events::{MergeEntryView, UiCommand};
     let mut app = queue_app();
-    send_zode_queue(&mut app);
+    let mut queue = zode_queue();
+    queue.entries[0] = MergeEntryView {
+        overlaps: vec![
+            "q2 fix/escapes (RE36): src/lexer.rs".to_string(),
+            "worktree feat/tokens (RE37): src/lexer.rs, src/token.rs".to_string(),
+        ],
+        ..queue.entries[0].clone()
+    };
+    app.process_command(UiCommand::SetMergeQueue {
+        channel_id: "c1".to_string(),
+        queue,
+    });
     let rows = render_rows_sized(&mut app, 140, TALL);
     let running = line_with(&rows, "RUNNING");
     let failed = line_with(&rows, "FAILED");

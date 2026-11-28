@@ -49,6 +49,7 @@ fn entry(branch: &str, head: &str, remote: Option<&str>) -> MergeEntry {
         pushed_at: None,
         started_at: None,
         finished_at: None,
+        updated_at: None,
         attempts: 0,
         detail: None,
         merged: None,

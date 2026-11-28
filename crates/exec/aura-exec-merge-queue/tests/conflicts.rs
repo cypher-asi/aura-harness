@@ -4,10 +4,9 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use aura_exec_merge_queue::processor::Processor;
 use aura_exec_merge_queue::{
-    GitIntegrator, Limits, MergeEntry, MergeQueue, MergeRequest, MergeStatus, Origin, QueueConfig,
-    QueuedPush, RepoPaths,
+    GitIntegrator, Limits, MergeEntry, MergeQueue, MergeRequest, MergeStatus, Origin, Processor,
+    QueueConfig, QueuedPush, RepoPaths,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;

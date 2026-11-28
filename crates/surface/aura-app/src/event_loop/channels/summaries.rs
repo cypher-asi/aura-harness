@@ -8,9 +8,11 @@
 //!
 //! A post longer than [`aura_ui::events::POST_SUMMARY_MIN_CHARS`] gets one summary, written
 //! once by a cheap model (Claude Haiku when the user has a route to it)
-//! through the coordinator's kernel, like a chat title, and kept in a
-//! file so it is never asked for again, across restarts too
-//! ([`SUMMARY_FILE`] in the app's data directory).
+//! through the coordinator's kernel, like a chat title, and kept in the
+//! channel store (`h/{key}` rows, sealed like the posts) so it is never
+//! asked for again, across restarts too. Earlier versions kept them in a
+//! plaintext [`SUMMARY_FILE`] in the app's data directory; it is moved
+//! into the store on first use and deleted.
 //!
 //! ## Invariants
 //!
@@ -18,32 +20,34 @@
 //!   never again once its summary is kept. Summaries are keyed by the
 //!   blake3 hash of the text, so the same message in any channel shares
 //!   one.
-//! - Nothing here blocks the event loop: the file is read and written on a
-//!   blocking thread, and each model call runs on a task of its own with
-//!   the title call's timeout.
+//! - Nothing here blocks the event loop: the store and the old file are
+//!   read and written on a blocking thread, and each model call runs on a
+//!   task of its own with the title call's timeout.
 //! - A failed or timed-out call sends nothing: the UI keeps showing the
 //!   message cut at a word.
-//! - The file is replaced atomically and holds at most
-//!   [`MAX_SUMMARIES`], the oldest dropped first. An unreadable file
-//!   counts as empty and is overwritten by the next summary.
+//! - A summary is never written in plaintext: without a channel store
+//!   they are kept in memory only, and the old file is left as it was.
+//! - The old file is moved in one batch and deleted only once the batch
+//!   is committed; a failed move leaves it for the next run. An
+//!   unreadable one is deleted, as it holds nothing to keep.
 
 use crate::event_loop::titles;
 use aura_agent::AgentLoopConfig;
 use aura_core_types::AgentId;
 use aura_model::ModelProvider;
+use aura_store_db::ChannelStore;
 use aura_ui::events::{is_typed_prompt, prompt_key, wants_summary, MessageData, MessageRole};
 use aura_ui::UiCommand;
-use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use serde::Deserialize;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
-use tokio::sync::mpsc;
-use tracing::warn;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use tokio::sync::{mpsc, OnceCell};
+use tracing::{info, warn};
 
-/// The file the summaries are kept in, in the app's data directory.
+/// The plaintext file earlier versions kept the summaries in, in the
+/// app's data directory; moved into the channel store and deleted.
 pub(crate) const SUMMARY_FILE: &str = "channel-post-summaries.json";
-/// Most summaries kept; the oldest go first.
-pub(crate) const MAX_SUMMARIES: usize = 2_000;
 /// The model family a summary is asked of when the user can reach it.
 const SUMMARY_MODEL_HINT: &str = "haiku";
 
@@ -116,23 +120,29 @@ pub(crate) fn prompts_of(history: &[MessageData]) -> Vec<(u64, String)> {
 /// The kept summaries and the texts being summarized.
 #[derive(Debug)]
 pub(crate) struct PostSummaries {
-    /// The file they are kept in; `None` keeps them in memory only
-    path: Option<PathBuf>,
-    /// Kept summaries, oldest first; `None` until the file was read
-    kept: Mutex<Option<Vec<Entry>>>,
+    /// Where they are kept, sealed like the posts; `None` keeps them in
+    /// memory only
+    store: Option<ChannelStore>,
+    /// The plaintext [`SUMMARY_FILE`] an earlier version kept them in,
+    /// moved into `store` and deleted on first use
+    legacy: Option<PathBuf>,
+    /// Summaries read or written this run, by key
+    kept: Mutex<HashMap<String, String>>,
+    /// Set once the legacy file was dealt with
+    migrated: OnceCell<()>,
     /// Keys of texts being summarized now
     in_flight: Mutex<HashSet<String>>,
 }
 
-/// One kept summary.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One summary of the legacy file.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct Entry {
     key: String,
     summary: String,
 }
 
-/// The file's contents.
-#[derive(Debug, Default, Serialize, Deserialize)]
+/// The legacy file's contents.
+#[derive(Debug, Default, Deserialize)]
 struct SummaryFile {
     #[serde(default)]
     entries: Vec<Entry>,
@@ -154,113 +164,151 @@ pub(crate) fn summary_model(candidates: &[String], fallback: String) -> String {
 }
 
 impl PostSummaries {
-    /// Summaries kept in `dir`'s [`SUMMARY_FILE`]; `None` keeps them in
-    /// memory only.
-    pub(crate) fn new(dir: Option<&Path>) -> Self {
+    /// Summaries kept in `store`, sealed whenever its posts are; `None`
+    /// keeps them in memory only. A [`SUMMARY_FILE`] left in
+    /// `legacy_dir` by an earlier version is moved into `store` on first
+    /// use, then deleted.
+    pub(crate) fn new(store: Option<ChannelStore>, legacy_dir: Option<&Path>) -> Self {
         Self {
-            path: dir.map(|dir| dir.join(SUMMARY_FILE)),
-            kept: Mutex::new(None),
+            store,
+            legacy: legacy_dir.map(|dir| dir.join(SUMMARY_FILE)),
+            kept: Mutex::new(HashMap::new()),
+            migrated: OnceCell::new(),
             in_flight: Mutex::new(HashSet::new()),
         }
     }
 
-    /// The kept summary of the text keyed `key`, reading the file first
-    /// when it wasn't yet.
+    /// The kept summary of the text keyed `key`.
     pub(crate) async fn get(&self, key: &str) -> Option<String> {
-        self.load().await;
-        let kept = self.kept.lock().unwrap_or_else(PoisonError::into_inner);
-        kept.as_ref()?
-            .iter()
-            .rev()
-            .find(|entry| entry.key == key)
-            .map(|entry| entry.summary.clone())
+        self.migrate().await;
+        if let Some(summary) = lock(&self.kept).get(key) {
+            return Some(summary.clone());
+        }
+        let store = self.store.clone()?;
+        let wanted = key.to_string();
+        let found = tokio::task::spawn_blocking(move || store.post_summary(&wanted)).await;
+        let summary = match found {
+            Ok(Ok(summary)) => summary?,
+            Ok(Err(error)) => {
+                warn!(%error, "Could not read a channel post summary");
+                return None;
+            }
+            Err(error) => {
+                warn!(%error, "Reading a channel post summary stopped");
+                return None;
+            }
+        };
+        lock(&self.kept).insert(key.to_string(), summary.clone());
+        Some(summary)
     }
 
-    /// Keep `summary` of the text keyed `key`, and save the file.
+    /// Keep `summary` of the text keyed `key`.
     pub(crate) async fn put(&self, key: String, summary: String) {
-        self.load().await;
-        let entries = {
-            let mut kept = self.kept.lock().unwrap_or_else(PoisonError::into_inner);
-            let entries = kept.get_or_insert_with(Vec::new);
-            entries.retain(|entry| entry.key != key);
-            entries.push(Entry { key, summary });
-            let over = entries.len().saturating_sub(MAX_SUMMARIES);
-            entries.drain(..over);
-            entries.clone()
-        };
-        let Some(path) = self.path.clone() else {
+        self.migrate().await;
+        lock(&self.kept).insert(key.clone(), summary.clone());
+        let Some(store) = self.store.clone() else {
             return;
         };
-        let saved = tokio::task::spawn_blocking(move || save(&path, entries)).await;
+        let saved =
+            tokio::task::spawn_blocking(move || store.set_post_summaries(&[(key, summary)])).await;
         match saved {
             Ok(Ok(())) => {}
-            Ok(Err(error)) => warn!(%error, "Could not save the channel post summaries"),
-            Err(error) => warn!(%error, "Saving the channel post summaries stopped"),
+            Ok(Err(error)) => warn!(%error, "Could not keep a channel post summary"),
+            Err(error) => warn!(%error, "Keeping a channel post summary stopped"),
         }
     }
 
     /// Mark the text keyed `key` as being summarized; `false` when it
     /// already is.
     fn start(&self, key: &str) -> bool {
-        self.in_flight
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(key.to_string())
+        lock(&self.in_flight).insert(key.to_string())
     }
 
     fn done(&self, key: &str) {
-        self.in_flight
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(key);
+        lock(&self.in_flight).remove(key);
     }
 
-    /// Read the file once.
-    async fn load(&self) {
-        let loaded = self
-            .kept
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .is_some();
-        if loaded {
+    /// Move the legacy file into the store, once.
+    async fn migrate(&self) {
+        self.migrated
+            .get_or_init(|| async {
+                let (Some(store), Some(path)) = (self.store.clone(), self.legacy.clone()) else {
+                    return;
+                };
+                let moved = tokio::task::spawn_blocking(move || migrate_file(&store, &path)).await;
+                if let Err(error) = moved {
+                    warn!(%error, "Moving the channel post summaries stopped");
+                }
+            })
+            .await;
+    }
+}
+
+/// Lock `mutex`, recovering from poisoning: the sets and maps it guards
+/// are caches, whole after every insert or remove.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Move the summaries of the plaintext file at `path` into `store` in one
+/// batch, then delete the file and any half-written copy of it. A file
+/// that can't be read as summaries is deleted: it holds nothing to keep.
+/// When the batch fails, the file stays for the next run to try again.
+fn migrate_file(store: &ChannelStore, path: &Path) {
+    remove(&path.with_extension("json.tmp"));
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            warn!(path = %path.display(), %error, "Could not read the old channel post summaries");
             return;
         }
-        let entries = match self.path.clone() {
-            Some(path) => tokio::task::spawn_blocking(move || read(&path))
-                .await
-                .unwrap_or_default(),
-            None => Vec::new(),
-        };
-        let mut kept = self.kept.lock().unwrap_or_else(PoisonError::into_inner);
-        if kept.is_none() {
-            *kept = Some(entries);
-        }
-    }
-}
-
-/// The summaries in `path`; none when it is missing or unreadable.
-fn read(path: &Path) -> Vec<Entry> {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
     };
-    match serde_json::from_str::<SummaryFile>(&text) {
+    let entries = match serde_json::from_str::<SummaryFile>(&text) {
         Ok(file) => file.entries,
         Err(error) => {
-            warn!(path = %path.display(), %error, "The channel post summaries were unreadable; starting anew");
-            Vec::new()
+            warn!(path = %path.display(), %error, "The old channel post summaries were unreadable; deleting them");
+            remove(path);
+            return;
+        }
+    };
+    // Keys this version would never look up can't be kept.
+    let pairs: Vec<(String, String)> = entries
+        .into_iter()
+        .filter(|entry| is_key(&entry.key))
+        .map(|entry| (entry.key, entry.summary))
+        .collect();
+    match store.set_post_summaries(&pairs) {
+        Ok(()) => {
+            info!(
+                moved = pairs.len(),
+                "Moved the channel post summaries into the channel store"
+            );
+            remove(path);
+        }
+        Err(error) => {
+            warn!(%error, "Could not move the old channel post summaries; trying again next run");
         }
     }
 }
 
-/// Replace `path` with `entries`, atomically.
-fn save(path: &Path, entries: Vec<Entry>) -> std::io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
+/// Whether `key` is one [`key_of`] makes: 64 lowercase hex digits.
+fn is_key(key: &str) -> bool {
+    key.len() == 64
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// Delete the file at `path`, if there is one; a failure is logged.
+fn remove(path: &Path) {
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            warn!(path = %path.display(), %error, "Could not delete the old channel post summaries");
+        }
     }
-    let json = serde_json::to_vec(&SummaryFile { entries }).map_err(std::io::Error::other)?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json)?;
-    std::fs::rename(&tmp, path)
 }
 
 /// Send channel `channel_id`'s HISTORY tab the summaries of the user's

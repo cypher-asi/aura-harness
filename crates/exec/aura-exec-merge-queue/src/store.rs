@@ -6,13 +6,18 @@
 //!   in the same directory, synced, then renamed over the old one. A
 //!   crash leaves the old queue or the new one, never half of either.
 //! - Every change is a read, modify, write under [`STATE_LOCK_FILE`]'s
-//!   lock ([`QueueStore::update`]), so processes sharing a queue never
+//!   lock ([`QueueStore::update_archiving`]), so processes sharing a queue never
 //!   overwrite each other's changes.
 //! - While a processor holds [`ProcessorLock`], no other processor of the
 //!   same repo runs, in this process or another. The lock is the
 //!   operating system's ([`FileLock`]): it lasts as long as its holder
 //!   and goes with it, so nothing refreshes it and no one takes it over
 //!   from a live holder, however long a merge runs.
+//! - Finished entries past the newest few move to the history file
+//!   under the same lock ([`QueueStore::update_archiving`]): appended and
+//!   synced first, then the queue file saved without them and with the
+//!   history's new mark. A crash between the two leaves them in the queue
+//!   file and the history's tail uncommitted (see `history`).
 //! - A queue file that cannot be read as a queue is moved aside (never
 //!   deleted) and the queue starts empty, so one bad write can't stop the
 //!   repo's merges for good.
@@ -21,6 +26,7 @@
 //! blocking thread.
 
 use crate::error::QueueError;
+use crate::history::History;
 use crate::lock::FileLock;
 use crate::state::QueueState;
 use std::fs;
@@ -48,12 +54,6 @@ impl QueueStore {
     #[must_use]
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self { dir: dir.into() }
-    }
-
-    /// The directory the queue lives in.
-    #[must_use]
-    pub fn dir(&self) -> &Path {
-        &self.dir
     }
 
     fn path(&self) -> PathBuf {
@@ -104,15 +104,35 @@ impl QueueStore {
         fs::rename(&tmp, &path).map_err(|e| QueueError::io(&path, e))
     }
 
-    /// Apply `edit` to the stored queue and save it when it changed, all
-    /// under the state lock. Returns the queue after the edit and what
-    /// `edit` returned.
+    /// [`Self::update_archiving`] without archiving anything.
+    #[cfg(test)]
+    pub(crate) fn update<T>(
+        &self,
+        edit: impl FnOnce(&mut QueueState) -> T,
+    ) -> Result<(QueueState, T), QueueError> {
+        self.update_archiving(usize::MAX, edit)
+    }
+}
+
+impl QueueStore {
+    /// The queue's history file.
+    pub(crate) fn history(&self) -> History {
+        History::new(&self.dir)
+    }
+
+    /// Apply `edit` to the stored queue, move the finished entries past
+    /// the newest `keep` to the history file, and save the queue when it
+    /// changed, all under the state lock. Returns the queue after the edit
+    /// and what `edit` returned. When the history can't be written the
+    /// entries stay in the queue file (logged), so nothing is ever lost;
+    /// the next change tries again.
     ///
     /// # Errors
-    /// The lock can't be taken in [`STATE_LOCK_WAIT`], or the file can't
-    /// be read or written; nothing is changed then.
-    pub fn update<T>(
+    /// The lock can't be taken in [`STATE_LOCK_WAIT`], or the queue file
+    /// can't be read or written; nothing is changed then.
+    pub fn update_archiving<T>(
         &self,
+        keep: usize,
         edit: impl FnOnce(&mut QueueState) -> T,
     ) -> Result<(QueueState, T), QueueError> {
         let _lock = FileLock::exclusive(&self.dir.join(STATE_LOCK_FILE), STATE_LOCK_WAIT)?;
@@ -122,6 +142,19 @@ impl QueueStore {
         }
         let mut after = before.clone();
         let result = edit(&mut after);
+        let mut archived = after.clone();
+        let taken = archived.take_archivable(keep);
+        if !taken.is_empty() {
+            match self.history().append(archived.history, &taken) {
+                Ok(mark) => {
+                    archived.history = mark;
+                    after = archived;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, kept = taken.len(), "Could not write the merge history; the entries stay in the queue file");
+                }
+            }
+        }
         if after != before {
             self.save(&after)?;
         }
@@ -182,7 +215,7 @@ mod tests {
         let state = one_entry();
         store.save(&state).unwrap();
         assert_eq!(store.load().unwrap().0, state);
-        assert!(!store.dir().join(format!("{QUEUE_FILE}.tmp")).exists());
+        assert!(!store.dir.join(format!("{QUEUE_FILE}.tmp")).exists());
     }
 
     #[test]
@@ -234,5 +267,56 @@ mod tests {
         assert!(ProcessorLock::acquire(dir.path()).unwrap().is_none());
         drop(first);
         assert!(ProcessorLock::acquire(dir.path()).unwrap().is_some());
+    }
+
+    /// A queue of `n` merged entries and one waiting.
+    fn finished(n: u64) -> impl FnOnce(&mut QueueState) {
+        move |state: &mut QueueState| {
+            let now = chrono::Utc::now();
+            for seq in 0..n {
+                let id = state
+                    .enqueue(
+                        MergeRequest {
+                            push: QueuedPush {
+                                branch: format!("aura/b{seq}"),
+                                head: "h".into(),
+                                remote: None,
+                            },
+                            origin: Origin::default(),
+                        },
+                        now,
+                    )
+                    .id()
+                    .clone();
+                state.claim_next(now);
+                state.finish(&id, crate::state::RunOutcome::Failed("x".into()), now);
+            }
+        }
+    }
+
+    #[test]
+    fn finished_entries_past_the_newest_move_to_the_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = QueueStore::new(dir.path());
+        let (state, ()) = store.update_archiving(3, finished(10)).unwrap();
+        assert_eq!(state.entries.len(), 3);
+        assert_eq!(state.history.count, 7);
+        assert_eq!(store.load().unwrap().0, state, "saved with its mark");
+        let old = store.history().newest(state.history, 0, 100).unwrap();
+        let branches: Vec<&str> = old.iter().map(|e| e.branch.as_str()).collect();
+        assert_eq!(
+            branches,
+            ["aura/b6", "aura/b5", "aura/b4", "aura/b3", "aura/b2", "aura/b1", "aura/b0"]
+        );
+    }
+
+    #[test]
+    fn a_history_that_cannot_be_written_keeps_the_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join(crate::history::HISTORY_FILE)).unwrap();
+        let store = QueueStore::new(dir.path());
+        let (state, ()) = store.update_archiving(3, finished(10)).unwrap();
+        assert_eq!(state.entries.len(), 10, "nothing lost");
+        assert_eq!(state.history.count, 0);
     }
 }

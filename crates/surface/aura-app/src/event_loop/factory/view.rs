@@ -4,9 +4,15 @@ use aura_exec_merge_queue::{short_sha, MergeEntry, MergeStatus};
 use aura_ui::events::{MergeEntryView, MergeQueueView, MergeStateView};
 
 /// The view of `entries` (oldest first) of the queue of the repo at
-/// `repo`, merging into `target`: newest first, each open entry with the
-/// work it overlaps ([`super::overlap::entry_overlaps`]).
-pub(crate) fn queue_view(target: &str, repo: &str, entries: &[MergeEntry]) -> MergeQueueView {
+/// `repo`, merging into `target`, with `older` finished merges not in
+/// them: newest first, each open entry with the work it overlaps
+/// ([`super::overlap::entry_overlaps`]).
+pub(crate) fn queue_view(
+    target: &str,
+    repo: &str,
+    entries: &[MergeEntry],
+    older: u64,
+) -> MergeQueueView {
     let mut overlaps = super::overlap::entry_overlaps(entries, repo);
     let entries = entries
         .iter()
@@ -21,6 +27,7 @@ pub(crate) fn queue_view(target: &str, repo: &str, entries: &[MergeEntry]) -> Me
         target: target.to_string(),
         repo: repo.to_string(),
         entries,
+        older,
     }
 }
 
@@ -76,7 +83,8 @@ mod tests {
                 chrono::Utc::now(),
             );
         }
-        let view = queue_view("main", "/repo", &state.entries);
+        let view = queue_view("main", "/repo", &state.entries, 7);
+        assert_eq!(view.older, 7);
         assert_eq!(view.target, "main");
         assert_eq!(view.entries[0].branch, "aura/new");
         assert_eq!(view.entries[1].branch, "aura/old");
@@ -109,7 +117,7 @@ mod tests {
                 .clone();
             state.record_files(&id, &head, vec!["src/shared.rs".to_string()]);
         }
-        let view = queue_view("main", "/repo", &state.entries);
+        let view = queue_view("main", "/repo", &state.entries, 0);
         assert_eq!(view.entries[0].overlaps, ["q1 aura/a (RUS1): src/shared.rs"]);
         assert_eq!(view.entries[1].overlaps, ["q2 aura/b (RUS2): src/shared.rs"]);
     }
