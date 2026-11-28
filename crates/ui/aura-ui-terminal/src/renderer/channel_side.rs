@@ -211,7 +211,8 @@ fn member_rows<'a>(
 /// show; else the `@` of a member, or nothing for a subagent, whose
 /// guides run on through it.
 fn member_icon(app: &App, (member, index): (&AgentSummary, usize), theme: &Theme) -> StatusIcon {
-    if app.agent_thinking(member) || app.channel_member_hides_working(index) {
+    let starting = member.starting && member.error.is_none();
+    if app.agent_thinking(member) || app.channel_member_hides_working(index) || starting {
         working_icon(app, theme)
     } else if member.error.is_some() {
         StatusIcon::new(FAILED_ICON, crate::renderer::failure_color(theme))

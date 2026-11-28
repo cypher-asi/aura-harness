@@ -158,7 +158,14 @@ impl App {
 
     /// Whether a spinner turns for an agent, task or process at work.
     pub(super) fn spinners_turning(&self) -> bool {
-        self.agents.iter().any(|agent| agent.running)
+        // A cloud start's row shows its step's time and a spinner, which
+        // must move while it starts.
+        self.agents
+            .iter()
+            .any(|agent| agent.running || agent.starting)
+            || self
+                .open_channel()
+                .is_some_and(|channel| channel.members.iter().any(|member| member.starting))
             || self
                 .task_list
                 .tasks()
