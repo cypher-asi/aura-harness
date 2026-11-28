@@ -81,8 +81,8 @@ pub(super) struct RunWatch<'a> {
 
 impl CloudHub {
     /// Follow `agent`'s turn `mark`, asked for by an earlier hub, to its
-    /// end, as [`Self::run_turn`] streams one it asks for: wake or claim
-    /// the machine, attach to the turn's run and send how the turn ends,
+    /// end, as [`Self::run_turn`] streams one it asks for: reconnect to
+    /// the machine ([`Self::reconnect_for_turn`]), attach to the turn's run and send how the turn ends,
     /// with [`RemoteEvent::Copied`] each time entries of it came in. A
     /// run that is gone ended while no hub watched; the record says
     /// whether it replied. The record, session and runs are copied when
@@ -98,10 +98,8 @@ impl CloudHub {
         let hub = Arc::clone(self);
         tokio::spawn(async move {
             let hex = agent.to_hex();
-            let _ = tx
-                .send(RemoteEvent::Status("Reaching the cloud machine".into()))
-                .await;
-            let node = match hub.wake_for_turn(&hex, &tx).await {
+            // Its machine runs the turn: reconnect, never wake or update.
+            let node = match hub.reconnect_for_turn(&hex, &tx).await {
                 Ok(node) => node,
                 Err(err) => {
                     // The run may well go on there: its mark stays for
