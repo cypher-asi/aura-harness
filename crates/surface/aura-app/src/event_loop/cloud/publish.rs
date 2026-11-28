@@ -17,7 +17,7 @@ pub(in crate::event_loop) async fn start(state: &mut LoopState<'_>) {
     if state.cloud.publisher.is_none() {
         start_publisher(state);
     }
-    let configured = aura_config::cloud().is_configured();
+    let configured = crate::integrations::cloud::cloud_configured();
     if configured {
         if let Err(err) = ensure_hub(state, &BootReporter::none()).await {
             warn!(error = %err, "cloud agents unavailable");

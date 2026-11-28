@@ -57,7 +57,7 @@ pub(super) fn placement_state(
         asleep: placement == PlacementView::Cloud
             && machine.as_ref().is_some_and(|view| !view.state.is_awake()),
         machine_state: machine.map(|view| view.state.label().to_string()),
-        cloud_ready: cloud.is_some() || aura_config::cloud().is_configured(),
+        cloud_ready: cloud.is_some() || crate::integrations::cloud::cloud_configured(),
         owner: foreign_label(cloud, agent, current),
     }
 }
@@ -77,7 +77,7 @@ fn saved_state(
         moving: moving.then(|| placement.moving_label().to_string()),
         asleep: false,
         machine_state: None,
-        cloud_ready: aura_config::cloud().is_configured(),
+        cloud_ready: crate::integrations::cloud::cloud_configured(),
         owner: (saved.owner != *current)
             .then(|| owner_text(Some(&saved.owner), saved.owner_name.clone())),
     }
@@ -185,7 +185,7 @@ async fn local_agent_view(
     .await
     .ok()?;
     *sampler = Some(back);
-    let ready = cloud.is_some() || aura_config::cloud().is_configured();
+    let ready = cloud.is_some() || crate::integrations::cloud::cloud_configured();
     let key_file = aura_config::env_file::report()
         .and_then(|r| r.loaded_files().last().map(|p| p.display().to_string()));
     Some(host_info::local_view(

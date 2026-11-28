@@ -94,6 +94,8 @@ mod accounting;
 mod lists;
 mod running;
 mod setup;
+mod skills;
+pub use skills::DefinitionSkills;
 mod spawn;
 mod status;
 pub(crate) use status::LiveState;

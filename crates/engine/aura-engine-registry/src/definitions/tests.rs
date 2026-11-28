@@ -223,3 +223,90 @@ fn system_prompt_includes_rules() {
     assert!(prompt.contains("Your role: Does A."));
     assert!(prompt.contains("Rule one."));
 }
+
+/// Characters per token, as the context breakdown estimates them
+/// (`aura_config::CHARS_PER_TOKEN`).
+const CHARS_PER_TOKEN: usize = 4;
+
+/// A SKILL.md body of about `chars` characters: numbered steps, as a
+/// real skill's instructions run.
+fn skill_body(topic: &str, chars: usize) -> String {
+    let mut body = format!("# {topic}\n\nFollow these steps in order.\n\n");
+    let mut step = 1;
+    while body.len() < chars {
+        body.push_str(&format!(
+            "{step}. For the {topic} work, check the inputs, run the matching command, read \
+             its whole output, and write down what changed before moving on.\n"
+        ));
+        step += 1;
+    }
+    body
+}
+
+/// A manager with three skills of about 2,000, 3,500 and 6,000
+/// characters, and a definition listing them.
+fn three_skills(dir: &Path) -> (AgentDefinition, SkillManager) {
+    let mut skills = SkillManager::new(aura_context_skills::SkillLoader::new(
+        aura_context_skills::loader::SkillLoaderConfig {
+            personal_dir: Some(dir.to_path_buf()),
+            ..aura_context_skills::loader::SkillLoaderConfig::default()
+        },
+    ));
+    for (name, chars) in [("deploy", 2_000), ("review", 3_500), ("migrate", 6_000)] {
+        let description = format!("Use when asked to {name}.");
+        skills
+            .create(name, &description, &skill_body(name, chars), true)
+            .unwrap();
+    }
+    let def = AgentDefinition::parse(
+        "---\nname: builder\ndescription: Builds.\nskills: [deploy, review, migrate]\n---\nBe careful.\n",
+        Path::new("builder.md"),
+    )
+    .unwrap();
+    (def, skills)
+}
+
+#[test]
+fn an_index_of_three_skills_costs_a_tenth_of_their_bodies_and_loads_each_in_full() {
+    let dir = tempfile::tempdir().unwrap();
+    let (def, skills) = three_skills(dir.path());
+    let mut full = String::from("base");
+    def.extend_system_prompt_with(&mut full, &skills, SkillsIn::Full);
+    let mut index = String::from("base");
+    def.extend_system_prompt_with(&mut index, &skills, SkillsIn::Index);
+    let (full_tokens, index_tokens) = (full.len() / CHARS_PER_TOKEN, index.len() / CHARS_PER_TOKEN);
+    println!(
+        "system prompt with 3 skills: {full_tokens} tokens in full, {index_tokens} as an index"
+    );
+    assert!(
+        index_tokens * 10 < full_tokens,
+        "the index ({index_tokens}) costs under a tenth of the bodies ({full_tokens})"
+    );
+    assert!(!index.contains("check the inputs"), "no body in the index");
+    assert!(def.has_skills(&skills));
+    for name in ["deploy", "review", "migrate"] {
+        assert!(index.contains(&format!("name=\"{name}\"")));
+        let loaded = def.load_skill(&skills, name).unwrap();
+        assert!(loaded.contains(&skill_body(name, 0)[..10]), "{name}");
+        assert!(loaded.len() > 1_900, "{name} in full");
+    }
+}
+
+#[test]
+fn a_definition_loads_only_its_own_skills() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, mut skills) = three_skills(dir.path());
+    skills
+        .create("other", "Not listed.", "Secret.", true)
+        .unwrap();
+    let def = AgentDefinition::parse(
+        "---\nname: a\ndescription: A.\nskills: [deploy]\n---\n",
+        Path::new("a.md"),
+    )
+    .unwrap();
+    let error = def.load_skill(&skills, "other").unwrap_err();
+    assert!(error.contains("your skills: deploy"), "{error}");
+    let none =
+        AgentDefinition::parse("---\nname: b\ndescription: B.\n---\n", Path::new("b.md")).unwrap();
+    assert!(!none.has_skills(&skills));
+}

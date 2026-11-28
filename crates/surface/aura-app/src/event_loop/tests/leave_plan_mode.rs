@@ -179,3 +179,101 @@ fn editing_committing_and_pushing_implement_reading_does_not() {
         assert!(!implements(tool), "{tool}");
     }
 }
+
+/// Handle every turn of `member` until it has nothing left to do.
+async fn run_out(state: &mut LoopState<'_>, done: &mut mpsc::Receiver<WorkDone>, member: AgentId) {
+    while state.hub.is_running(member) {
+        let finished = next_done(done).await;
+        handle_work_done(state, finished).await;
+    }
+}
+
+#[tokio::test]
+async fn a_new_task_after_implementing_plans_again_with_its_badge() {
+    let (fixture, mut commands) = fixture();
+    let member = fixture.second;
+    channel_with_member(&fixture).await;
+    // A repo it can ship to, so its task runs to the end.
+    let origin = tempfile::tempdir().unwrap();
+    super::factory_restart::ship_ready(&fixture.workspace, origin.path());
+    let yolo = Permissions::new(PermissionMode::Agent, aura_ui::ApprovalLevel::Yolo);
+    fixture.hub.set_permissions(member, yolo);
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    let task = message(member, "Collapse the members' subagents", true);
+    handle_ui_event(&mut state, task, &links).await;
+    finish(&mut state, &mut done, member).await;
+    handle_ui_event(&mut state, message(member, "implement", true), &links).await;
+    finish(&mut state, &mut done, member).await;
+    run_out(&mut state, &mut done, member).await;
+    assert_ne!(state.hub.mode_of(member), PermissionMode::Plan);
+    drain(&mut commands);
+
+    let next = message(member, "Fold the archive by day", true);
+    handle_ui_event(&mut state, next, &links).await;
+    assert_eq!(state.hub.factory_flows.stage(member), Some(Stage::Planning));
+    assert_eq!(
+        state.hub.mode_of(member),
+        PermissionMode::Plan,
+        "plans first"
+    );
+    assert_eq!(
+        rows_mark_plan(&mut commands, member),
+        Some(true),
+        "(P) is back"
+    );
+}
+
+#[tokio::test]
+async fn a_restart_mid_build_carries_on_building_out_of_plan_mode() {
+    use crate::event_loop::inbox as owed;
+    let (fixture, mut commands) = fixture();
+    let member = fixture.second;
+    channel_with_member(&fixture).await;
+    // A repo it can ship to, so its task runs to the end.
+    let origin = tempfile::tempdir().unwrap();
+    super::factory_restart::ship_ready(&fixture.workspace, origin.path());
+    let yolo = Permissions::new(PermissionMode::Agent, aura_ui::ApprovalLevel::Yolo);
+    fixture.hub.set_permissions(member, yolo);
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    owed::restore_saved(&mut state).await;
+    let task = message(member, "Collapse the members' subagents", true);
+    handle_ui_event(&mut state, task, &links).await;
+    finish(&mut state, &mut done, member).await;
+    handle_ui_event(&mut state, message(member, "implement", true), &links).await;
+    assert_eq!(state.hub.factory_flows.stage(member), Some(Stage::Building));
+    assert!(state.hub.is_running(member), "its build runs");
+
+    // The app dies mid-build and comes back with nothing in memory, the
+    // member in the mode a new process starts it in.
+    owed::save_now(&state).await;
+    drop(next_done(&mut done).await);
+    state.hub.stop_running(member);
+    state.in_flight = 0;
+    state.hub.inbox.forget_all();
+    state.hub.factory_flows.forget_all();
+    state.queued.clear();
+    let yolo = Permissions::new(PermissionMode::Agent, aura_ui::ApprovalLevel::Yolo);
+    state.hub.set_permissions(member, yolo);
+    let restored = owed::restore_saved(&mut state).await;
+
+    assert_eq!(state.hub.factory_flows.stage(member), Some(Stage::Building));
+    assert_eq!(
+        state.hub.mode_of(member),
+        PermissionMode::Agent,
+        "not back in plan mode"
+    );
+    assert_eq!(restored.queued_agents(), [member], "its build carries on");
+    drain(&mut commands);
+    owed::resume_saved(&mut state, restored).await;
+    assert_ne!(state.hub.mode_of(member), PermissionMode::Plan);
+    assert_ne!(rows_mark_plan(&mut commands, member), Some(true), "no (P)");
+    run_out(&mut state, &mut done, member).await;
+    assert_ne!(state.hub.factory_flows.stage(member), Some(Stage::Planning));
+    assert_ne!(state.hub.mode_of(member), PermissionMode::Plan);
+}

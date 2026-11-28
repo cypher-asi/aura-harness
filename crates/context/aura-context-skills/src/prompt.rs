@@ -66,23 +66,7 @@ pub fn render_full_skills_xml(skills: &[SkillPromptEntry<'_>]) -> String {
         if !s.body.is_empty() {
             let _ = write!(buf, "\n\n{}", xml_escape(s.body));
         }
-        if let Some(target_id) = s.agent_target_id.filter(|id| !id.trim().is_empty()) {
-            let target_name = s
-                .agent_target_name
-                .filter(|name| !name.trim().is_empty())
-                .unwrap_or("Project agent");
-            let _ = write!(
-                buf,
-                "\n\n<skill_agent_target name=\"{}\" agent_id=\"{}\"/>\
-                 \nThis collaborator was selected by the user for this skill. \
-                 When the skill instructions require delegation, call `send_to_agent` \
-                 with this exact agent_id and do not substitute another agent. \
-                 The target must be attached to the current project. After a successful \
-                 delivery, end the turn and wait for the asynchronous reply.",
-                xml_escape(target_name),
-                xml_escape(target_id),
-            );
-        }
+        push_target_note(&mut buf, s);
         buf.push_str("</agent_skill>\n");
     }
     buf.push_str("</agent_skills>");
@@ -113,8 +97,31 @@ pub fn inject_full_skills(system_prompt: &mut String, skills: &[SkillPromptEntry
     system_prompt.push_str(&xml);
 }
 
+/// Append `skill`'s delegation target, when it has one: the agent the
+/// user picked for it, which the model must use and not replace.
+pub(crate) fn push_target_note(buf: &mut String, skill: &SkillPromptEntry<'_>) {
+    let Some(target_id) = skill.agent_target_id.filter(|id| !id.trim().is_empty()) else {
+        return;
+    };
+    let target_name = skill
+        .agent_target_name
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("Project agent");
+    let _ = write!(
+        buf,
+        "\n\n<skill_agent_target name=\"{}\" agent_id=\"{}\"/>\
+         \nThis collaborator was selected by the user for this skill. \
+         When the skill instructions require delegation, call `send_to_agent` \
+         with this exact agent_id and do not substitute another agent. \
+         The target must be attached to the current project. After a successful \
+         delivery, end the turn and wait for the asynchronous reply.",
+        xml_escape(target_name),
+        xml_escape(target_id),
+    );
+}
+
 /// Minimal XML escaping for attribute values.
-fn xml_escape(s: &str) -> String {
+pub(crate) fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

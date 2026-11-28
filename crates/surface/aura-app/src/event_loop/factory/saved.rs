@@ -165,13 +165,26 @@ fn continuing_work(state: &LoopState<'_>, record: &FlowRecord, running: bool) ->
     match record.stage {
         Stage::Assigned => None,
         Stage::Planning => replan(state, record),
-        Stage::Building => Some(hooks::build_work(cloud, record.plan.as_deref()?)),
+        Stage::Building => Some(match record.plan.as_deref() {
+            Some(plan) => hooks::build_work(cloud, plan),
+            // Asked to implement before it wrote a plan: it carries on
+            // implementing, out of plan mode.
+            None => Work::Prompt {
+                prompt: Prompt::inbox(RESUME_UNPLANNED.to_string(), Request::Resume),
+                shown: false,
+            },
+        }),
         Stage::Shipping => {
             let offers = !cloud || crate::event_loop::cloud::node_offers_ship(state, record.agent);
             Some(hooks::ship_work(offers))
         }
     }
 }
+
+/// What a member cut off while it implemented with no plan written is
+/// asked when the app comes back.
+const RESUME_UNPLANNED: &str = "The app restarted while you were implementing your task. \
+     Carry on from where you were, without planning again, then report.";
 
 /// The planning turn of `record`'s member again, from the prompt it
 /// started with, unless the inbox put that prompt back in its queue.

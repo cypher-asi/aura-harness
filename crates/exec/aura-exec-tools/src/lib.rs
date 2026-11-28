@@ -41,6 +41,7 @@ pub mod resolver;
 pub mod runpod;
 mod sandbox;
 pub mod schema;
+pub mod skills;
 pub mod todo;
 pub(crate) mod tool;
 pub mod web;
