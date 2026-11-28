@@ -187,3 +187,37 @@ fn words_longer_than_a_line_are_broken_at_its_edge() {
     assert_eq!(wrap("abcdefgh ij", 3), ["abc", "def", "gh", "ij"]);
     assert_eq!(wrap("", 3), Vec::<String>::new());
 }
+
+#[test]
+fn a_marked_section_colors_only_its_dot() {
+    let theme = Theme::cyber();
+    let mut info = Info::new(40, &theme);
+    info.item("before", None);
+    info.marked_section(StatusDot::Failed, "FAILED", Some("a1b2c3d"));
+    let lines = info.into_lines();
+    assert!(text(&lines[1]).is_empty(), "a blank row before it");
+    assert_eq!(text(&lines[2]), "● FAILED  a1b2c3d");
+    assert_eq!(span(&lines[2], "●").style.fg, Some(theme.colors.error));
+    let title = span(&lines[2], "FAILED");
+    assert_eq!(title.style.fg, Some(theme.colors.secondary));
+    assert!(lines[2]
+        .spans
+        .iter()
+        .all(|span| !span.style.add_modifier.contains(Modifier::BOLD)));
+}
+
+#[test]
+fn a_link_is_an_indented_plain_line_whose_index_comes_back() {
+    let theme = Theme::cyber();
+    let mut info = Info::new(20, &theme);
+    info.section("BRANCH", None);
+    let at = info.link("aura/a-very-long-branch-name");
+    let lines = info.into_lines();
+    assert_eq!(at, 1);
+    assert!(text(&lines[at]).starts_with("  aura/"), "{:?}", text(&lines[at]));
+    assert!(text(&lines[at]).ends_with('…'));
+    let link = &lines[at].spans[1];
+    assert_eq!(link.style.fg, Some(theme.colors.foreground));
+    assert!(link.style.add_modifier.contains(Modifier::UNDERLINED));
+    assert!(!link.style.add_modifier.contains(Modifier::BOLD));
+}
