@@ -78,6 +78,7 @@ pub mod plans;
 mod pull;
 mod reach;
 mod recall;
+mod reconnect;
 mod request;
 mod seed;
 mod session;
@@ -93,6 +94,7 @@ pub use self::marks::TurnMark;
 pub use self::outcomes::{CommitsOutcome, PatchOutcome, PullOutcome};
 pub use self::persist::SyncStatus;
 pub use self::reach::{MailDesk, Reach};
+pub use self::reconnect::{RECONNECTED, RECONNECTING, RECONNECTS_AT_ONCE, RECONNECT_DELAYS};
 pub use self::request::{cloud_policy, TurnAsk};
 pub use self::turn::{map_outbound, RemoteEvent, WORKING};
 
@@ -341,6 +343,11 @@ pub struct CloudHub {
     work: Mutex<HashMap<String, machine_work::MachineWork>>,
     /// The chat run each agent's turn is streamed from, by agent hex.
     streaming: Mutex<HashMap<String, String>>,
+    /// Reconnects to running machines under way, at most
+    /// [`RECONNECTS_AT_ONCE`].
+    reconnects: Arc<tokio::sync::Semaphore>,
+    /// How long to wait between tries to reach a node.
+    reconnect_delays: Mutex<Vec<std::time::Duration>>,
     /// One update of a node at a time, by agent hex.
     updates: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Runs whose turn the hub stopped watching without knowing it ended:
