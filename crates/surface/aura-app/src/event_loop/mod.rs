@@ -334,20 +334,6 @@ impl<'a> LoopState<'a> {
     }
 }
 
-/// Send the UI what it shows for `active` when the loop starts.
-async fn send_startup(state: &mut LoopState<'_>, active: AgentId) {
-    agents::send_sandbox_root(state).await;
-    hud::send_session_of(state, active).await;
-    cloud::start(state).await;
-    modes::send_mode(state, active).await;
-    policies::send_policies_of(state, active).await;
-    modes::warn_if_unconfined(state, active).await;
-    hud::send_instructions_of(state, active).await;
-    plan_mode::send_plan_of(state, active).await;
-    state.hub.traces.send_history(active).await;
-    handlers::announce_models(state).await;
-}
-
 // Names the tests use through `use super::*`.
 #[cfg(test)]
 use {aura_core_types::RouteReason, aura_model::ToolDefinition, steering::SteerSource};
