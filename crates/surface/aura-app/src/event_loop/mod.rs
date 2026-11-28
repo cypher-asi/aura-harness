@@ -250,10 +250,13 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
     state.hub.name_agents();
     let active = state.active;
     state.hub.record_panel.set(active);
+    let restored = inbox::restore_saved(&mut state).await;
     send_startup(&mut state, active).await;
+    inbox::resume_saved(&mut state, restored).await;
 
     run_loop(&mut state, &mut inbox).await;
     state.stop_side_panels();
+    inbox::flush_saved(&state, &mut inbox.notice_rx).await;
     shut_down(&mut state, &mut inbox.done_rx).await;
     publisher.abort();
     state.processes.save();
@@ -388,6 +391,8 @@ async fn run_loop(state: &mut LoopState<'_>, inbox: &mut Inbox) {
                 }
             }
         }
+        // The write goes on without the loop.
+        drop(inbox::keep_saved(state));
     }
 }
 
