@@ -76,6 +76,10 @@ pub enum RemoteEvent {
     Done(Box<SessionUsage>),
     /// The turn failed.
     Failed(String),
+    /// The turn's conversation could not be copied here, why: what is
+    /// here is an earlier turn's, or none. Sent once the turn ended,
+    /// before the stream closes.
+    CopyFailed(String),
 }
 
 impl CloudHub {
@@ -251,7 +255,10 @@ impl CloudHub {
         let StreamEnd::Seen(result) = end else {
             return;
         };
-        self.finish_on_node(node, agent).await;
+        let copy_failed = self.finish_on_node(node, agent).await;
+        if let Some(why) = copy_failed {
+            let _ = tx.send(RemoteEvent::CopyFailed(why)).await;
+        }
         if let Some(run_id) = run_id {
             self.end_turn_mark(agent, run_id);
         }
@@ -263,19 +270,35 @@ impl CloudHub {
 
     /// Copy what `agent`'s turn on `node` left: its record, its session
     /// checkpoint and its trace runs. Hold the machine awake around it.
-    pub(super) async fn finish_on_node(&self, node: &NodeClient, agent: AgentId) {
+    /// Returns why its conversation (the session checkpoint) was not
+    /// copied, when it was not: what this computer holds of it is then an
+    /// earlier turn's, which nothing must take for this one's.
+    pub(super) async fn finish_on_node(&self, node: &NodeClient, agent: AgentId) -> Option<String> {
         let hex = agent.to_hex();
         if let Err(err) = self.mirror_from(node, agent).await {
             tracing::warn!(agent = %hex, error = %err, "could not copy the turn's record");
         }
-        if let Err(err) = self.copy_session(node, agent).await {
-            tracing::debug!(agent = %hex, error = %err, "could not copy the session checkpoint");
+        let copy_failed = match self.copy_session(node, agent).await {
+            Ok(true) => None,
+            // Nothing here keeps sessions (tests, a hub without a store).
+            Ok(false) if self.sessions.lock().is_none() => None,
+            Ok(false) => Some(UNUSABLE_SESSION.to_string()),
+            Err(err) => Some(err.to_string()),
+        };
+        if let Some(why) = &copy_failed {
+            tracing::warn!(agent = %hex, error = %why, "could not copy the turn's conversation");
         }
         if let Err(err) = self.copy_traces(node, agent).await {
             tracing::debug!(agent = %hex, error = %err, "could not copy the trace runs");
         }
+        copy_failed
     }
 }
+
+/// Why a turn's conversation was not copied though its machine answered:
+/// it had none, of another version, or one past the record copied here.
+pub const UNUSABLE_SESSION: &str =
+    "its machine had no conversation this computer could use (none, another version, or ahead of the copied record)";
 
 /// What a turn's stream says once its machine took the turn.
 pub const WORKING: &str = "Working in the cloud";
