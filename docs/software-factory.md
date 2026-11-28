@@ -185,8 +185,11 @@ never land at all. There are two layers (`fs_tools/cmd/push_guard.rs`):
 
 - **Typed pushes are refused.** A command whose words run `git push`,
   however it's typed (after git's global options, in a script, through
-  `sh -c`, `env`, `xargs` or `eval`), `gh pr merge`, or `gh api` on a
-  PR's merge (`pulls/<n>/merge`), is refused
+  `sh -c`, `env`, `xargs` or `eval`), `gh pr merge`, or a GitHub API
+  call that merges or moves a branch (through `gh api` or `curl` to
+  `api.github.com`: a PR's `pulls/<n>/merge`, a write to `/merges` or
+  `/git/refs`, a GraphQL `mergePullRequest`, `enablePullRequestAutoMerge`
+  or ref mutation), is refused
   before it runs, pointing the agent at `git_ship`. A command that only
   names a push (`git commit -m "git push later"`) is refused too, which
   is the safe side to err on.
@@ -349,7 +352,17 @@ Crate: `crates/exec/aura-exec-merge-queue`.
     with the same details (`MergeEntry::failure`, `MergeEntry::pr`).
   - A PR closed by hand while it is tested is abandoned: the entry fails
     and the branch is kept, so no work is lost.
-  - GitHub unreachable, or `gh` not signed in, holds the queue
+  - A head that is already on the target (merged some other way) ends
+    the entry as merged; the queue closes the PR, if GitHub left it open,
+    with a comment, and deletes the branch with the lease.
+  - GitHub refusing the queue's credentials (401/403, or `gh` not signed
+    in) fails the entry with a message saying how to sign the hub in;
+    waiting would not fix it. Only an unreachable GitHub holds the queue.
+  - Everything `gh` writes is declared in `forge/gh.rs` and
+    `docs/invariants.md`: PRs (`gh pr create`), comments, closing a PR
+    that landed already, and the commit status. No branch is written
+    through `gh`.
+  - GitHub unreachable holds the queue
     (`QueueState::hold`): the entry goes back to its place without an
     attempt counted, nothing starts for 5 minutes, and its agent is told
     it waits through no fault of its own.
@@ -379,6 +392,8 @@ Crate: `crates/exec/aura-exec-merge-queue`.
   each channel on the repo and to the agents whose queue entries merged
   a suspect commit; a commit merged outside the queue is named as such
   with its author (`notes::broken_target_prompt`).
+  An entry that fails the same tests on a tip already found broken parks
+  at once, without the two reruns.
   Output that names no tests fails the entry as before.
 - **Results:**
   - A failed entry goes back to the agent that pushed it as a notice. The

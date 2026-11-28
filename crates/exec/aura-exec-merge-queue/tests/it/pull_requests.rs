@@ -317,3 +317,37 @@ async fn a_repo_set_to_push_lands_without_a_pr() {
     assert_eq!(origin_main(&world), head);
     assert!(forge.prs.lock().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn a_pr_already_on_main_is_closed_and_its_branch_deleted() {
+    if !has_git() {
+        return;
+    }
+    let world = world();
+    let forge = forge(&world);
+    forge
+        .auto_merges
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let (queue, processor) =
+        queue_with_forge(&world, QueueConfig::unchecked("main"), Arc::clone(&forge)).await;
+    let request = agent_pushes(&world, "aura/a-rus1", "a.txt", "a\n");
+    let head = request.push.head.clone();
+    // Someone put it on main by hand, and GitHub didn't mark the PR.
+    git(&world.origin, &["update-ref", "refs/heads/main", &head]);
+    queue.enqueue(request).await.unwrap();
+
+    let done = processor.process_next().await.unwrap().unwrap();
+
+    assert_eq!(done.status, MergeStatus::Merged, "{:?}", done.detail);
+    let pr = forge.pr_of("aura/a-rus1");
+    assert_eq!(pr.state, PrState::Closed);
+    assert!(
+        forge
+            .comments_on(pr.number)
+            .iter()
+            .any(|c| c.contains("Already on main")),
+        "{:?}",
+        forge.comments_on(pr.number)
+    );
+    assert_eq!(forge.tip("aura/a-rus1"), None, "its branch is deleted");
+}

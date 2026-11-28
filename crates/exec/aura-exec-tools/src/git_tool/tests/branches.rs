@@ -184,3 +184,61 @@ async fn follow_up_work_after_a_merge_ships_on_a_new_branch() {
     );
     assert!(on_origin(&origin, &follow_up.branch).await);
 }
+
+#[tokio::test]
+async fn a_commit_list_that_cant_be_read_refuses_to_start() {
+    if !git_available() {
+        return;
+    }
+    let (_parent, repo, _origin) = on_main().await;
+    // An unborn branch: `rev-list HEAD` fails.
+    git(&repo, &["checkout", "-q", "--orphan", "empty"]).await;
+    git(&repo, &["rm", "-rqf", "."]).await;
+    let started =
+        start_task_branch(&repo, "aura/next-rus207", "main", Duration::from_secs(20)).await;
+    assert!(
+        matches!(&started, Err(GitToolError::WorkLeftBehind(why)) if why.contains("could not tell")),
+        "{started:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_follow_up_name_the_pin_refuses_is_never_checked_out() {
+    if !git_available() {
+        return;
+    }
+    let (_parent, repo, origin) = on_main().await;
+    let timeout = Duration::from_secs(20);
+    start_task_branch(&repo, PIN, "main", timeout)
+        .await
+        .unwrap();
+    std::fs::write(repo.join("one.txt"), "1").unwrap();
+    let shipped = git_ship_impl(&repo, pinned_ship("task one")).await.unwrap();
+    git(&origin, &["update-ref", "refs/heads/main", &shipped.head]).await;
+    std::fs::write(repo.join("more.txt"), "more").unwrap();
+    git(&repo, &["add", "-A"]).await;
+    git(&repo, &["commit", "-qm", "more"]).await;
+    let refuse = |name: &str| {
+        Err(GitToolError::BranchNotAllowed {
+            branch: name.to_string(),
+            allowed: PIN.to_string(),
+        })
+    };
+    let moved = crate::git_tool::branches::follow_up_branch(
+        &repo,
+        PIN,
+        "main",
+        Some("polish"),
+        refuse,
+        timeout,
+    )
+    .await;
+    assert!(
+        matches!(moved, Err(GitToolError::BranchNotAllowed { .. })),
+        "{moved:?}"
+    );
+    let current = git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]).await;
+    assert_eq!(current, PIN, "still on its branch");
+    let branches = git(&repo, &["branch", "--list", "aura/polish*"]).await;
+    assert!(branches.is_empty(), "no branch made: {branches}");
+}

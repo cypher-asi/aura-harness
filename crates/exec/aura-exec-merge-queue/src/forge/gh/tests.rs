@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use super::*;
+use crate::forge::PrState;
+use crate::report::PrRef;
 
 fn pr(state: PrState, head: &str, merge_commit: Option<&str>) -> PullRequest {
     PullRequest {
@@ -100,11 +102,20 @@ fn merge_outcomes_tell_a_merge_a_moved_head_and_a_refusal_apart() {
 }
 
 #[test]
-fn sign_in_and_network_errors_hold_the_queue_other_errors_fail() {
+fn network_errors_hold_the_queue_refused_credentials_fail_clearly() {
     for stderr in [
         "To get started with GitHub CLI, please run:  gh auth login",
         "HTTP 401: Bad credentials",
+        "HTTP 403: Resource not accessible by integration",
+    ] {
+        assert!(
+            matches!(classify("gh pr list", stderr), ForgeError::Failed(why) if why.contains("401/403")),
+            "{stderr}"
+        );
+    }
+    for stderr in [
         "dial tcp: lookup api.github.com: could not resolve host",
+        "HTTP 503: Service Unavailable",
     ] {
         assert!(
             matches!(classify("gh pr list", stderr), ForgeError::Unavailable(_)),

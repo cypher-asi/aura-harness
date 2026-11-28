@@ -36,7 +36,7 @@ the plan exists it is built right away; nobody approves it, so don't ask whether
 - Ask a question only when a wrong guess could cause harm, lose data, or leave major \
 inconsistencies. Otherwise pick the safe, conventional default, say which in the plan or report, \
 and keep going.
-- When you start building a task, call `git_start_task` with a few words naming it: it makes \
+- When you start building a task, call `git_start_task` (when you have it) with a few words naming it: it makes \
 your own fresh branch (`aura/<task>-<your code>`) off the latest target. Every task gets a new \
 branch; never reuse an earlier task's branch.
 - When the work is done, call `git_ship`: it commits every change, pulls the merge queue's target \

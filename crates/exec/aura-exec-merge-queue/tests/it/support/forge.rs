@@ -39,6 +39,9 @@ pub struct FakeForge {
     pub statuses: Mutex<Vec<(String, CheckState, String)>>,
     /// Every call fails as GitHub being unreachable while set
     pub unavailable: AtomicBool,
+    /// Marks a PR merged once its head is on its base, as GitHub does;
+    /// on by default
+    pub auto_merges: AtomicBool,
     /// Runs once, just before the next merge: someone pushes, or closes
     /// the PR, between the test and the merge
     before_merge: Mutex<Option<Hook>>,
@@ -52,6 +55,7 @@ impl FakeForge {
             comments: Mutex::default(),
             statuses: Mutex::default(),
             unavailable: AtomicBool::new(false),
+            auto_merges: AtomicBool::new(true),
             before_merge: Mutex::default(),
         }
     }
@@ -120,7 +124,8 @@ impl FakeForge {
             }
             // As GitHub does: a PR whose head reached its base by a push
             // is merged.
-            let on_base = !pr.head.is_empty()
+            let on_base = self.auto_merges.load(Ordering::SeqCst)
+                && !pr.head.is_empty()
                 && Command::new("git")
                     .args([
                         "merge-base",
@@ -215,6 +220,18 @@ impl Forge for FakeForge {
             .lock()
             .unwrap()
             .push((number, body.to_string()));
+        Ok(())
+    }
+
+    async fn close(&self, number: u64, body: &str) -> Result<(), ForgeError> {
+        self.up()?;
+        self.comments
+            .lock()
+            .unwrap()
+            .push((number, body.to_string()));
+        let mut prs = self.prs.lock().unwrap();
+        let pr = prs.iter_mut().find(|pr| pr.number == number).unwrap();
+        pr.state = PrState::Closed;
         Ok(())
     }
 

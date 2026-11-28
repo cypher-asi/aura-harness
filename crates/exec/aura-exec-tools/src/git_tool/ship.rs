@@ -172,22 +172,22 @@ async fn follow_up(
     if remote_url(workspace, request.timeout).await.is_err() {
         return Ok(None);
     }
-    let moved = super::branches::follow_up_branch(
+    let allowed = |name: &str| {
+        let target = PushTarget {
+            branch: Some(name),
+            ..request.push
+        };
+        resolve_branch(target, Some(name)).map(|_| ())
+    };
+    super::branches::follow_up_branch(
         workspace,
         branch,
         request.target,
         request.task,
+        allowed,
         request.push_policy.per_attempt_timeout,
     )
-    .await?;
-    if let Some(moved) = &moved {
-        let target = PushTarget {
-            branch: Some(moved),
-            ..request.push
-        };
-        resolve_branch(target, Some(moved))?;
-    }
-    Ok(moved)
+    .await
 }
 
 /// The lock the ships of `workspace` take, one per folder in this
