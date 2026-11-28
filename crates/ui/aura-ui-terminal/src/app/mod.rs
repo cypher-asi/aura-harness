@@ -63,6 +63,7 @@ mod chat_hits;
 mod chat_jump;
 pub(crate) mod chat_links;
 mod chat_view;
+mod context_panel;
 mod detail;
 mod detail_state;
 mod hit_targets;
@@ -232,6 +233,8 @@ pub enum AppState {
     SelectingFolder,
     /// A project's details are shown over the screen
     ShowingProjectInfo,
+    /// Showing what fills the context window
+    ShowingContext,
     /// The channel form is open, making or editing a channel
     ChannelForm,
 }

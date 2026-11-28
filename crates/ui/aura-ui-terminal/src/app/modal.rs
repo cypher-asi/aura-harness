@@ -41,18 +41,21 @@ pub enum Dialog {
     ProjectInfo,
     /// Making or editing a channel
     ChannelForm,
+    /// What fills the context window, `/context` or the footer's ring
+    Context,
 }
 
 impl Dialog {
     /// Every dialog, for the tests that go through them all: a dialog
     /// added belongs here.
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 5] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::Help,
         Self::ModelSelector,
         Self::FolderPicker,
         Self::ProjectInfo,
         Self::ChannelForm,
+        Self::Context,
     ];
 }
 
@@ -65,6 +68,7 @@ impl Dialog {
             Self::FolderPicker => AppState::SelectingFolder,
             Self::ProjectInfo => AppState::ShowingProjectInfo,
             Self::ChannelForm => AppState::ChannelForm,
+            Self::Context => AppState::ShowingContext,
         }
     }
 }
@@ -185,7 +189,7 @@ impl App {
                 picker.set_scroll(wheeled(picker.scroll(), delta));
                 WheelList::FolderPicker
             }
-            Dialog::Help | Dialog::ProjectInfo | Dialog::ChannelForm => return,
+            Dialog::Help | Dialog::ProjectInfo | Dialog::ChannelForm | Dialog::Context => return,
         };
         self.panels.wheel.detach(list);
     }
@@ -197,7 +201,7 @@ impl App {
             Some(Dialog::FolderPicker) => self.project_list.folder_picker = None,
             Some(Dialog::ProjectInfo) => self.project_list.project_info = None,
             Some(Dialog::ChannelForm) => self.channel_form = None,
-            Some(Dialog::Help | Dialog::ModelSelector) | None => {}
+            Some(Dialog::Help | Dialog::ModelSelector | Dialog::Context) | None => {}
         }
         self.modals.area = None;
     }
@@ -278,7 +282,7 @@ impl App {
                 };
             }
             Dialog::ModelSelector | Dialog::FolderPicker => self.wheel_picker(dialog, down),
-            Dialog::ProjectInfo | Dialog::ChannelForm => {}
+            Dialog::ProjectInfo | Dialog::ChannelForm | Dialog::Context => {}
         }
     }
 }

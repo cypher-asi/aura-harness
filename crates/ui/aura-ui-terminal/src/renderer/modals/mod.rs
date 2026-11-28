@@ -8,6 +8,7 @@
 
 mod approval;
 mod channel_form;
+mod context;
 mod folder_picker;
 mod help;
 mod model_selector;
@@ -34,6 +35,7 @@ pub(super) fn render_modal_layer(frame: &mut Frame, app: &mut App, theme: &Theme
         Some(ModalKind::Dialog(Dialog::FolderPicker)) => folder_picker::render(frame, app, theme),
         Some(ModalKind::Dialog(Dialog::ProjectInfo)) => project_info::render(frame, app, theme),
         Some(ModalKind::Dialog(Dialog::ChannelForm)) => channel_form::render(frame, app, theme),
+        Some(ModalKind::Dialog(Dialog::Context)) => Some(context::render(frame, app, theme)),
     };
     app.set_modal_area(area);
 }

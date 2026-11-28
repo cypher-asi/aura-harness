@@ -16,7 +16,7 @@ impl App {
             "history" | "h" => self.send_command_event(UiEvent::ShowHistory(None)),
             "runs" => self.send_command_event(UiEvent::ListRuns),
             "whoami" | "me" => self.send_command_event(UiEvent::Whoami),
-            "context" | "ctx" => self.context_command(),
+            "context" | "ctx" => self.context_command(arg),
             "cost" | "usage" => self.cost_command(),
             "todos" | "todo" => self.todos_command(arg),
             "compact" => self.handle_compact_command(arg),
@@ -39,10 +39,15 @@ impl App {
         self.send_command_event(UiEvent::Clear);
     }
 
-    /// `/context`: what fills the context window.
-    fn context_command(&mut self) {
-        let report = self.hud.context_report();
-        self.add_message(Message::new(MessageRole::System, &report));
+    /// `/context`: open the CONTEXT panel; `/context text` writes the
+    /// report into the chat instead.
+    fn context_command(&mut self, arg: &str) {
+        if arg.trim() == "text" {
+            let report = self.hud.context_report();
+            self.add_message(Message::new(MessageRole::System, &report));
+        } else {
+            self.open_context_panel();
+        }
     }
 
     /// `/cost`: what the session cost, and where it went.

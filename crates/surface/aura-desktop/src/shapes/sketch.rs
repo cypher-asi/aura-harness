@@ -175,6 +175,7 @@ fn symbol(pen: &mut Pen, c: char, cell: Rectangle) {
             triangle(pen, c, g);
         }
         '◦' | '◐' | '◑' | '◒' | '◓' | '⊘' | '⏱' => round(pen, c, g, thin),
+        '○' | '◔' | '◕' | '●' => ring(pen, c, g, thin),
         '◇' | '◆' | '◈' | '■' | '□' | '▪' | '▫' => diamond_or_square(pen, c, g, thin),
         '▰' | '▱' => progress(pen, c, cell, g, thin),
         '☐' | '☒' | '▣' => to_do(pen, c, g, thin),
@@ -252,6 +253,30 @@ fn round(pen: &mut Pen, c: char, g: Grid, thin: f32) {
             stroke(pen, Outline::line(face, g.p(0.14, -0.1)), thin);
         }
     }
+}
+
+/// The context ring: a circle filled clockwise from the top by a
+/// quarter, three quarters, or wholly, as `◑` is by half.
+fn ring(pen: &mut Pen, c: char, g: Grid, thin: f32) {
+    let r = g.w * 0.38;
+    let center = g.p(0.0, 0.0);
+    stroke(pen, Outline::circle(center, r), thin);
+    let turn = match c {
+        '◔' => 0.25,
+        '◕' => 0.75,
+        '●' => 1.0,
+        _ => return,
+    };
+    if c == '●' {
+        pen.fill(Outline::circle(center, r));
+        return;
+    }
+    let top = -PI / 2.0;
+    let mut slice = Outline::new();
+    slice.move_to(center);
+    slice.arc_on(center, r, top, top + turn * 2.0 * PI);
+    slice.close();
+    pen.fill(slice);
 }
 
 /// Diamonds and squares, filled or outlined.

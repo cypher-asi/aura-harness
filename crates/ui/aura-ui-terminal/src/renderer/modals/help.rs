@@ -19,7 +19,7 @@ const COMMANDS: [(&str, &str); 31] = [
     ("/diff [session]", "Files changed by last turn"),
     ("/gate /compare", "Gate's table, A/B run"),
     ("/clear", "Clear messages"),
-    ("/context", "What fills the context window"),
+    ("/context [text]", "Context panel (or its report)"),
     ("/compact [focus]", "Summarize older history now"),
     ("/init", "Write or improve AGENTS.md"),
     ("/todos", "Fold or open the to-do drawer"),
