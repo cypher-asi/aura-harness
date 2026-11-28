@@ -72,6 +72,7 @@ use crate::error::ToolError;
 mod commit;
 mod commit_push;
 mod executor;
+mod fragments;
 mod push;
 mod redact;
 mod sandbox;
@@ -157,6 +158,17 @@ pub enum GitToolError {
     )]
     MergeConflict { target: String, files: Vec<String> },
 
+    /// The branch edits `CHANGELOG.md` in a repo that keeps changelog
+    /// fragments in `changelog.d/`. Committed, not pushed.
+    #[error(
+        "not pushed: this repo keeps changelog entries in changelog.d/, and your branch edits \
+         CHANGELOG.md, which makes every parallel branch conflict. Move your entry into a new \
+         file {fragment} (a `### Title`, then `##### Fixed`/`Added`/`Changed` and bullets), \
+         restore CHANGELOG.md as main has it (`git checkout origin/main -- CHANGELOG.md`), \
+         and call git_ship again"
+    )]
+    ChangelogEdited { fragment: String },
+
     /// The agent changed files that carry the hub's uncommitted work its
     /// cloud machine was seeded with, so they can't be committed without
     /// pushing that work too. Nothing was committed.
@@ -225,6 +237,7 @@ impl From<GitToolError> for ToolError {
             err @ (GitToolError::NoOrigin
             | GitToolError::Unauthorized { .. }
             | GitToolError::MergeConflict { .. }
+            | GitToolError::ChangelogEdited { .. }
             | GitToolError::SeededHubChanges { .. }) => Self::CommandFailed(err.to_string()),
             GitToolError::RemoteStorageExhausted { op, stderr } => Self::CommandFailed(format!(
                 "git {op} failed: remote storage exhausted ({stderr}). \

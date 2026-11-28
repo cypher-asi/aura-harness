@@ -156,6 +156,9 @@ impl QueueService {
                 .enqueue(request)
                 .await
                 .map_err(|e| e.to_string())?;
+            if !matches!(enqueued, Enqueued::Duplicate(_)) {
+                self.scan_overlaps(&repo_queue, enqueued.id());
+            }
             Ok::<_, String>(queued_note(&branch, &repo_queue.target, &enqueued))
         };
         let note = queued.await.unwrap_or_else(|why| {
@@ -166,6 +169,14 @@ impl QueueService {
             info!(%agent, %note, "Push queued");
             ui.send(system_message(note)).await;
         }
+    }
+
+    /// Record the files entry `id` changes and warn the owners of work it
+    /// overlaps, off this task ([`super::overlap`]).
+    fn scan_overlaps(&self, repo_queue: &RepoQueue, id: &aura_exec_merge_queue::EntryId) {
+        let (hub, queue) = (Arc::clone(&self.hub), repo_queue.queue.clone());
+        let (target, id) = (repo_queue.target.clone(), id.clone());
+        tokio::spawn(async move { super::overlap::scan(&hub, &queue, &target, &id).await });
     }
 
     /// The queue of `repo`, opened (and its processor started) the first

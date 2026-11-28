@@ -18,8 +18,12 @@
 //! - [`lock`]: the operating system's file locks both are held with.
 //! - [`config`]: target branch and checks.
 //! - [`integrate`]: landing one entry with git.
+//! - [`resolve`]: settling a merge that conflicted only in generated files.
+//! - [`changelog`]: changelog fragments, assembled at release time.
+//! - [`overlap`]: the files the work in flight changes, and where it overlaps.
 //! - [`processor`]: the queue at work.
 
+pub mod changelog;
 pub mod checks;
 pub mod config;
 pub mod entry;
@@ -27,7 +31,9 @@ pub mod error;
 pub mod git;
 pub mod integrate;
 pub mod lock;
+pub mod overlap;
 pub mod processor;
+pub mod resolve;
 pub mod state;
 pub mod store;
 

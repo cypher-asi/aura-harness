@@ -37,6 +37,7 @@ use clap::ValueEnum;
 use thiserror::Error;
 
 mod auth_commands;
+mod changelog_commands;
 pub mod cli;
 mod cloud_commands;
 pub mod evals;

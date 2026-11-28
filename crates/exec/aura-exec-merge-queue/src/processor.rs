@@ -18,7 +18,7 @@
 //!   branch waits past [`Limits::queued_ttl`] since its last push
 //!   expires.
 
-use crate::entry::{MergeEntry, MergeRequest};
+use crate::entry::{EntryId, MergeEntry, MergeRequest};
 use crate::error::QueueError;
 use crate::integrate::{Integrator, RepoPaths};
 use crate::state::{Enqueued, QueueState, RunOutcome};
@@ -120,6 +120,27 @@ impl MergeQueue {
     #[must_use]
     pub fn repo(&self) -> &RepoPaths {
         &self.inner.repo
+    }
+
+    /// Record that entry `id` at `head` changes `files`
+    /// ([`QueueState::record_files`]); returns whether it did.
+    ///
+    /// # Errors
+    /// The queue can't be saved.
+    pub async fn record_files(
+        &self,
+        id: &EntryId,
+        head: &str,
+        files: Vec<String>,
+    ) -> Result<bool, QueueError> {
+        let (id, head) = (id.clone(), head.to_string());
+        let recorded = self
+            .change(move |state| state.record_files(&id, &head, files))
+            .await?;
+        if recorded {
+            self.announce(QueueEvent::Changed);
+        }
+        Ok(recorded)
     }
 
     /// Hear what changes in this process from now on.

@@ -117,6 +117,7 @@ impl QueueState {
             attempts: 0,
             detail: None,
             merged: None,
+            files: Vec::new(),
         });
         Enqueued::Added(id)
     }
