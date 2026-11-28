@@ -72,6 +72,15 @@ pub(crate) fn give_up_seen(
     }
 }
 
+/// Tell the sender of every request `agent_id` owes that no answer is
+/// coming, its work having stopped `why` before any of it ran.
+pub(crate) fn give_up_all(hub: &AgentHub, agent_id: AgentId, why: &str) {
+    let why = capped(why, STOPPED_CHARS);
+    while let Some(owed) = take_oldest(hub, agent_id) {
+        reply(hub, agent_id, &owed, false, &stopped(&why, None));
+    }
+}
+
 /// The reply of work that stopped `why`, having said `said` last.
 fn stopped(why: &str, said: Option<&str>) -> String {
     match said {

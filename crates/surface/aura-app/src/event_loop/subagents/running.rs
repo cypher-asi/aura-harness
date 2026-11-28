@@ -145,6 +145,8 @@ impl AgentHub {
         cancel: CancellationToken,
         steering: Option<Steering>,
     ) -> RunGeneration {
+        // New work: whatever failed before is behind it.
+        self.status.clear(agent_id);
         let generation = RunGeneration(self.next_generation.fetch_add(1, Ordering::Relaxed));
         lock(&self.running).insert(
             agent_id,

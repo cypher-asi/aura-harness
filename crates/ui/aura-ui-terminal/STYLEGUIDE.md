@@ -62,6 +62,17 @@ themes keep working:
 - **Ready (`●`)** and **working (`⬢`)**: `success`
 - **Waiting (`◐`)**: `warning`
 - **Error (`✗`)**: `error`
+- **Failed agent**: an agent whose last turn failed, or a channel member
+  whose cloud machine could not start, is drawn in `error`, the red of
+  the input's `■ Stop`, until its next turn starts. On PROJECTS its
+  name is `error` and its icon column shows `!` in `error`. On a
+  channel's MEMBERS the `!` replaces the `@` and its second row reads
+  `Failed: <why>` in `error`, cut to fit, in place of its title. Its
+  chat shows the whole reason as an error. Any new way an agent fails
+  (a stall, say) uses the same red and the same `!`.
+- **Starting**: a channel member whose cloud machine is starting reads
+  `Starting in the cloud…` in `muted` on its MEMBERS row, so a member
+  still starting can't be mistaken for an idle one.
 - **Benchmarks** never use `warning`: a stopped or cancelled benchmark,
   a run that errored and the detail's notes read in the accent, and a
   failed check is an accent `▓` in the progress bar.
