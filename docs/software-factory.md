@@ -388,6 +388,28 @@ unfinished work too. Two things stop that now:
   commit (`SeededHubChanges`), since its edits can't be told apart from
   the hub's (`git_tool/seed.rs`).
 
+### Restarting while cloud turns run
+
+A turn under way means its machine is awake, so a restarted app
+reconnects to it rather than waking it (`hub/reconnect.rs`):
+
+- **Reconnect, not wake.** For each turn mark, the hub claims the node
+  again, since node tokens aren't kept across restarts, and attaches to
+  the turn's run. There's no wake call and no update check (#76). The
+  chat and the member's row say "Reconnecting…" until it's reached.
+- **Fast and in the background.** The agent on screen is reconnected
+  first, then the rest, at most `RECONNECTS_AT_ONCE` (8) at a time. The
+  streams that follow have no limit, and startup doesn't wait on any of
+  them.
+- **Retries.** A node that can't be reached is tried again after 2, 5, 15
+  and 30 seconds. Then the turn is reported failed and its mark kept, as
+  before, so a later pickup can still find it. A turn is still picked up
+  only once (#102).
+- **Sleeping machines.** A machine with a turn mark that sleeps has
+  finished that turn, so it is woken to copy the reply, and its chat says
+  "Waking cloud machine". One with no mark is left asleep: catch-up no
+  longer wakes it. What it made is copied when it next wakes for work.
+
 ### Machines from before the merge queue
 
 Machines made before the merge queue run an older aura. It has no

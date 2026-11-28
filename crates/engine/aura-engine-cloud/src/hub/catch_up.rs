@@ -1,8 +1,12 @@
 //! Catching up when the hub starts on what placed agents' machines made
-//! while no hub watched them: the machines that run are claimed, the
-//! sleeping ones that may have worked since a hub last copied them are
-//! woken, and everything each holds is copied here. A machine with a turn
-//! to follow is left to [`CloudHub::follow_turn`].
+//! while no hub watched them: the machines that run are claimed and
+//! everything each holds is copied here. A machine with a turn to follow
+//! is left to [`CloudHub::follow_turn`].
+//!
+//! A sleeping machine is never woken for this: with nothing running on
+//! it there is no new work for it. What it made since a hub last copied
+//! it is copied when it next wakes for work, as its link opens
+//! (`copy_soon`).
 
 use std::sync::Arc;
 
@@ -52,8 +56,8 @@ impl CloudHub {
             .collect()
     }
 
-    /// Claim `hex`'s machine, waking it if it sleeps, keep a socket to it
-    /// open and copy all it holds. It sleeps again once idle.
+    /// Claim `hex`'s machine if it is up, keep a socket to it open and
+    /// copy all it holds. One that sleeps is left asleep.
     async fn catch_up_on(self: &Arc<Self>, hex: &str) {
         if self.stop.is_cancelled() {
             return;
@@ -61,8 +65,17 @@ impl CloudHub {
         let Ok(agent) = AgentId::from_hex(hex) else {
             return;
         };
-        let node = match self.awake_node(hex, &BootReporter::none()).await {
-            Ok(node) => node,
+        let reached = self
+            .fleet
+            .reconnect_reported(hex, &BootReporter::none())
+            .await
+            .and_then(|up| up.map(|_| self.node(hex)).transpose());
+        let node = match reached {
+            Ok(Some(node)) => node,
+            Ok(None) => {
+                tracing::info!(agent = %hex, "a sleeping cloud machine is left asleep; what it made is copied when it next wakes");
+                return;
+            }
             Err(err) => {
                 tracing::warn!(agent = %hex, error = %err, "could not reach a cloud machine to copy what it made");
                 return;

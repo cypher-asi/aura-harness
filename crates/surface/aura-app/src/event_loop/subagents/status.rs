@@ -23,6 +23,9 @@ pub(crate) struct AgentStatus {
     /// Cloud agents whose turn waits for the one already under way on
     /// their machine ([`aura_engine_cloud::hub::WAITING`])
     waiting: Mutex<HashSet<AgentId>>,
+    /// Cloud agents whose running turn the app reconnects to
+    /// ([`aura_engine_cloud::hub::RECONNECTING`])
+    reconnecting: Mutex<HashSet<AgentId>>,
 }
 
 impl AgentStatus {
@@ -76,6 +79,22 @@ impl AgentStatus {
     pub(crate) fn is_waiting(&self, agent: AgentId) -> bool {
         lock(&self.waiting).contains(&agent)
     }
+
+    /// Whether the app reconnects to `agent`'s running cloud turn.
+    pub(crate) fn is_reconnecting(&self, agent: AgentId) -> bool {
+        lock(&self.reconnecting).contains(&agent)
+    }
+
+    /// Note whether the app reconnects to `agent`'s running cloud turn.
+    /// Returns whether that changed.
+    pub(crate) fn set_reconnecting(&self, agent: AgentId, on: bool) -> bool {
+        let mut set = lock(&self.reconnecting);
+        if on {
+            set.insert(agent)
+        } else {
+            set.remove(&agent)
+        }
+    }
 }
 
 impl AgentHub {
@@ -84,6 +103,7 @@ impl AgentHub {
         row.error = self.status.failure(agent_id);
         row.starting = row.error.is_none() && self.status.is_starting(agent_id);
         row.waiting = row.error.is_none() && self.status.is_waiting(agent_id);
+        row.reconnecting = row.error.is_none() && self.status.is_reconnecting(agent_id);
     }
 }
 
