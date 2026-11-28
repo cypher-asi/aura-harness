@@ -94,7 +94,7 @@ fn connected_and_not_connected_integrations_are_listed_with_their_dots() {
     let boxd = line_with(&rows, "☁ boxd");
     assert!(github < boxd);
     assert!(rows[github].contains('●'), "{}", rows[github]);
-    assert!(rows[boxd].contains('●'), "{}", rows[boxd]);
+    assert!(rows[boxd].contains('○'), "{}", rows[boxd]);
     let actions = line_with(&rows, "Connect  Configure");
     assert!(actions > github && actions < boxd, "under the selected row");
     let disconnect = line_with(&rows, "Disconnect");
