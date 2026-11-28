@@ -20,6 +20,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   track of, isn't given a second one: its start fails, in red, naming
   the machine.
 
+### Channel post summaries are kept in the channel store
+
+##### Changed
+
+- The one-line summaries a channel's HISTORY tab shows for the user's
+  long messages are now kept in the channel store, beside the posts they
+  summarize (`h/{blake3 of the text}` rows), instead of in a separate
+  `channel-post-summaries.json` in the data directory. They are sealed
+  whenever the store is, as posts are: in a sealed `aura-node` store.
+  The terminal app opens its store unsealed today, so there they are no
+  better protected than its posts. An
+  existing file is moved into the store on first use and then deleted;
+  if the move fails it is left for the next run. Without a channel store
+  summaries are kept in memory only. The 2,000-entry cap is gone: rows
+  are small and a message is still summarized once.
+
 ### HISTORY lists your /plan requests
 
 ##### Fixed
