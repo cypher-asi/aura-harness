@@ -81,6 +81,7 @@ async fn settle(state: &LoopState<'_>, agent: AgentId, outcome: TurnOutcome, how
             }
             channels::drop_unanswered_from(state, agent, messages);
             inbox::give_up_seen(&state.hub, agent, messages, &why);
+            inbox::give_up_if_archived(&state.hub, agent);
         }
     }
 }

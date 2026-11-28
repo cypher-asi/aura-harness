@@ -17,6 +17,10 @@ pub(crate) struct AssignArgs {
     pub prompt: String,
     #[serde(default)]
     pub todo_id: Option<String>,
+    /// Take back the work given to `to` that it hasn't started, instead
+    /// of giving it more
+    #[serde(default)]
+    pub withdraw: bool,
 }
 
 /// `assign`: how a channel's coordinator hands work to the channel's
@@ -87,6 +91,9 @@ pub(crate) async fn assign(
         .await
         .filter(Circle::coordinates)
         .ok_or_else(|| "assign: only a channel's coordinator assigns work".to_string())?;
+    if args.withdraw {
+        return take_back(hub, caller, &circle, &args);
+    }
     let brief = args.prompt.trim();
     if brief.is_empty() {
         return Err(
@@ -105,17 +112,69 @@ pub(crate) async fn assign(
         brief,
         args.todo_id.as_deref(),
     );
+    let mut taken_from = Vec::new();
     if sent.is_ok() {
         title_member(hub, peer.agent.agent_id, subject, brief);
+        if let Some(todo) = args.todo_id.as_deref() {
+            taken_from = super::withdraw::withdraw_todo(hub, caller, peer.agent.agent_id, todo);
+        }
     }
     // A new member shows even when its work could not be sent.
     hub.send_agent_list().await;
     sent?;
     let status = status_of(hub, &peer, new);
-    Ok(format!(
+    let mut said = format!(
         "Assigned to {} ({status}). Its report will arrive in your inbox.",
         peer.agent.full()
-    ))
+    );
+    if !taken_from.is_empty() {
+        said.push_str(&format!(
+            " Took the todo back from {}: what it hadn't started won't start.",
+            codes(&circle, &taken_from)
+        ));
+    }
+    Ok(said)
+}
+
+/// `assign` with `withdraw`: take back what the coordinator `caller` gave
+/// the member `args.to` that it hasn't started.
+///
+/// # Errors
+/// What the coordinator is told when `to` names no member.
+fn take_back(
+    hub: &AgentHub,
+    caller: AgentId,
+    circle: &Circle,
+    args: &AssignArgs,
+) -> Result<String, String> {
+    let to = named(args.to.as_deref())
+        .ok_or_else(|| "assign: name the member to take work back from in `to`".to_string())?;
+    let peer = circle
+        .find(&to)
+        .filter(|peer| peer.relation == Relation::Member)
+        .ok_or_else(|| no_member(circle, &to))?;
+    let taken = super::withdraw::withdraw(hub, caller, peer.agent.agent_id);
+    let who = peer.agent.full();
+    Ok(match taken {
+        0 => format!("{who} owes you no assignment; nothing to take back."),
+        n => format!(
+            "Took back {n} assignment(s) from {who}: what it hasn't started won't start. Work \
+             already under way is not stopped and still reports."
+        ),
+    })
+}
+
+/// The codes, as `circle` names them, of `agents`.
+fn codes(circle: &Circle, agents: &[AgentId]) -> String {
+    let names: Vec<String> = agents
+        .iter()
+        .map(|agent| {
+            circle
+                .find(&agent.to_hex())
+                .map_or_else(|| agent.to_hex()[..8].to_string(), |peer| peer.agent.full())
+        })
+        .collect();
+    names.join(", ")
 }
 
 /// The member of `circle`, the channel the coordinator `caller` runs, that
