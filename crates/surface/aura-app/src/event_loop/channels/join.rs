@@ -44,7 +44,12 @@ pub(crate) fn join_parent_channel(
         parent: Some(parent),
         joined_at: chrono::Utc::now(),
     };
-    write_member(store, &mut registry, &channel_id, &member)?;
+    // An agent of a local channel gets a worktree of its own; a subagent
+    // works in its member's.
+    let own = (role == MemberRole::Agent && channel.placement != ChannelPlacement::Cloud)
+        .then(|| own_folder(&registry, child_id))
+        .flatten();
+    write_member(store, &mut registry, &channel_id, &member, own)?;
     registry.mark_channel_members([child_id]);
     let workspace = registry.project_folder(child_id);
     lock(&hub.channel_members).insert(child_id);
@@ -85,13 +90,40 @@ fn parent_channel(
     Ok(Some((channel_id, channel)))
 }
 
+/// Have `draft`, a new member of a local channel and an instance of
+/// `definition`, work in a worktree of its own, when one can be made.
+fn give_own_folder(registry: &AgentRegistry, draft: &mut RegisteredAgent, definition: &str) {
+    let own = crate::isolation::member::member_folder(
+        registry.data_dir(),
+        draft.folder.as_deref(),
+        Some(definition),
+        &draft.agent_id().to_hex(),
+    );
+    if own.is_some() {
+        draft.folder = own;
+    }
+}
+
+/// The worktree folder of its own new local member `agent` works in,
+/// made from the folder it would share ([`crate::isolation::member`]).
+fn own_folder(registry: &AgentRegistry, agent: AgentId) -> Option<std::path::PathBuf> {
+    let found = registry.find(agent)?;
+    crate::isolation::member::member_folder(
+        registry.data_dir(),
+        registry.project_folder(agent).as_deref(),
+        found.definition.as_deref(),
+        &agent.to_hex(),
+    )
+}
+
 /// Write the agent row of `member` and its member row of `channel_id` in
-/// one batch.
+/// one batch, the member working in `own` when given.
 fn write_member(
     store: &ChannelStore,
     registry: &mut AgentRegistry,
     channel_id: &str,
     member: &MemberRecord,
+    own: Option<std::path::PathBuf>,
 ) -> anyhow::Result<()> {
     let child_id = member.agent_id;
     let agent = registry
@@ -102,9 +134,8 @@ fn write_member(
     let placement = AgentPlacement {
         agent_id: child_id,
         project_id: agent.project_id.clone(),
-        folder: agent
-            .folder
-            .clone()
+        folder: own
+            .or_else(|| agent.folder.clone())
             .or_else(|| registry.project_folder(child_id)),
     };
     registry.place_agents(&[placement], |agents, rows| {
@@ -148,7 +179,10 @@ pub(crate) fn add_agent(
     };
     let mut registry = lock(&hub.registry);
     let (channel_id, channel) = open_channel_run_by(store, coordinator)?;
-    let draft = registry.member_draft(definition, coordinator);
+    let mut draft = registry.member_draft(definition, coordinator);
+    if channel.placement != ChannelPlacement::Cloud {
+        give_own_folder(&registry, &mut draft, definition);
+    }
     let member = MemberRecord {
         agent_id: draft.agent_id(),
         role: MemberRole::Agent,

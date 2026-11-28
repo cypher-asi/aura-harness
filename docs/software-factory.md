@@ -97,6 +97,27 @@ How shipping is started:
 
 ## 3. No push skips the queue
 
+Pushes from `run_command` are blocked, not detected: a push that already
+reached the remote can't be taken back, and one to the target branch must
+never land at all. There are two layers (`fs_tools/cmd/push_guard.rs`):
+
+- **Typed pushes are refused.** A command whose words run `git push`,
+  however it's typed (after git's global options, in a script, through
+  `sh -c`, `env`, `xargs` or `eval`), or `gh pr merge`, is refused
+  before it runs, pointing the agent at `git_ship`. A command that only
+  names a push (`git commit -m "git push later"`) is refused too, which
+  is the safe side to err on.
+- **Scripted pushes fail.** Every command `run_command` starts gets
+  `url.aura-blocked-push://….pushInsteadOf` for `https://`, `http://`,
+  `ssh://` and `git@` through `GIT_CONFIG_COUNT`. So a push that a
+  script or a build makes goes to a URL no git transport serves, and
+  never reaches the remote. Fetch, clone and every other git command
+  are unaffected. The push tools run git themselves, without it.
+
+A deliberate evasion is still possible: a script file that clears
+`GIT_CONFIG_COUNT` and then pushes. That needs an agent working against
+its own instructions, so the guard isn't built for it.
+
 - Every successful push carries the marker. That includes `git_push`,
   `git_commit_push` and `git_ship`. Implemented in `Pushed::to_json` and
   `Shipped::to_json`.
@@ -331,12 +352,19 @@ to open a pull request. Three things keep them in the queue:
 - **The queue:** it works only in its own worktree and private refs. It
   never touches an agent's workspace or the user's checkout, except the
   clean fast-forward of a local target described above.
-- **Local channels:** members still work in the channel project's folder,
-  as before. The hub doesn't ask an agent to ship in a folder another
-  member shares, and `git_ship` calls of one folder run one at a time. Hundreds of
-  parallel agents should run in a cloud channel.
-  - Giving each local member its own git worktree is left for later.
-    `isolation::WorktreeIsolation` already provides the mechanics.
+- **Local channels:** each member works in a git worktree of its own,
+  `<data dir>/worktrees/<agent id>`, on its own branch
+  `aura/<definition>-<id8>` started at the repository's HEAD
+  (`isolation/member.rs`, set when it joins in `channels/join.rs`). Its
+  subagents work in its worktree. A project folder below the
+  repository's top maps to the same folder inside the worktree. So a
+  member's ship commits and pushes only its own work.
+  - Archiving a member removes its worktree if it holds no uncommitted
+    work, and keeps it otherwise. The branch and its commits always
+    stay. Restoring the member adds the worktree back on its branch.
+  - A project folder outside git, or a repository with no commit yet,
+    keeps the old shared folder. There the hub still doesn't ask an
+    agent to ship in a folder another member shares.
 
 ## Defaults chosen
 
