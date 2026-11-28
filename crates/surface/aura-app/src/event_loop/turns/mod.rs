@@ -245,6 +245,7 @@ async fn run(
             gate,
             routing,
         } => {
+            let tools = crate::integrations::with_tools_for(tools, &session.agent_id().to_hex());
             let turn = TurnParts {
                 agent_loop,
                 tools,

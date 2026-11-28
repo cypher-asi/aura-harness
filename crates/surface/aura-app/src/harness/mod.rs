@@ -165,7 +165,8 @@ pub(crate) fn mode_policy(
 ) -> aura_agent_kernel::PolicyConfig {
     let mut policy = aura_agent_kernel::PolicyConfig::default()
         .with_mode(permissions.mode.agent_mode())
-        .with_user_default(event_loop::modes::user_defaults(permissions, tool_names));
+        .with_user_default(event_loop::modes::user_defaults(permissions, tool_names))
+        .with_tool_classes(crate::integrations::tool_classes());
     policy.approval = permissions.approval;
     policy
 }

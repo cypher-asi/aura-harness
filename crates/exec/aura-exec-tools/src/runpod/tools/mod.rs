@@ -114,7 +114,14 @@ impl RunpodTool {
         self.op
     }
 
-    async fn run(&self, args: &Value) -> Result<Value, RunpodError> {
+    /// Run the operation with `args`: its bounded JSON answer, or why it
+    /// failed. Spending limits are checked before anything that spends
+    /// is sent.
+    ///
+    /// # Errors
+    /// Bad arguments, a refused limit, a missing or rejected key, and
+    /// Runpod or network failures.
+    pub async fn call(&self, args: &Value) -> Result<Value, RunpodError> {
         let client = &self.client;
         match self.op {
             RunpodOp::ListGpuTypes => read::list_gpu_types(client, args).await,
@@ -152,7 +159,7 @@ impl Tool for RunpodTool {
 
     async fn execute(&self, _ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
         let name = self.op.name();
-        Ok(match self.run(&args).await {
+        Ok(match self.call(&args).await {
             Ok(value) => ToolResult::success(name, render(&value)),
             Err(e) => ToolResult::failure(name, e.to_string()),
         })
