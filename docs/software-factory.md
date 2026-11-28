@@ -1,8 +1,13 @@
 # Software factory
 
 The user gives a channel requirements. The channel's members plan the
-work, build it and ship it, and a merge queue lands every push on `main`
-one at a time. Nobody has to approve a plan or press merge. Agents ask a
+work, build it and ship it, each task on its own branch, and a merge
+queue lands every push on `main` one at a time **through the branch's
+GitHub PR**: it opens or updates the PR, tests it merged with the latest
+`main`, and merges it pinned to the tested head. Nobody has to approve a
+plan or press merge, and nobody merges a PR by hand. Merging straight
+into `main` without a PR is an opt-in (`land = "push"`, below), and is
+how a repo that isn't on GitHub lands. Agents ask a
 question only when a wrong guess could cause harm, lose data or leave
 major inconsistencies.
 
@@ -11,10 +16,10 @@ flowchart LR
     A[assignment or typed task] --> P[plan mode: create_plan]
     P -- plan written --> B[build the plan]
     P -- asked a question --> P
-    B --> S[git_ship: commit, pull main, push]
+    B --> S[git_ship: commit, pull main, push the task's branch]
     S --> Q[(merge queue)]
-    Q -- merge with main, build, test pass --> M[main fast-forwards]
-    Q -- conflict or failure --> F[reason back to the agent]
+    Q -- open or update the PR, merge with main, build, test pass --> M[PR merged at the tested head]
+    Q -- conflict or failure --> F[PR stays open with a comment; reason back to the agent]
     F --> B
 ```
 
@@ -299,8 +304,10 @@ Crate: `crates/exec/aura-exec-merge-queue`.
      process group of its own, which a timeout kills whole; its output
      goes to `<git-common-dir>/aura/check.log`, and the failure reason
      keeps the end of it.
-  5. Move the target. A pushed entry of a repo on github.com lands
-     through its PR (see "Landing through the PR" below). Otherwise:
+  5. Move the target. By default a pushed entry of a repo on github.com
+     lands through its PR (see "Landing through the PR" below). Only
+     with `land = "push"`, or for a repo not on GitHub, does the queue
+     move the target itself:
      - With a remote: a non-forced `push <sha>:refs/heads/<target>`. If
        the target moved in the meantime, the push is rejected and the
        entry is retried from step 1, up to 3 times. A push cut off by its
@@ -308,10 +315,11 @@ Crate: `crates/exec/aura-exec-merge-queue`.
      - A local target: a compare-and-swap `update-ref`. If the target is
        checked out, it is moved with `merge --ff-only`, but only in a clean
        checkout; a dirty checkout fails the entry.
-- **Landing through the PR** (`integrate/pull_request.rs`, the default
-  for a pushed entry when the hub's queue has a GitHub repo for it;
-  `land = "push"` in the config file turns it off, `land =
-  "pull_request"` makes it required):
+- **Landing through the PR** (`integrate/pull_request.rs`). This is the
+  default (`land = "auto"`): every pushed entry of a repo on GitHub
+  lands through its PR. `land = "pull_request"` makes it required, so an
+  entry the queue has no GitHub repo for fails instead of being pushed;
+  `land = "push"` opts out and merges straight into the target:
   1. The branch's tip as fetched is the head that is tested: a push made
      since the entry was queued is tested too. A tip that no longer holds
      the queued commit (a force-push) fails the entry.
@@ -382,6 +390,7 @@ target = "main"                    # branch merges land on
 build = "cargo build --workspace"  # "" turns the build check off
 test = "cargo test --workspace"    # "" turns the test check off
 check_timeout_secs = 3600
+land = "auto"                      # through the PR (default); "pull_request" requires it; "push" merges straight into the target
 ```
 
 `target` is read from the file as committed on `main` (the local branch,
