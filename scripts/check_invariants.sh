@@ -124,6 +124,9 @@ run_band "§2" "append_entry_* used outside the kernel / store crates / tests" \
 #     unpushed-commit telemetry, and `read_only`, which runs only the
 #     subcommands in its `READ_ONLY` list, for the REPO tab). Declared
 #     exception in docs/invariants.md.
+#   * `crates/surface/aura-app/src/isolation/member.rs` — a local channel
+#     member's own worktree: `worktree add` / `worktree remove` / `status` /
+#     `rev-parse`, local only. Declared in docs/invariants.md.
 #   * `crates/surface/aura-app/src/isolation/mod.rs` — `git worktree add` /
 #     `worktree remove` for the workspace copies `/compare` runs in.
 #     Isolation infrastructure, not a mutating commit/push. Declared
@@ -162,7 +165,7 @@ run_band "§2" "append_entry_* used outside the kernel / store crates / tests" \
 #   * Test files.
 run_band "§1" "Command::new(\"git\") outside the GitExecutor / declared exceptions" \
     'Command::new\("git"\)' \
-    '^(crates/exec/aura-exec-tools/src/git_tool/|crates/exec/aura-exec-merge-queue/src/git\.rs|crates/agent/aura-agent/src/git\.rs|crates/surface/aura-app/src/isolation/mod\.rs|crates/surface/aura-app/src/isolation/changes/mod\.rs|crates/surface/aura-node/src/gateway/handlers/safe_workspace/git\.rs|crates/engine/aura-engine-cloud/src/delta\.rs|crates/engine/aura-engine-cloud/src/hub/pull\.rs|crates/surface/aura-node/src/gateway/handlers/cloud/patch\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/exec/aura-exec-tools/src/git_tool/|crates/exec/aura-exec-merge-queue/src/git\.rs|crates/agent/aura-agent/src/git\.rs|crates/surface/aura-app/src/isolation/mod\.rs|crates/surface/aura-app/src/isolation/member\.rs|crates/surface/aura-app/src/isolation/changes/mod\.rs|crates/surface/aura-node/src/gateway/handlers/safe_workspace/git\.rs|crates/engine/aura-engine-cloud/src/delta\.rs|crates/engine/aura-engine-cloud/src/hub/pull\.rs|crates/surface/aura-node/src/gateway/handlers/cloud/patch\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §1 — `sh -c` processes run only where a command is the point: the
 # command tool (`fs_tools/cmd/spawn.rs`, `confine.rs`), the verify runner,

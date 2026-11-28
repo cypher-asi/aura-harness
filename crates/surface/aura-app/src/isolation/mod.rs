@@ -34,6 +34,7 @@
 //!   relative; we refuse to guess what to canonicalize against.
 
 pub mod changes;
+pub(crate) mod member;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

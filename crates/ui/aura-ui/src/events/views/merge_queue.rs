@@ -67,6 +67,11 @@ pub struct MergeQueueView {
     pub target: String,
     /// Folder of the repo
     pub repo: String,
-    /// Every entry, newest first
+    /// The entries shown, newest first: every waiting and running one,
+    /// and the newest finished ones
     pub entries: Vec<MergeEntryView>,
+    /// Finished merges older than those shown, which
+    /// `UiEvent::LoadOlderMerges` asks for a page at a time
+    #[serde(default)]
+    pub older: u64,
 }

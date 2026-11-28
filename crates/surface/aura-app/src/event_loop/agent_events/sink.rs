@@ -38,6 +38,19 @@ pub(super) struct UiCommandSink {
     pub(super) turn_tokens: u64,
 }
 
+/// The chat line for a plan `name` written at `path`: built next on its
+/// own in the software factory (`auto_build`), else waiting to be told.
+pub(super) fn plan_ready_note(name: &str, path: &str, auto_build: bool) -> String {
+    if auto_build {
+        format!("Plan ready: {name} ({path}). The software factory builds it next.")
+    } else {
+        format!(
+            "Plan ready: {name} ({path}). Keep chatting to revise it, or say \"implement\" \
+             (or run /build) to build it."
+        )
+    }
+}
+
 impl UiCommandSink {
     /// Show the plan `create_plan` wrote, as its `output` names it.
     async fn plan_written(&mut self, output: &str) {
@@ -51,10 +64,7 @@ impl UiCommandSink {
         let Some(view) = plan_view(&self.plan.workspace, path) else {
             return;
         };
-        let note = format!(
-            "Plan ready: {} ({path}). Keep chatting to revise it, or say \"implement\" (or run /build) to build it.",
-            view.name
-        );
+        let note = plan_ready_note(&view.name, path, self.plan.auto_build);
         self.plan
             .tasks
             .show_plan(&self.plan.workspace, view.clone())

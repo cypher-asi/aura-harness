@@ -13,7 +13,7 @@
 //!   to the QUEUE tab of each channel on the repo.
 
 use super::observe::{self, ObservedPush};
-use super::view::queue_view;
+use super::pages::{self, Windows};
 use crate::event_loop::agent_events::AgentUi;
 use crate::event_loop::handlers::system_message;
 use crate::event_loop::notices::Notice;
@@ -43,6 +43,8 @@ pub(crate) struct QueueService {
     commands: mpsc::Sender<UiCommand>,
     quit: CancellationToken,
     queues: Mutex<HashMap<PathBuf, Arc<RepoQueue>>>,
+    /// How much history each channel's QUEUE tab shows
+    windows: Windows,
 }
 
 /// Start the merge queues: hear every push from now on, and resume the
@@ -57,19 +59,28 @@ pub(crate) fn start(
     if !observe::install(sink) {
         return;
     }
-    let service = Arc::new(QueueService {
-        hub,
-        commands,
-        quit,
-        queues: Mutex::default(),
-    });
-    // Set once, with the push sink above.
-    let _ = SERVICE.set(Arc::clone(&service));
+    let service = QueueService::new(hub, commands, quit);
+    // `observe::install` succeeded above, which happens once per process,
+    // so this is the first and only set; a second would be a bug.
+    if SERVICE.set(Arc::clone(&service)).is_err() {
+        warn!("The merge queue service was started twice; the first one stays");
+        return;
+    }
     tokio::spawn(service.run(pushes));
 }
 
 /// The running service, for the channels opened from now on.
 static SERVICE: std::sync::OnceLock<Arc<QueueService>> = std::sync::OnceLock::new();
+
+/// Channel `channel_id`'s QUEUE tab reached its end with older merges not
+/// shown: send it another page of them.
+pub(crate) fn load_older(channel_id: &str) {
+    let Some(service) = SERVICE.get() else {
+        return;
+    };
+    service.windows.widen(channel_id);
+    show_channel(channel_id);
+}
 
 /// Channel `channel_id` opened: send its QUEUE tab its repo's queue, when
 /// the repo has one.
@@ -83,6 +94,21 @@ pub(crate) fn show_channel(channel_id: &str) {
 }
 
 impl QueueService {
+    /// A service with no queue open yet.
+    pub(crate) fn new(
+        hub: Arc<AgentHub>,
+        commands: mpsc::Sender<UiCommand>,
+        quit: CancellationToken,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            hub,
+            commands,
+            quit,
+            queues: Mutex::default(),
+            windows: Windows::default(),
+        })
+    }
+
     async fn run(self: Arc<Self>, mut pushes: mpsc::UnboundedReceiver<ObservedPush>) {
         self.resume_known().await;
         loop {
@@ -112,7 +138,7 @@ impl QueueService {
 
     /// Send channel `channel_id`'s QUEUE tab its repo's queue, opening the
     /// queue when the repo has one on disk.
-    async fn show(self: &Arc<Self>, channel_id: &str) {
+    pub(crate) async fn show(self: &Arc<Self>, channel_id: &str) {
         let folders = channel_folders(&self.hub).await;
         let Some((_, folder)) = folders.into_iter().find(|(id, _)| id == channel_id) else {
             return;
@@ -175,13 +201,11 @@ impl QueueService {
         if let Some(found) = queues.get(&repo.common) {
             return Ok(Arc::clone(found));
         }
-        let top = repo.top.clone();
-        let config = tokio::task::spawn_blocking(move || QueueConfig::load(&top))
-            .await
-            .map_err(|e| e.to_string())?
-            .map_err(|e| e.to_string())?;
-        // The checks come from each entry's target commit, not this folder.
-        let integrator = Arc::new(GitIntegrator::new(repo.clone(), config.without_checks()));
+        // The target as committed on main, so every worktree agrees; the
+        // checks come from each entry's target commit, not this folder.
+        let target = aura_exec_merge_queue::resolve_target(&repo.top).await;
+        let config = QueueConfig::unchecked(&target);
+        let integrator = Arc::new(GitIntegrator::new(repo.clone(), config.clone()));
         let queue = MergeQueue::open(repo.clone(), integrator, Limits::default())
             .await
             .map_err(|e| e.to_string())?;
@@ -219,7 +243,9 @@ impl QueueService {
                 event = events.recv() => event,
             };
             match event {
-                Ok(QueueEvent::Finished(entry)) => self.send_back(&entry).await,
+                Ok(QueueEvent::Finished(entry)) => {
+                    self.send_back(&entry, &repo_queue.target).await;
+                }
                 Ok(QueueEvent::Changed) | Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => return,
             }
@@ -229,7 +255,7 @@ impl QueueService {
 
     /// Tell the agent that pushed `entry` how its merge ended: a line in
     /// its chat when it merged, a notice it acts on when it failed.
-    async fn send_back(&self, entry: &MergeEntry) {
+    async fn send_back(&self, entry: &MergeEntry, target: &str) {
         let Some(agent) = entry
             .origin
             .agent
@@ -243,7 +269,7 @@ impl QueueService {
             let notice = Notice {
                 to: agent,
                 shown: line.clone(),
-                prompt: failure_prompt(entry),
+                prompt: failure_prompt(entry, target),
                 inbox: None,
             };
             if self.hub.notices.send(notice).is_err() {
@@ -256,32 +282,28 @@ impl QueueService {
         }
     }
 
-    /// Send `repo_queue` to the QUEUE tab of every channel on its repo.
+    /// Send `repo_queue` to the QUEUE tab of every channel on its repo,
+    /// each as much of its history as the tab shows.
     async fn publish(&self, repo_queue: &RepoQueue) {
-        let repo = repo_queue.queue.repo();
-        let view = queue_view(
-            &repo_queue.target,
-            &repo.top.display().to_string(),
-            &repo_queue.queue.entries().await,
-        );
-        for channel_id in channels_on(&self.hub, &repo.common).await {
-            // A closed UI takes no more views; nothing to do then.
-            let _ = self
-                .commands
-                .send(UiCommand::SetMergeQueue {
-                    channel_id,
-                    queue: view.clone(),
-                })
-                .await;
+        let queue = &repo_queue.queue;
+        let channels = channels_on(&self.hub, &queue.repo().common).await;
+        let views = pages::views(queue, &repo_queue.target, channels, &self.windows).await;
+        for (channel_id, view) in views {
+            let command = UiCommand::SetMergeQueue {
+                channel_id,
+                queue: view,
+            };
+            if self.commands.send(command).await.is_err() {
+                // The UI closed: no tab is left to show it to.
+                return;
+            }
         }
     }
 }
 
 /// Whether `repo` has a queue file.
 async fn has_queue_file(repo: &RepoPaths) -> bool {
-    let file = repo
-        .queue_dir()
-        .join(aura_exec_merge_queue::store::QUEUE_FILE);
+    let file = repo.queue_dir().join(aura_exec_merge_queue::QUEUE_FILE);
     tokio::fs::try_exists(&file).await.unwrap_or(false)
 }
 
@@ -365,12 +387,12 @@ fn outcome_line(entry: &MergeEntry) -> String {
     }
 }
 
-/// What the agent whose merge failed is told to do.
-fn failure_prompt(entry: &MergeEntry) -> String {
+/// What the agent whose merge into `target` failed is told to do.
+fn failure_prompt(entry: &MergeEntry, target: &str) -> String {
     format!(
-        "The merge queue could not merge your push of `{}` ({}): {}\n\n\
-         Fix it in your workspace: pull main into your branch, resolve any conflicts, make the \
-         build and tests pass, then call git_ship again. It goes back into the merge queue.",
+        "The merge queue could not merge your push of `{}` ({}) into {target}: {}\n\n\
+         Fix it in your workspace: pull {target} into your branch, resolve any conflicts, make \
+         the build and tests pass, then call git_ship again. It goes back into the merge queue.",
         entry.branch,
         entry.short_head(),
         entry.detail.as_deref().unwrap_or("no reason given")
@@ -410,10 +432,12 @@ mod tests {
 
     #[test]
     fn a_failure_tells_the_agent_why_and_how_to_ship_again() {
-        let prompt = failure_prompt(&failed_entry());
+        let prompt = failure_prompt(&failed_entry(), "trunk");
         assert!(prompt.contains("aura/x"), "{prompt}");
         assert!(prompt.contains("exit 101"), "{prompt}");
         assert!(prompt.contains("git_ship"), "{prompt}");
+        assert!(prompt.contains("pull trunk into your branch"), "{prompt}");
+        assert!(!prompt.contains("main"), "{prompt}");
         assert!(outcome_line(&failed_entry()).contains("was not merged"));
     }
 

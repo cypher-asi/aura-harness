@@ -224,6 +224,7 @@ pub(crate) async fn handle_archive_agent(state: &mut LoopState<'_>, agent_hex: &
     match archived {
         Ok(()) => {
             info!(%agent_id, %name, stopped = stopped.len(), "Archived agent");
+            super::worktrees::release(&state.hub, &subtree).await;
             after_list_shrank(state, &subtree).await;
             let message = if stopped.is_empty() {
                 format!("Archived {name}")
@@ -244,10 +245,15 @@ pub(crate) async fn handle_restore_agent(state: &mut LoopState<'_>, agent_hex: &
     let restored = lock(&state.hub.registry).restore(agent_id);
     match restored {
         Ok(()) => {
-            let name = lock(&state.hub.registry)
-                .find(agent_id)
-                .map(|a| a.display_name().into_owned())
-                .unwrap_or_default();
+            let (name, subtree) = {
+                let registry = lock(&state.hub.registry);
+                let name = registry
+                    .find(agent_id)
+                    .map(|a| a.display_name().into_owned())
+                    .unwrap_or_default();
+                (name, registry.subtree(agent_id))
+            };
+            super::worktrees::restore(&state.hub, &subtree).await;
             info!(%agent_id, %name, "Restored agent");
             activate_agent(state, agent_id, Chat::Reload).await;
             show_success(state, format!("Restored {name}")).await;
