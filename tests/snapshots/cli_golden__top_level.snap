@@ -7,21 +7,22 @@ AURA CLI - Autonomous Universal Reasoning Architecture
 Usage: aura [OPTIONS] [COMMAND]
 
 Commands:
-  desktop  Run the agent in the desktop window (default with no subcommand)
-  run      Run the agent in the terminal, or as a server with `--ui none`
-  login    Sign in to zOS, or link a Claude / ChatGPT plan
-  logout   Sign out of zOS, or unlink a plan
-  whoami   Show the zOS sign-in and linked plans
-  auth     Manage linked plans
-  hello    Print "Hello, World!" and exit (Spec 01)
-  migrate  Phase 4a stub: migrate aura state (no-op today)
-  plugins  Manage declarative plugins (Phase 4b)
-  runs     Inspect, compare and label recorded runs (`AURA_HOME/runs/`)
-  dataset  Export recorded runs as training data
-  eval     Run coding eval suites and compare harness arms
-  gate     Check Gate's verdicts against what happened
-  cloud    Run agents on their own boxd cloud machines
-  help     Print this message or the help of the given subcommand(s)
+  desktop    Run the agent in the desktop window (default with no subcommand)
+  run        Run the agent in the terminal, or as a server with `--ui none`
+  login      Sign in to zOS, or link a Claude / ChatGPT plan
+  logout     Sign out of zOS, or unlink a plan
+  whoami     Show the zOS sign-in and linked plans
+  auth       Manage linked plans
+  hello      Print "Hello, World!" and exit (Spec 01)
+  migrate    Phase 4a stub: migrate aura state (no-op today)
+  plugins    Manage declarative plugins (Phase 4b)
+  runs       Inspect, compare and label recorded runs (`AURA_HOME/runs/`)
+  dataset    Export recorded runs as training data
+  eval       Run coding eval suites and compare harness arms
+  gate       Check Gate's verdicts against what happened
+  cloud      Run agents on their own boxd cloud machines
+  changelog  Show the `changelog.d/` fragments as CHANGELOG.md entries; `--write` puts them in, for a release
+  help       Print this message or the help of the given subcommand(s)
 
 Options:
       --mode <MODE>
