@@ -3,7 +3,7 @@
 
 use crate::event_loop::subagents::AgentHub;
 use aura_core_types::AgentId;
-use aura_exec_merge_queue::forge::{Forge, GhForge, RepoSlug};
+use aura_exec_merge_queue::forge::{Forge, GhForge};
 use aura_exec_merge_queue::RepoPaths;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -13,20 +13,7 @@ use tracing::info;
 /// (its own sign-in, or `GH_TOKEN`/`GITHUB_TOKEN`) when `origin` is on
 /// github.com; `None` lands entries by push.
 pub(super) async fn forge_of(top: &Path) -> Option<Arc<dyn Forge>> {
-    let mut command = tokio::process::Command::new("git");
-    command
-        .args(["remote", "get-url", "origin"])
-        .current_dir(top)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(std::process::Stdio::null())
-        .kill_on_drop(true);
-    let timeout = std::time::Duration::from_secs(15);
-    let output = tokio::time::timeout(timeout, command.output())
-        .await
-        .ok()?
-        .ok()?;
-    let url = String::from_utf8_lossy(&output.stdout);
-    let slug = RepoSlug::from_remote_url(&url)?;
+    let slug = aura_exec_merge_queue::forge::origin_slug(top).await?;
     info!(repo = %slug, "The merge queue lands this repo through its pull requests");
     let forge = GhForge::new(slug).with_token_source(Arc::new(github_token));
     Some(Arc::new(forge))

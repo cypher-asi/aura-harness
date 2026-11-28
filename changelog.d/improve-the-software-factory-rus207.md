@@ -76,3 +76,16 @@
 
 - The QUEUE tab shows a broken main above every merge, and a failed
   merge's failing tests and their diff first, then its PR.
+
+### The merge queue lands exactly the commit it tested
+
+##### Fixed
+
+- A PR now lands as the merge commit the queue built and tested, pushed
+  to main without force, and GitHub marks the PR merged. Before, the queue
+  asked GitHub to merge the PR, which made a new merge commit on whatever
+  main was by then, one no check had run on.
+- A PR closed by hand while the queue tests it fails its entry and keeps
+  its branch; before, the branch was deleted.
+- A failing test counts as flaky only when the whole test command passes
+  when run again, and the PR gets a comment naming the flaky tests.

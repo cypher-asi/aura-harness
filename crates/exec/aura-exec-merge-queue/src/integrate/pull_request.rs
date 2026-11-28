@@ -28,7 +28,7 @@
 
 use super::{GitIntegrator, Step, Stop, ENTRY_REF};
 use crate::entry::{short_sha, MergeEntry};
-use crate::forge::{CheckState, Forge, ForgeError, MergeOutcome, PrRequest, PrState, PullRequest};
+use crate::forge::{CheckState, Forge, ForgeError, PrRequest, PrState, PullRequest};
 use crate::git;
 use crate::report::{Failure, FailureKind, Hold, HoldKind};
 use crate::state::RunOutcome;
@@ -92,64 +92,88 @@ impl GitIntegrator {
             head: head.to_string(),
             ..entry.clone()
         };
-        let Some((landing, how)) = self.merge(&tested, target).await? else {
+        if self.on_target(head, target).await? {
             return self.already_landed(forge, pr, target).await;
-        };
-        let checked = self.check(target).await?;
-        if landing != head {
-            self.push_to_branch(entry, &landing).await?;
         }
+        // Always a merge commit, the target first, even for a branch based
+        // on the target: it is what the checks run on, what the PR's
+        // branch moves to, and what the target moves to, unchanged.
+        let (landing, how) = self.merge_commit(&tested, target).await?;
+        let checked = self.check(target).await?;
+        self.push_to_branch(entry, &landing).await?;
         self.target_unchanged(entry, target).await?;
         status(forge, &landing, CheckState::Success, &checked).await;
+        if checked.contains("flaky") {
+            let said = format!("The merge queue merged this with flaky tests: {checked}.");
+            if let Err(error) = forge.comment(pr.pr.number, &said).await {
+                tracing::warn!(%error, "Could not name the flaky tests on the PR");
+            }
+        }
         let note = format!("{how}; {checked}");
-        self.merge_pr(forge, entry, pr, &landing, &note).await
+        self.merge_pr(forge, entry, pr, &landing, target, &note)
+            .await
     }
 
-    /// Have the forge merge `pr` at the tested `landing`, which `note`
-    /// says how it was made and checked.
+    /// Whether `head` is on the target's tip `target` already.
+    async fn on_target(&self, head: &str, target: &str) -> Step<bool> {
+        let landed = crate::git::run(
+            &self.repo.worktree(),
+            &["merge-base", "--is-ancestor", head, target],
+            self.config.git_timeout,
+        )
+        .await?;
+        Ok(landed.ok)
+    }
+
+    /// Land `pr` at the tested `landing` (a merge commit onto the
+    /// target's tip `target`, now also the PR's head): a non-forced push
+    /// of exactly that commit to the target, so the target is only ever
+    /// a commit the checks ran on, and GitHub marks the PR merged as its
+    /// head is now on the target. `note` says how it was made and checked.
+    ///
+    /// The PR is read first: a closed one fails the entry and keeps its
+    /// branch; a head that moved is tested again. A push someone makes
+    /// after that read can't reach the target: what lands is `landing`.
     async fn merge_pr(
         &self,
         forge: &dyn Forge,
         entry: &MergeEntry,
         pr: &PullRequest,
         landing: &str,
+        target: &str,
         note: &str,
     ) -> Step<RunOutcome> {
         let number = pr.pr.number;
-        match forge.merge(number, landing).await.map_err(forge_stop)? {
-            MergeOutcome::Merged { sha } => {
-                self.delete_branch(entry, landing).await;
-                Ok(RunOutcome::Merged {
-                    merged: sha,
-                    note: format!(
-                        "PR #{number} merged at the tested head {}; {note}",
-                        short_sha(landing)
-                    ),
-                    pr: Some(pr.pr.clone()),
-                })
-            }
-            MergeOutcome::HeadMoved { now } => {
-                tracing::info!(entry = %entry.id, now = %short_sha(&now), "The PR's head moved; testing it again");
-                Err(Stop::Moved)
-            }
-            MergeOutcome::Refused(why) => {
-                if forge
-                    .pr(number)
-                    .await
-                    .is_ok_and(|now| now.state == PrState::Closed)
-                {
-                    self.delete_branch(entry, landing).await;
-                    return Err(Stop::fail(
-                        FailureKind::Refused,
-                        format!("PR #{number} was closed without merging; its branch is deleted"),
-                    ));
-                }
-                Err(Stop::fail(
+        let now = forge.pr(number).await.map_err(forge_stop)?;
+        match now.state {
+            PrState::Closed => {
+                return Err(Stop::fail(
                     FailureKind::Refused,
-                    format!("GitHub would not merge PR #{number}: {why}"),
+                    format!("PR #{number} was closed without merging; its branch is kept"),
                 ))
             }
+            PrState::Merged => {
+                return Err(Stop::fail(
+                    FailureKind::Refused,
+                    format!("PR #{number} was merged outside the queue"),
+                ))
+            }
+            PrState::Open if now.head != landing => {
+                tracing::info!(entry = %entry.id, now = %short_sha(&now.head), "The PR's head moved; testing it again");
+                return Err(Stop::Moved);
+            }
+            PrState::Open => {}
         }
+        self.land(entry, landing, target).await?;
+        self.delete_branch(entry, landing).await;
+        Ok(RunOutcome::Merged {
+            merged: landing.to_string(),
+            note: format!(
+                "PR #{number} merged as the tested {}; {note}",
+                short_sha(landing)
+            ),
+            pr: Some(pr.pr.clone()),
+        })
     }
 
     /// The entry's head is already on the target: done, through the PR
