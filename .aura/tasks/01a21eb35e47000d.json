@@ -1,0 +1,11 @@
+{
+  "id": "01a21eb35e47000d",
+  "title": "links here should not be blue, they should be gray, and when you mouseover should be underline. THis should be the same…",
+  "state": "completed",
+  "agent_id": "8605834d897b6ab1e305966bdc3268dbc715dc301591fbfdf4c986b0b83f2e51",
+  "agent_name": "Agent 1720",
+  "items": [],
+  "summary": "Let me check the pointer test to find how chat links are detected and rendered.",
+  "updated_ms": 1795811547060,
+  "created_ms": 1795811401287
+}

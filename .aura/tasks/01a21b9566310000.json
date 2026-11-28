@@ -1,0 +1,11 @@
+{
+  "id": "01a21b9566310000",
+  "title": "remember last channel you were selected on when you open app, as well as agent selected in projects",
+  "state": "completed",
+  "agent_id": "49991d2b19ee2a9bdfc3d614920a410240d6510d5002b60b924af7b80f351226",
+  "agent_name": "coordinator",
+  "items": [],
+  "summary": "RUS196 is done: on launch the app now reopens the last channel and the last agent you had in projects, and falls back to the normal screen if either is gone. Tests pass, but nobody has tried a real close and reopen yet, and nothing is committed. Something else changed in the workspace since FEN6 looked: the chat-links work has been partly committed (\"Open links in the chat on click\"), and 12 file…",
+  "updated_ms": 1795760918167,
+  "created_ms": 1795759105585
+}

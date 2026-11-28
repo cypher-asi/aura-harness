@@ -1,0 +1,11 @@
+{
+  "id": "01a21ea7d5a00006",
+  "title": "commit anything outstanding",
+  "state": "completed",
+  "agent_id": "49991d2b19ee2a9bdfc3d614920a410240d6510d5002b60b924af7b80f351226",
+  "agent_name": "coordinator",
+  "items": [],
+  "summary": "RUS196 is committing everything that's still uncommitted and pushing it to GitHub as a PR, kept apart from the Bench PR #52. Its remember-selection change goes in one commit and the other person's uncommitted work in a separate one. It will check the build and tests first and tell me if that other work breaks anything. I'll post the commits and the PR link here when they're up.",
+  "updated_ms": 1795810660251,
+  "created_ms": 1795810645408
+}

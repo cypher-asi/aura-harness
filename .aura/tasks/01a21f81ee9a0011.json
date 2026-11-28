@@ -1,0 +1,43 @@
+{
+  "id": "01a21f81ee9a0011",
+  "title": "it doesn't make sense that it didn't recieve any reviews, it said this:",
+  "state": "completed",
+  "agent_id": "49991d2b19ee2a9bdfc3d614920a410240d6510d5002b60b924af7b80f351226",
+  "agent_name": "coordinator",
+  "items": [
+    {
+      "content": "Software factory: auto plan then execute, auto commit/pull/push, merge queue, Queue tab (one agent owns plan and build)",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Auto plan then auto execute on every agent spawned or resumed from a channel",
+      "state": "cancelled"
+    },
+    {
+      "content": "On task done: commit, pull main, push into the merge queue",
+      "state": "cancelled"
+    },
+    {
+      "content": "Merge queue engine that integrates merges one by one",
+      "state": "cancelled"
+    },
+    {
+      "content": "Queue tab next to Info in the channels app",
+      "state": "cancelled"
+    },
+    {
+      "content": "Review the whole factory flow end to end",
+      "state": "completed",
+      "assignee": "reviewer"
+    },
+    {
+      "content": "Find why REV69's review reached the coordinator as 'stopped' with no findings",
+      "state": "completed",
+      "assignee": "explorer"
+    }
+  ],
+  "summary": "Yes, the harness has a bug, and EXP71 found it. When a member's turn gets cancelled, I get only \"stopped\", the work it already did is dropped, and nothing it does afterwards reports back to me. Here the cancel most likely came from pressing Enter a second time after typing into REV69's chat, which interrupts the running turn to send your message right away. The fix: an interruption by you shouldn…",
+  "updated_ms": 1795825098384,
+  "created_ms": 1795824938650
+}

@@ -1,0 +1,16 @@
+{
+  "id": "01a21ea0ef6f0001",
+  "title": "commit and push",
+  "state": "cancelled",
+  "agent_id": "565a362f42a871aadaca8106bac349179635179e74a078c2dfa8d571510ec549",
+  "agent_name": "coordinator",
+  "items": [
+    {
+      "content": "Commit any remaining channel-work changes (ours only) and push main to origin",
+      "state": "pending",
+      "assignee": "RUS192"
+    }
+  ],
+  "updated_ms": 1795810210725,
+  "created_ms": 1795810193263
+}

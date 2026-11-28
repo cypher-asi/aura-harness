@@ -1,0 +1,38 @@
+{
+  "id": "01a21f035c130010",
+  "title": "what is status on rev69",
+  "state": "open",
+  "agent_id": "49991d2b19ee2a9bdfc3d614920a410240d6510d5002b60b924af7b80f351226",
+  "agent_name": "coordinator",
+  "items": [
+    {
+      "content": "Software factory: auto plan then execute, auto commit/pull/push, merge queue, Queue tab (one agent owns plan and build)",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Auto plan then auto execute on every agent spawned or resumed from a channel",
+      "state": "cancelled"
+    },
+    {
+      "content": "On task done: commit, pull main, push into the merge queue",
+      "state": "cancelled"
+    },
+    {
+      "content": "Merge queue engine that integrates merges one by one",
+      "state": "cancelled"
+    },
+    {
+      "content": "Queue tab next to Info in the channels app",
+      "state": "cancelled"
+    },
+    {
+      "content": "Review the whole factory flow end to end",
+      "state": "pending",
+      "assignee": "reviewer"
+    }
+  ],
+  "summary": "REV69 stopped before it finished reviewing PR #56. It sent no findings, and the report doesn't say what stopped it. PR #56 changes how main gets updated, so I don't think it should merge until a review is done. Should I restart the review? If you stopped it on purpose, tell me and I'll leave it.",
+  "updated_ms": 1795816797634,
+  "created_ms": 1795816643603
+}

@@ -1,0 +1,37 @@
+{
+  "id": "01a21eb26cf5000c",
+  "title": "We need to improve how cloud agents work to create a software factory.",
+  "state": "open",
+  "agent_id": "49991d2b19ee2a9bdfc3d614920a410240d6510d5002b60b924af7b80f351226",
+  "agent_name": "coordinator",
+  "items": [
+    {
+      "content": "Map current cloud-agent spawn, plan mode and git flow; design the software factory (auto plan, auto execute, auto commit/pull/push, merge queue)",
+      "state": "pending",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Auto plan then auto execute on every agent spawned or resumed from a channel",
+      "state": "pending"
+    },
+    {
+      "content": "On task done: commit, pull main, push into the merge queue",
+      "state": "pending"
+    },
+    {
+      "content": "Merge queue engine that integrates merges one by one",
+      "state": "pending"
+    },
+    {
+      "content": "Queue tab next to Info in the channels app",
+      "state": "pending"
+    },
+    {
+      "content": "Review the whole factory flow end to end",
+      "state": "pending"
+    }
+  ],
+  "summary": "Outstanding work is committed and pushed as PR #53 (https://github.com/cypher-asi/aura-harness/pull/53), and build and tests pass. The 12 files weren't chat-links: they were three cloud and streaming fixes that still have leftover switches back to the old behaviour (OLD_NODE, OLD_CLOUD_TURN, OLD_POLICY), flagged in the PR for review. I can't start the software factory work: plan mode is back on a…",
+  "updated_ms": 1795811365026,
+  "created_ms": 1795811339509
+}
