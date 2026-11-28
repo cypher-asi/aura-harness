@@ -263,9 +263,24 @@ impl App {
         }
     }
 
-    /// The wheel over the input box or a panel, or a press on a panel.
+    /// A left press on the input box focuses the Chat panel, so its
+    /// border lights up and keys go to the input. Returns whether the
+    /// press was on the box.
+    fn press_input(&mut self, mouse: MouseEvent) -> bool {
+        let pressed = mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && contains(self.areas.input, mouse.column, mouse.row);
+        if !pressed {
+            return false;
+        }
+        self.focus = PanelFocus::Chat;
+        self.clear_selection();
+        true
+    }
+
+    /// The wheel over the input box or a panel, or a press on the input
+    /// box or a panel.
     fn mouse_on_panel(&mut self, mouse: MouseEvent) {
-        if self.scroll_input(mouse) {
+        if self.scroll_input(mouse) || self.press_input(mouse) {
             self.hover = self.hover_target(mouse.column, mouse.row);
             return;
         }
