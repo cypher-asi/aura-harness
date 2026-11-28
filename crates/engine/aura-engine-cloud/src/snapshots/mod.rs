@@ -27,10 +27,13 @@ mod build;
 mod ensure;
 mod fingerprint;
 mod index;
+mod source;
 
 pub use self::binary::{binary_digest, cloud_binary_path, CHECK_BINARY, CHECK_PROTOCOL};
 pub use self::build::uploading;
-pub use self::fingerprint::{base_fingerprint, default_build_command, project_fingerprint};
+pub use self::fingerprint::{
+    base_fingerprint, default_build_command, project_fingerprint, project_fingerprint_at,
+};
 pub use self::index::{SnapshotIndex, SnapshotRecord};
 
 use std::collections::HashMap;
@@ -151,6 +154,9 @@ pub struct SnapshotBuilder {
     /// needs a snapshot another start is building waits for that build
     /// and reuses it, so agents launched together trigger one build.
     gates: parking_lot::Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// Each project's last build that failed for the code, refused again
+    /// at the same commit ([`source`]).
+    failed: parking_lot::Mutex<HashMap<String, source::FailedBuild>>,
 }
 
 impl SnapshotBuilder {
@@ -182,6 +188,7 @@ impl SnapshotBuilder {
             home,
             index: Mutex::new(None),
             gates: parking_lot::Mutex::default(),
+            failed: parking_lot::Mutex::default(),
         }
     }
 

@@ -170,7 +170,7 @@ pub fn clone_snapshot(commit: &str, upstream: Option<&str>) -> CloudResult<Strin
     Ok(format!(
         "set -e; mkdir -p \"$AURA_WORKSPACE\"; cd \"$AURA_WORKSPACE\"; \
          git clone -q --no-checkout {SNAPSHOT_BUNDLE} .; git remote remove origin; \
-         git checkout -q --detach {commit}; {upstream}\
+         {upstream}git checkout -q --detach {commit}; \
          git update-ref {HUB_HEAD_REF} {commit}; rm -f {SNAPSHOT_BUNDLE}"
     ))
 }

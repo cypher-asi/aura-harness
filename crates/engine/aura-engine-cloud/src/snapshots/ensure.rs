@@ -8,13 +8,14 @@ use aura_core_types::time::now_ms;
 
 use super::binary::LocalBinary;
 use super::build::{Build, Step};
+use super::source::fingerprint_at;
 use super::{
-    base_fingerprint, base_packages, default_build_command, project_fingerprint, AuraBinary,
-    SnapshotBuilder, SnapshotRecord, SHORT_STEP_TIMEOUT, STEP_TIMEOUT,
+    base_fingerprint, base_packages, default_build_command, AuraBinary, SnapshotBuilder,
+    SnapshotRecord, SHORT_STEP_TIMEOUT, STEP_TIMEOUT,
 };
 use crate::boot::{human_bytes, BootReporter, BootStage};
 use crate::boxd::CALL_TIMEOUT;
-use crate::delta::{self, HistoryBundle};
+use crate::delta::{self, BuildSource, HistoryBundle};
 use crate::error::{CloudError, CloudResult};
 use crate::exec_errors::is_transient;
 use crate::names::{self, BASE_SNAPSHOT};
@@ -201,7 +202,9 @@ impl SnapshotBuilder {
         let _building = wait_for(&gate, &names::project_snapshot(project_id), boot).await;
         let command =
             build_command.map_or_else(|| default_build_command(project_dir), str::to_string);
-        let fingerprint = fingerprint_project(project_dir, &base.fingerprint, &command).await?;
+        let from = self.build_from(project_dir, boot).await?;
+        let fingerprint =
+            fingerprint_at(project_dir, &from.commit, &base.fingerprint, &command).await?;
         let current = self.record(project_id).await;
         if !force && self.usable(current.as_ref(), &fingerprint, boot).await? {
             if let Some(record) = current {
@@ -212,6 +215,7 @@ impl SnapshotBuilder {
                 return Ok(record);
             }
         }
+        self.refuse_failed_again(project_id, &fingerprint, &from.commit, force)?;
         boot.fact(
             "snapshot",
             format!(
@@ -221,14 +225,16 @@ impl SnapshotBuilder {
             ),
         );
         boot.fact("build command", command.clone());
-        let history = bundle_history(project_dir, boot).await?;
+        let history = bundle_history(project_dir, &from, boot).await?;
         let source = ProjectSource {
             base: base.name,
-            fingerprint,
+            fingerprint: fingerprint.clone(),
             history,
             command,
         };
-        self.build_project_retried(project_id, source, boot).await
+        let outcome = self.build_project_retried(project_id, source, boot).await;
+        self.remember_build(project_id, (&fingerprint, &from.commit), &outcome);
+        outcome
     }
 
     /// [`Self::build_project`], once more on a fresh builder when the
@@ -322,26 +328,21 @@ fn base_steps(local: Option<LocalBinary>, home: &Path) -> CloudResult<Vec<Step>>
     Ok(steps)
 }
 
-/// [`project_fingerprint`], read off the async runtime.
-async fn fingerprint_project(dir: &Path, base: &str, command: &str) -> CloudResult<String> {
-    let dir = dir.to_path_buf();
-    let base = base.to_string();
-    let command = command.to_string();
-    tokio::task::spawn_blocking(move || project_fingerprint(&dir, &base, &command))
-        .await
-        .map_err(|err| CloudError::io("fingerprint project", std::io::Error::other(err)))
-}
-
-/// The project's history at HEAD as a git bundle, made off the async
+/// The project's history at `from` as a git bundle, made off the async
 /// runtime and shown on `boot`.
-async fn bundle_history(dir: &Path, boot: &BootReporter) -> CloudResult<HistoryBundle> {
+async fn bundle_history(
+    dir: &Path,
+    from: &BuildSource,
+    boot: &BootReporter,
+) -> CloudResult<HistoryBundle> {
     let dir = dir.to_path_buf();
+    let from = from.clone();
     let history = boot
         .wait(
             BootStage::Snapshot,
-            "bundling the project's history at HEAD",
+            "bundling the project's history",
             None,
-            tokio::task::spawn_blocking(move || delta::bundle_head(&dir)),
+            tokio::task::spawn_blocking(move || delta::bundle_source(&dir, &from)),
         )
         .await
         .map_err(|err| CloudError::io("bundle project", std::io::Error::other(err)))??;

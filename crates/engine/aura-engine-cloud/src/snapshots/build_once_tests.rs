@@ -91,3 +91,42 @@ async fn a_compile_error_is_not_tried_again_and_is_quoted() {
         "{err}"
     );
 }
+
+#[tokio::test]
+async fn a_commit_that_failed_to_build_is_not_built_again_until_it_moves() {
+    let dir = project();
+    let home = tempfile::tempdir().expect("home");
+    let compile = "error[E0063]: missing field `run_started` in initializer of `TurnExtras`\n";
+    let (fake, builds) = failing_build(compile, 1);
+    let (builder, _) = builder(&fake, home.path());
+    builder
+        .ensure_project("p1", dir.path(), None, false)
+        .await
+        .expect_err("the compile error");
+    let again = builder
+        .ensure_project("p1", dir.path(), None, false)
+        .await
+        .expect_err("refused");
+    assert!(
+        matches!(&again, crate::CloudError::BuildFailedBefore { error, .. } if error.contains("run_started")),
+        "{again}"
+    );
+    assert_eq!(builds.load(Ordering::SeqCst), 1, "no second builder");
+
+    // A new commit builds again.
+    std::fs::write(dir.path().join("fix.rs"), "fixed").expect("write");
+    for args in [&["add", "-A"][..], &["commit", "-qm", "fix"][..]] {
+        assert!(std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(args)
+            .status()
+            .expect("git")
+            .success());
+    }
+    builder
+        .ensure_project("p1", dir.path(), None, false)
+        .await
+        .expect("built at the fix");
+    assert_eq!(builds.load(Ordering::SeqCst), 2);
+}
