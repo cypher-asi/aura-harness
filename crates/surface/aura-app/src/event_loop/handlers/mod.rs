@@ -106,6 +106,7 @@ fn turn_plan(session: &AgentSession) -> TurnPlan {
             .building_plan
             .then(|| session.active_plan.clone())
             .flatten(),
+        build: session.plan_build,
     }
 }
 

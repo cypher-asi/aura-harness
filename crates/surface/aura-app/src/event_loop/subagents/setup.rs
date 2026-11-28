@@ -1,5 +1,6 @@
 use super::*;
 use crate::cloud::hub::TurnAsk;
+use aura_context_prompts::system::sections::plan_mode;
 
 /// Said after a cloud member's `<channel>` block: its machine finds the
 /// agents of its channel by id alone.
@@ -278,6 +279,7 @@ impl AgentHub {
         let definition = session.definition.clone();
         let (mut config, tools) = self.agent_turn(agent_id, definition.as_deref(), &workspace);
         session.lead = false;
+        session.plan_build = self.plan_build(agent_id);
         let lead = self
             .leads(agent_id, definition.as_deref())
             .map(|enforced| LeadProfile { enforced });
@@ -314,9 +316,20 @@ impl AgentHub {
             config.system_prompt.push_str("\n\n");
             config
                 .system_prompt
-                .push_str(&aura_context_prompts::system::sections::plan_mode::render());
+                .push_str(&plan_mode::render(self.plan_build(agent_id)));
         }
         (config, tools)
+    }
+
+    /// How a plan `agent_id` writes in plan mode gets built: right after
+    /// the turn while the software factory plans its task, else when the
+    /// user asks.
+    pub(crate) fn plan_build(&self, agent_id: AgentId) -> plan_mode::Build {
+        if self.factory_flows.plans(agent_id) {
+            plan_mode::Build::RightAway
+        } else {
+            plan_mode::Build::WhenAsked
+        }
     }
 
     /// What a turn of `agent_id` on its cloud machine adds to the node's
@@ -344,7 +357,7 @@ impl AgentHub {
         }
         if self.mode_of(agent_id) == PermissionMode::Plan {
             prompt.push_str("\n\n");
-            prompt.push_str(&aura_context_prompts::system::sections::plan_mode::render());
+            prompt.push_str(&plan_mode::render(self.plan_build(agent_id)));
         }
         if let Some(channel) = crate::event_loop::channels::channel_prompt(self, agent_id) {
             prompt.push_str("\n\n");

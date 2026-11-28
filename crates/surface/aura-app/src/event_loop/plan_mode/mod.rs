@@ -14,7 +14,9 @@
 //! The plan-ready note invites the user to say "implement", so a typed
 //! message that is only that (see [`asks_to_build`]) builds the agent's
 //! plan exactly as `/build` does, as long as it has one it is not already
-//! building.
+//! building. A plan the software factory has built right after its turn
+//! ([`Build::RightAway`]), a channel member's, invites no one: the model
+//! is told not to ask, and the note says the build comes next.
 //!
 //! An agent's plan is its context, in plan mode or not, for as long as
 //! the plan is open ([`open_plan`]: a todo is still pending or in
@@ -56,6 +58,8 @@ use aura_ui::{PermissionMode, UiCommand};
 use std::path::Path;
 use std::time::SystemTime;
 use tracing::{info, warn};
+
+pub(crate) use aura_context_prompts::system::sections::plan_mode::Build;
 
 /// The plan at `path` (relative to `workspace`) as the UI shows it, or
 /// `None` when it can't be read.
@@ -279,7 +283,12 @@ pub(super) fn asks_to_build(prompt: &Prompt, active_plan: Option<&str>, building
     if !prompt.mentions || !prompt.images.is_empty() || building || active_plan.is_none() {
         return false;
     }
-    let text = prompt.text.trim().to_lowercase();
+    is_build_phrase(&prompt.text)
+}
+
+/// Whether `text` is only one of the [`BUILD_PHRASES`].
+pub(super) fn is_build_phrase(text: &str) -> bool {
+    let text = text.trim().to_lowercase();
     let text = text.trim_end_matches(['.', '!']).trim_end();
     BUILD_PHRASES.contains(&text)
 }

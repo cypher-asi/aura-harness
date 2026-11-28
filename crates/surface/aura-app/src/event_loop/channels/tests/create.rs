@@ -296,9 +296,15 @@ async fn a_members_cloud_turns_bring_its_prompt_and_turn_off_what_its_agent_leav
         member,
         Permissions::new(PermissionMode::Plan, ApprovalLevel::Strict),
     );
-    let planning = fixture.hub.cloud_turn(member).system_prompt;
-    let plan_section = aura_context_prompts::system::sections::plan_mode::render();
-    assert!(planning.is_some_and(|prompt| prompt.contains(plan_section.trim())));
+    use aura_context_prompts::system::sections::plan_mode::{render, Build};
+    let planning = fixture.hub.cloud_turn(member).system_prompt.unwrap();
+    assert!(planning.contains(&render(Build::WhenAsked)), "{planning}");
+    // While its task plans, the plan is built right after the turn instead.
+    fixture.hub.factory_flows.assign(member);
+    fixture.hub.factory_flows.begin(member);
+    let planning = fixture.hub.cloud_turn(member).system_prompt.unwrap();
+    assert!(planning.contains(&render(Build::RightAway)), "{planning}");
+    assert!(!planning.contains("say \"implement\""), "{planning}");
 
     // An agent of the user's own with none of it leaves the node be.
     let own = lock(&fixture.hub.registry).active().agent_id();

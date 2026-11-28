@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! assignment ─> Assigned ─its work starts─> Planning ─plan written─> Building
-//!                                              │                        │
+//! or typed task                                │                        │
 //!                      asked instead (no plan) ┘          done, pushed? ┤
 //!                                                     yes: done   no: Shipping
 //!                                                                 (asked to git_ship)
@@ -42,6 +42,16 @@ pub(crate) struct TurnEnd<'a> {
     pub wrote_plan: Option<&'a str>,
     /// The turn pushed its work (a push tool succeeded in it)
     pub shipped: bool,
+}
+
+/// A turn that plans its agent's task ([`Flows::begin`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Planning {
+    /// The task's planning starts with this turn.
+    Starts,
+    /// An earlier turn of the task asked a question instead of planning;
+    /// this one plans on.
+    GoesOn,
 }
 
 /// What the loop does after the turn.
@@ -125,17 +135,23 @@ impl Flows {
     }
 
     /// `agent`'s work starts: a task waiting for it plans now. Returns
-    /// whether this turn plans.
-    pub(crate) fn begin(&self, agent: AgentId) -> bool {
+    /// how this turn plans, or `None` when it doesn't.
+    pub(crate) fn begin(&self, agent: AgentId) -> Option<Planning> {
         let mut stages = self.stages();
         match stages.get_mut(&agent) {
             Some(stage @ Stage::Assigned) => {
                 *stage = Stage::Planning;
-                true
+                Some(Planning::Starts)
             }
-            Some(Stage::Planning) => true,
-            _ => false,
+            Some(Stage::Planning) => Some(Planning::GoesOn),
+            _ => None,
         }
+    }
+
+    /// Whether `agent`'s task is being planned: the plan its turn writes
+    /// is built right after, unasked.
+    pub(crate) fn plans(&self, agent: AgentId) -> bool {
+        self.stage(agent) == Some(Stage::Planning)
     }
 
     /// `agent`'s stage, if it is in the flow.

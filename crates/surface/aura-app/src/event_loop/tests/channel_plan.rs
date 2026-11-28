@@ -1,8 +1,12 @@
 //! `/plan` in a channel's chat: a new member of the channel plans, in plan
-//! mode, in a chat of its own the session puts on screen, and the
-//! coordinator never enters plan mode.
+//! mode, in a chat of its own the session puts on screen, then builds and
+//! ships the plan without being asked, and the coordinator never enters
+//! plan mode.
 
 use super::*;
+use crate::event_loop::factory::flow::Stage;
+use crate::event_loop::factory::hooks::{PLANNING_FIRST, SHIP_PROMPT};
+use aura_context_prompts::system::sections::plan_mode::{render, Build};
 use aura_ui::events::{ChannelSummary, MessageRole};
 use aura_ui::host::PlacementView;
 
@@ -59,6 +63,32 @@ fn lists_member(channels: &[ChannelSummary], hex: &str) -> bool {
         .any(|channel| channel.members.iter().any(|member| member.id == hex))
 }
 
+/// The lines `sent` shows in `agent`'s chat from the harness.
+fn notes_to(sent: &[(Option<String>, UiCommand)], agent: AgentId) -> Vec<String> {
+    let hex = agent.to_hex();
+    sent.iter()
+        .filter(|(to, _)| to.as_deref() == Some(hex.as_str()))
+        .filter_map(|(_, command)| match command {
+            UiCommand::ShowMessage(message) if message.role == MessageRole::System => {
+                Some(message.content.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether `notes` ask the user to get the build started.
+fn ask_to_build(notes: &[String]) -> bool {
+    notes.iter().any(|note| note.contains("\"implement\""))
+}
+
+/// Finish the turn `agent` runs.
+async fn finish(state: &mut LoopState<'_>, done: &mut mpsc::Receiver<WorkDone>, agent: AgentId) {
+    let finished = next_done(done).await;
+    assert_eq!(finished.agent_id, agent);
+    handle_work_done(state, finished).await;
+}
+
 #[tokio::test]
 async fn plan_in_a_channel_plans_in_a_new_member_whose_chat_comes_on_screen() {
     let (fixture, mut commands) = fixture();
@@ -72,16 +102,23 @@ async fn plan_in_a_channel_plans_in_a_new_member_whose_chat_comes_on_screen() {
     let asked = "Design the login flow";
     handle_ui_event(&mut state, plan_in(coordinator, asked), &links).await;
     let planner = planner_on_screen(&fixture, &state, coordinator);
-    let finished = next_done(&mut done).await;
-    assert_eq!(finished.agent_id, planner);
-    handle_work_done(&mut state, finished).await;
+    finish(&mut state, &mut done, planner).await;
 
     assert_eq!(user_texts(&state, planner), [asked]);
     assert!(
         fixture.sent_by(coordinator).is_empty(),
         "no coordinator turn"
     );
+    // The request is a task like any member's: the model answered without
+    // a plan, as when it asks a question, so it is still being planned.
+    assert_eq!(
+        state.hub.factory_flows.stage(planner),
+        Some(Stage::Planning)
+    );
     let sent = drain(&mut commands);
+    let notes = notes_to(&sent, planner);
+    assert!(notes.iter().any(|note| note == PLANNING_FIRST), "{notes:?}");
+    assert!(!ask_to_build(&notes), "{notes:?}");
     let hex = planner.to_hex();
     let listed = sent.iter().position(|(_, command)| {
         matches!(command, UiCommand::SetChannels(channels) if lists_member(channels, &hex))
@@ -115,12 +152,81 @@ async fn a_bare_plan_leaves_the_planner_waiting_in_plan_mode() {
     assert!(!state.hub.is_running(planner));
     assert!(state.idle.contains_key(&planner));
     assert!(user_texts(&state, planner).is_empty());
+    assert_eq!(
+        state.hub.factory_flows.stage(planner),
+        Some(Stage::Assigned)
+    );
     let hex = planner.to_hex();
-    let told_plan = drain(&mut commands).iter().any(|(to, command)| {
+    let sent = drain(&mut commands);
+    let told_plan = sent.iter().any(|(to, command)| {
         to.as_deref() == Some(hex.as_str())
             && matches!(command, UiCommand::SetMode(PermissionMode::Plan))
     });
     assert!(told_plan, "the planner's chat shows plan mode");
+    let notes = notes_to(&sent, planner);
+    assert_eq!(notes, [channels::PLANNER_WAITS]);
+}
+
+#[tokio::test]
+async fn a_planner_builds_and_ships_the_plan_it_writes_without_being_asked() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    let coordinator = open_site(&fixture, &mut state, &links, PlacementView::Local).await;
+
+    // A bare `/plan`, then the request in the planner's chat. At `yolo`,
+    // writing the plan and building it don't ask either.
+    handle_ui_event(&mut state, plan_in(coordinator, ""), &links).await;
+    let planner = planner_on_screen(&fixture, &state, coordinator);
+    unrestricted(&mut state, &links, planner).await;
+    let _ = drain(&mut commands);
+    let asked = message(planner, "Add a login form; write a plan first", true);
+    handle_ui_event(&mut state, asked, &links).await;
+    finish(&mut state, &mut done, planner).await;
+
+    // The model was told its plan is built right after its turn, and the
+    // chat says the build is next, with nobody asked to start it.
+    let planning = (fixture.sent_by(planner).into_iter())
+        .find(|sent| sent.system.contains("<plan_mode>"))
+        .expect("a model call in plan mode");
+    assert!(planning.system.contains(&render(Build::RightAway)));
+    let notes = notes_to(&drain(&mut commands), planner);
+    let ready = (notes.iter())
+        .find(|note| note.starts_with("Plan ready: Login form"))
+        .unwrap_or_else(|| panic!("no plan-ready note in {notes:?}"));
+    assert!(
+        ready.ends_with("It is built next, without waiting for approval."),
+        "{ready}"
+    );
+    assert!(!ask_to_build(&notes), "{notes:?}");
+    assert!(notes.iter().any(|note| note == "Building Login form"));
+
+    // The build runs out of plan mode, then the agent is asked to ship.
+    assert_eq!(
+        state.hub.factory_flows.stage(planner),
+        Some(Stage::Building)
+    );
+    assert_eq!(state.hub.mode_of(planner), PermissionMode::Agent);
+    finish(&mut state, &mut done, planner).await;
+    assert_eq!(
+        state.hub.factory_flows.stage(planner),
+        Some(Stage::Shipping)
+    );
+    finish(&mut state, &mut done, planner).await;
+    assert_eq!(state.hub.factory_flows.stage(planner), None);
+    let texts = user_texts(&state, planner);
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.starts_with("Implement the plan in")),
+        "{texts:?}"
+    );
+    assert!(
+        texts.iter().any(|text| text.contains(SHIP_PROMPT)),
+        "{texts:?}"
+    );
 }
 
 #[tokio::test]
@@ -160,22 +266,10 @@ async fn a_planner_in_a_cloud_channel_plans_here_and_says_why() {
     handle_ui_event(&mut state, asked, &links).await;
     let planner = planner_on_screen(&fixture, &state, coordinator);
     assert!(subagents::lock(&state.hub.cloud_starts).is_empty());
-    let finished = next_done(&mut done).await;
-    assert_eq!(finished.agent_id, planner);
-    handle_work_done(&mut state, finished).await;
+    finish(&mut state, &mut done, planner).await;
 
     assert!(!state.cloud.is_cloud(planner) && !state.cloud.is_moving(planner));
-    let hex = planner.to_hex();
-    let notes: Vec<String> = drain(&mut commands)
-        .into_iter()
-        .filter(|(to, _)| to.as_deref() == Some(hex.as_str()))
-        .filter_map(|(_, command)| match command {
-            UiCommand::ShowMessage(message) if message.role == MessageRole::System => {
-                Some(message.content)
-            }
-            _ => None,
-        })
-        .collect();
+    let notes = notes_to(&drain(&mut commands), planner);
     assert!(
         notes.iter().any(|note| note == channels::PLANS_HERE),
         "{notes:?}"

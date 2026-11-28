@@ -19,7 +19,8 @@ pub(in crate::event_loop) async fn handle_ended(state: &mut LoopState<'_>, ended
             agent,
             crate::event_loop::factory::hooks::TurnState { ok, interrupted },
             messages,
-        );
+        )
+        .await;
         settle(state, agent, outcome, Settle { interrupted, waits }).await;
         agents::send_agent_list(state).await;
     }

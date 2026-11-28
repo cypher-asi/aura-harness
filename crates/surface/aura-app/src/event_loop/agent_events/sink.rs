@@ -51,10 +51,13 @@ impl UiCommandSink {
         let Some(view) = plan_view(&self.plan.workspace, path) else {
             return;
         };
-        let note = format!(
-            "Plan ready: {} ({path}). Keep chatting to revise it, or say \"implement\" (or run /build) to build it.",
-            view.name
-        );
+        let then = match self.plan.build {
+            Build::WhenAsked => {
+                "Keep chatting to revise it, or say \"implement\" (or run /build) to build it."
+            }
+            Build::RightAway => "It is built next, without waiting for approval.",
+        };
+        let note = format!("Plan ready: {} ({path}). {then}", view.name);
         self.plan
             .tasks
             .show_plan(&self.plan.workspace, view.clone())

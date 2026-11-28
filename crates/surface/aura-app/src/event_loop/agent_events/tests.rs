@@ -18,6 +18,7 @@ async fn chat_commands(events: Vec<AgentLoopEvent>) -> Vec<UiCommand> {
         tasks: Arc::new(TaskBoard::default()),
         workspace: PathBuf::new(),
         building: None,
+        build: Build::WhenAsked,
     };
     let ui = AgentUi::new(commands, agent);
     forward_agent_events(events_rx, ui, None, None, plan, None).await;

@@ -13,7 +13,7 @@ fn planning() -> (Flows, AgentId) {
     let flows = Flows::default();
     let agent = AgentId::generate();
     flows.assign(agent);
-    assert!(flows.begin(agent));
+    assert_eq!(flows.begin(agent), Some(Planning::Starts));
     (flows, agent)
 }
 
@@ -53,7 +53,11 @@ fn a_build_that_pushed_ends_the_flow() {
 fn a_turn_that_asked_instead_of_planning_keeps_planning() {
     let (flows, agent) = planning();
     assert_eq!(flows.turn_ended(agent, end(None)), Next::Normal);
-    assert!(flows.begin(agent), "the reply comes back to planning");
+    assert_eq!(
+        flows.begin(agent),
+        Some(Planning::GoesOn),
+        "the reply comes back to planning"
+    );
     assert_eq!(
         flows.turn_ended(agent, end(Some("p"))),
         Next::Build("p".to_string())
@@ -78,7 +82,7 @@ fn a_task_for_a_busy_agent_plans_only_once_its_work_starts() {
     // The turn running when it came ends, even having written a plan.
     assert_eq!(flows.turn_ended(agent, end(Some("old"))), Next::Normal);
     assert_eq!(flows.stage(agent), Some(Stage::Assigned));
-    assert!(flows.begin(agent));
+    assert_eq!(flows.begin(agent), Some(Planning::Starts));
     assert_eq!(flows.stage(agent), Some(Stage::Planning));
 }
 
@@ -101,7 +105,7 @@ fn a_failed_planning_turn_leaves_plan_mode_and_others_just_end() {
 fn agents_outside_the_flow_are_left_alone() {
     let flows = Flows::default();
     let agent = AgentId::generate();
-    assert!(!flows.begin(agent));
+    assert_eq!(flows.begin(agent), None);
     assert_eq!(advance(None, end(Some("p"))), (None, Next::Normal));
 }
 

@@ -1,10 +1,11 @@
 //! Where the event loop applies the software factory's flow
-//! ([`super::flow`]) to a channel member's turns, local or cloud.
+//! ([`super::flow`]) to a channel member's turns, local or cloud, and what
+//! the member's chat says of it.
 //!
 //! Shipping always goes through the agent's own kernel: the hub never runs
 //! git for it, it asks the agent to call `git_ship` ([`SHIP_PROMPT`]).
 
-use super::flow::{Next, TurnEnd};
+use super::flow::{Next, Planning, TurnEnd};
 use super::observe::{self, ObservedPush};
 use super::turn;
 use crate::event_loop::agent_events::AgentUi;
@@ -12,11 +13,11 @@ use crate::event_loop::agents::AgentSession;
 use crate::event_loop::handlers::system_message;
 use crate::event_loop::subagents::{lock, AgentHub};
 use crate::event_loop::turns::{Prompt, Request, Work};
-use crate::event_loop::{inbox, modes, LoopState, Permissions};
+use crate::event_loop::{channels, inbox, modes, plan_mode, LoopState, Permissions};
 use aura_context_prompts::model_messages::build_plan::build_plan_prompt;
 use aura_core_types::AgentId;
 use aura_model::Message;
-use aura_ui::PermissionMode;
+use aura_ui::{PermissionMode, UiCommand};
 use std::path::Path;
 use std::sync::Arc;
 use tracing::info;
@@ -26,42 +27,126 @@ pub(crate) const SHIP_PROMPT: &str = "Your plan is built. Ship it now: call git_
     short commit message. It commits every change, pulls main, pushes your branch and puts it in \
     the merge queue. Then end your turn with your report.";
 
+/// What a member's chat says as its task's planning starts.
+pub(crate) const PLANNING_FIRST: &str = "Planning first: this turn researches the task and \
+    writes a plan, in plan mode. Then the plan is built and shipped to the merge queue without \
+    waiting for approval.";
+
+/// What a cloud member's chat says as the build of the plan it wrote
+/// starts.
+pub(crate) const BUILDING_PLAN: &str = "Plan written: building it now.";
+
 /// A task reached `agent` through its inbox: a channel member plans it
 /// first, once its work starts.
 pub(crate) fn on_assignment(state: &LoopState<'_>, agent: AgentId) {
-    if !lock(&state.hub.channel_members).contains(&agent) {
-        return;
-    }
-    let definition = lock(&state.hub.registry)
-        .find(agent)
-        .and_then(|found| found.definition.clone());
-    if crate::event_loop::channels::is_coordinator(definition.as_deref()) {
+    if !takes_tasks(&state.hub, agent) {
         return;
     }
     info!(%agent, "Software factory: the task starts with a plan");
     state.hub.factory_flows.assign(agent);
 }
 
-/// Before a local prompt of `session`: when its task plans, it works in
-/// plan mode. Returns whether this turn plans.
-pub(crate) async fn plan_first(state: &LoopState<'_>, session: &AgentSession) -> bool {
-    let agent = session.agent_id();
-    if !state.hub.factory_flows.begin(agent) {
+/// Whether `agent` is a channel member that works on tasks: any member
+/// but the coordinator, which hands them out.
+fn takes_tasks(hub: &AgentHub, agent: AgentId) -> bool {
+    if !lock(&hub.channel_members).contains(&agent) {
         return false;
     }
-    if state.hub.mode_of(agent) != PermissionMode::Plan {
-        modes::switch_mode(state, agent, &session.kernel, PermissionMode::Plan).await;
+    let definition = lock(&hub.registry)
+        .find(agent)
+        .and_then(|found| found.definition.clone());
+    !channels::is_coordinator(definition.as_deref())
+}
+
+/// Whether `prompt` is a new task the user typed into the chat of
+/// `agent`, a member that takes tasks, outside the flow: it plans first,
+/// as an assignment does. A member the user switched to plan mode waits
+/// for "implement" or `/build` instead, and a message from the
+/// coordinator's chat, or one asking to build, is no task.
+fn typed_task(hub: &AgentHub, agent: AgentId, prompt: &Prompt) -> bool {
+    prompt.mentions
+        && prompt.request == Request::New
+        && !channels::is_relayed(&prompt.text)
+        && !plan_mode::is_build_phrase(&prompt.text)
+        && hub.factory_flows.stage(agent).is_none()
+        && hub.mode_of(agent) != PermissionMode::Plan
+        && takes_tasks(hub, agent)
+}
+
+/// How `agent`'s turn plans its task, if it does ([`super::Flows::begin`]).
+/// Switching the agent out of plan mode while its task plans takes the
+/// task over: it leaves the flow, and the turn runs as asked.
+fn begin(hub: &AgentHub, agent: AgentId) -> Option<Planning> {
+    let planning = hub.factory_flows.begin(agent)?;
+    if planning == Planning::GoesOn && hub.mode_of(agent) != PermissionMode::Plan {
+        info!(%agent, "Software factory: out of plan mode, the task leaves the flow");
+        hub.factory_flows.leave(agent);
+        return None;
+    }
+    Some(planning)
+}
+
+/// Before a local `prompt` of `session`: a task typed into its chat
+/// ([`typed_task`]) enters the flow, unless it carries on with the plan
+/// still open ([`plan_mode::continue_open_plan`]). When its task plans,
+/// the turn works in plan mode, and its chat says so as the planning
+/// starts. Returns whether this turn plans.
+pub(in crate::event_loop) async fn plan_first(
+    state: &LoopState<'_>,
+    session: &AgentSession,
+    prompt: &Prompt,
+) -> bool {
+    let agent = session.agent_id();
+    if typed_task(&state.hub, agent, prompt) && !has_open_plan(session) {
+        info!(%agent, "Software factory: the typed task starts with a plan");
+        state.hub.factory_flows.assign(agent);
+    }
+    let Some(planning) = begin(&state.hub, agent) else {
+        return false;
+    };
+    if planning == Planning::Starts {
+        if state.hub.mode_of(agent) == PermissionMode::Plan {
+            AgentUi::new(state.commands.clone(), agent)
+                .send(system_message(PLANNING_FIRST.to_string()))
+                .await;
+        } else {
+            modes::enter_plan_mode(state, agent, &session.kernel, PLANNING_FIRST).await;
+        }
     }
     true
 }
 
-/// Before a cloud turn of `agent`: plan mode, which the machine gets as
-/// its plan-mode prompt, when its task plans.
-pub(crate) fn plan_first_in_cloud(hub: &AgentHub, agent: AgentId) {
-    if hub.factory_flows.begin(agent) && hub.mode_of(agent) != PermissionMode::Plan {
+/// Whether `session` has a plan still open, which what the user types
+/// carries on with.
+fn has_open_plan(session: &AgentSession) -> bool {
+    let workspace = session.kernel.agent_workspace();
+    plan_mode::open_plan(&workspace, session.active_plan.as_deref()).is_some()
+}
+
+/// Before a cloud turn of `agent` for `prompt`: as [`plan_first`], with
+/// plan mode set on the hub, which the machine gets as its plan-mode
+/// prompt, and shown in the chat. Its plans are on its machine, so no
+/// open plan keeps a typed task from planning.
+pub(in crate::event_loop) async fn plan_first_in_cloud(
+    state: &LoopState<'_>,
+    agent: AgentId,
+    prompt: &Prompt,
+) {
+    let hub = &state.hub;
+    if typed_task(hub, agent, prompt) {
+        info!(%agent, "Software factory: the typed task starts with a plan");
+        hub.factory_flows.assign(agent);
+    }
+    if begin(hub, agent) != Some(Planning::Starts) {
+        return;
+    }
+    if hub.mode_of(agent) != PermissionMode::Plan {
         let approval = hub.permissions_of(agent).approval;
         hub.set_permissions(agent, Permissions::new(PermissionMode::Plan, approval));
     }
+    let ui = AgentUi::new(state.commands.clone(), agent);
+    ui.send(UiCommand::SetMode(PermissionMode::Plan)).await;
+    ui.send(system_message(PLANNING_FIRST.to_string())).await;
 }
 
 /// The build of the plan `session` wrote could not start: the flow ends,
@@ -143,9 +228,9 @@ pub(crate) async fn after_local_turn(
 
 /// After a cloud turn of `agent` that ended `ok` or not with `messages`,
 /// its conversation: queue the pushes it made (again: the stream may have
-/// lost one), then start what the flow does next. Returns whether the
-/// turn's answer waits for it.
-pub(crate) fn after_cloud_turn(
+/// lost one), then start what the flow does next, saying so in its chat.
+/// Returns whether the turn's answer waits for it.
+pub(crate) async fn after_cloud_turn(
     state: &mut LoopState<'_>,
     agent: AgentId,
     how: TurnState,
@@ -170,7 +255,10 @@ pub(crate) fn after_cloud_turn(
     let next = state.hub.factory_flows.turn_ended(agent, end);
     let work = match &next {
         Next::Build(path) => {
-            leave_plan_mode(&state.hub, agent);
+            leave_plan_mode(state, agent).await;
+            AgentUi::new(state.commands.clone(), agent)
+                .send(system_message(BUILDING_PLAN.to_string()))
+                .await;
             Some(Work::Prompt {
                 prompt: Prompt::build(build_plan_prompt(path)),
                 shown: false,
@@ -178,7 +266,7 @@ pub(crate) fn after_cloud_turn(
         }
         Next::AskToShip => Some(ship_work()),
         Next::LeftPlanning => {
-            leave_plan_mode(&state.hub, agent);
+            leave_plan_mode(state, agent).await;
             None
         }
         Next::Normal => None,
@@ -198,12 +286,17 @@ fn ship_work() -> Work {
     }
 }
 
-/// Put cloud agent `agent` back in the mode it had before plan mode.
-fn leave_plan_mode(hub: &AgentHub, agent: AgentId) {
+/// Put cloud agent `agent` back in the mode it had before plan mode, and
+/// show its chat that mode.
+async fn leave_plan_mode(state: &LoopState<'_>, agent: AgentId) {
+    let hub = &state.hub;
     if hub.mode_of(agent) == PermissionMode::Plan {
         let back = hub.exit_plan_mode(agent);
         let approval = hub.permissions_of(agent).approval;
         hub.set_permissions(agent, Permissions::new(back, approval));
+        AgentUi::new(state.commands.clone(), agent)
+            .send(UiCommand::SetMode(back))
+            .await;
     }
 }
 

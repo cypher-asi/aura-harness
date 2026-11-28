@@ -253,17 +253,27 @@ fn member_codes(
         .collect()
 }
 
+/// What the first line of a member's prompt from the coordinator's chat
+/// ends with, after `[#slug`.
+const RELAYED: &str = " channel] message from the user via the coordinator's chat:";
+
 /// What a member's prompt starts with: where the message came from.
 fn context_header(channel: &ChannelRecord) -> String {
-    let mut header = format!(
-        "[#{} channel] message from the user via the coordinator's chat:\nChannel: {}",
-        channel.slug, channel.title
-    );
+    let mut header = format!("[#{}{RELAYED}\nChannel: {}", channel.slug, channel.title);
     if !channel.description.is_empty() {
         header.push_str(" - ");
         header.push_str(&channel.description);
     }
     header
+}
+
+/// Whether `prompt` is a message [`route_user_message`] gave a member:
+/// the user's, from its coordinator's chat rather than its own.
+pub(crate) fn is_relayed(prompt: &str) -> bool {
+    prompt
+        .lines()
+        .next()
+        .is_some_and(|line| line.starts_with("[#") && line.ends_with(RELAYED))
 }
 
 /// Store the user's `text` in `channel`, mentioning `mentioned`, and show

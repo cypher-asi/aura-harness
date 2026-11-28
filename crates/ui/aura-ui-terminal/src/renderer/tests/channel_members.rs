@@ -154,6 +154,33 @@ fn test_a_cloud_member_shows_a_cloud_after_its_name() {
 }
 
 #[test]
+fn test_a_member_in_plan_mode_shows_the_plan_badge_in_place_of_its_cloud() {
+    use crate::events::UiCommand;
+    use crate::PermissionMode;
+    let set_mode = |mode| UiCommand::ForAgent {
+        agent_id: "r1".to_string(),
+        command: Box::new(UiCommand::SetMode(mode)),
+    };
+    let mut app = members_app();
+    place_in_cloud(&mut app, "r1", None);
+
+    // The member's task starts planning, off screen.
+    app.process_command(set_mode(PermissionMode::Plan));
+    let rows = render_rows(&mut app, 140);
+    let planning = rows.iter().find(|row| row.contains("REN3")).unwrap();
+    assert!(planning.contains("rust-engineer (P)"), "{planning}");
+    assert!(!planning.contains('☁'), "plan mode wins, as on PROJECTS");
+    let buffer = render_buffer(&mut app, 140);
+    assert_eq!(cell_at(&buffer, "(P)").fg, test_theme().colors.success);
+
+    app.process_command(set_mode(PermissionMode::Agent));
+    let rows = render_rows(&mut app, 140);
+    let building = rows.iter().find(|row| row.contains("REN3")).unwrap();
+    assert!(building.contains("rust-engineer ☁"), "{building}");
+    assert!(!rows.iter().any(|row| row.contains("(P)")));
+}
+
+#[test]
 fn test_another_users_cloud_is_dimmer_than_your_own() {
     let mut app = members_app();
     place_in_cloud(&mut app, "r1", None);

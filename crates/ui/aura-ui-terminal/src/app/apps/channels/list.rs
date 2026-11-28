@@ -111,6 +111,23 @@ impl App {
         }
     }
 
+    /// Note in every channel's MEMBERS whether the agent with hex id
+    /// `agent_id` is in plan mode, until the next list says otherwise.
+    /// Returns whether a row changed.
+    pub(in crate::app) fn set_member_plan_mode(&mut self, agent_id: &str, on: bool) -> bool {
+        let mut changed = false;
+        let members = self
+            .channels
+            .list
+            .iter_mut()
+            .flat_map(|channel| channel.members.iter_mut());
+        for member in members.filter(|member| member.id == agent_id) {
+            changed |= member.plan_mode != on;
+            member.plan_mode = on;
+        }
+        changed
+    }
+
     pub(in crate::app) fn set_channel_posts(
         &mut self,
         channel_id: String,

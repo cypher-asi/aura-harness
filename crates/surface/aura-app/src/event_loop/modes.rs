@@ -51,6 +51,11 @@ impl Permissions {
     }
 }
 
+/// What an agent's chat says when the user switches it to plan mode.
+const PLAN_NOTE: &str = "Plan mode: the agent researches and writes a plan instead of changing \
+    code. /plan again returns to the previous mode. Say \"implement\" or run /build to implement \
+    the plan.";
+
 /// Whether commands can be confined to the agent's folder here, which
 /// `yolo` relies on to let them run without asking.
 pub(crate) fn commands_confinable() -> bool {
@@ -146,7 +151,7 @@ async fn set_permissions(state: &LoopState<'_>, agent_id: AgentId, permissions: 
             .await;
         return;
     };
-    switch(state, agent_id, &kernel, permissions).await;
+    switch(state, agent_id, &kernel, permissions, PLAN_NOTE).await;
 }
 
 /// Switch `agent_id`, whose kernel is `kernel`, to work `mode`, keeping its
@@ -158,17 +163,33 @@ pub(super) async fn switch_mode(
     mode: PermissionMode,
 ) -> bool {
     let approval = state.hub.permissions_of(agent_id).approval;
-    switch(state, agent_id, kernel, Permissions::new(mode, approval)).await
+    let to = Permissions::new(mode, approval);
+    switch(state, agent_id, kernel, to, PLAN_NOTE).await
+}
+
+/// [`switch_mode`] to plan mode for the reason `note` gives, which the
+/// agent's chat shows instead of what it says when the user switches.
+pub(super) async fn enter_plan_mode(
+    state: &LoopState<'_>,
+    agent_id: AgentId,
+    kernel: &Kernel,
+    note: &str,
+) -> bool {
+    let approval = state.hub.permissions_of(agent_id).approval;
+    let to = Permissions::new(PermissionMode::Plan, approval);
+    switch(state, agent_id, kernel, to, note).await
 }
 
 /// Switch `agent_id`, whose kernel is `kernel`, to `to`: record the
 /// switch, then change the policy its kernel evaluates the next tool call
-/// with. Reports failures itself and returns `false`.
+/// with; a switch into plan mode says `plan_note`. Reports failures itself
+/// and returns `false`.
 async fn switch(
     state: &LoopState<'_>,
     agent_id: AgentId,
     kernel: &Kernel,
     to: Permissions,
+    plan_note: &str,
 ) -> bool {
     let ui = AgentUi::new(state.commands.clone(), agent_id);
     let from = state.hub.permissions_of(agent_id);
@@ -196,18 +217,19 @@ async fn switch(
     }
     state.hub.set_permissions(agent_id, to);
     info!(%agent_id, from = %from.name(), to = %to.name(), "Changed permissions");
-    announce_switch(state, &ui, agent_id, from, to).await;
+    announce_switch(state, &ui, agent_id, (from, to), plan_note).await;
     super::policies::send_policies_of(state, agent_id).await;
     true
 }
 
-/// Show what changed between `from` and `to` (mode and/or approval).
+/// Show what changed between `from` and `to` (mode and/or approval), with
+/// `plan_note` for a switch into plan mode.
 async fn announce_switch(
     state: &LoopState<'_>,
     ui: &AgentUi,
     agent_id: AgentId,
-    from: Permissions,
-    to: Permissions,
+    (from, to): (Permissions, Permissions),
+    plan_note: &str,
 ) {
     if from.mode != to.mode {
         ui.send(UiCommand::SetMode(to.mode)).await;
@@ -218,13 +240,7 @@ async fn announce_switch(
         )))
         .await;
         if to.mode == PermissionMode::Plan {
-            ui.send(system_message(
-                "Plan mode: the agent researches and writes a plan instead of changing code. \
-                 /plan again returns to the previous mode. Say \"implement\" or run /build to \
-                 implement the plan."
-                    .to_string(),
-            ))
-            .await;
+            ui.send(system_message(plan_note.to_string())).await;
         }
     }
     if from.approval != to.approval {

@@ -11,7 +11,9 @@
 //! permanent agent on AGENTS in its icon column, and a subagent the line
 //! from the member that spawned it; either shows the spinner there while
 //! it works. A member that runs in the cloud has the `☁` PROJECTS shows
-//! after its name, with its owner's name when it is another user's:
+//! after its name, with its owner's name when it is another user's; one
+//! in plan mode, such as a member planning its task, has PROJECTS' `(P)`
+//! there instead:
 //!
 //! ```text
 //!  @  coordinator               CO
@@ -20,6 +22,8 @@
 //!     Fix parser escapes
 //!     └── subagent            SB12
 //!         Write the escape tests
+//!  @  engineer (P)             EN4
+//!     Collapse members' subagents
 //! ```
 //!
 //! INFO is what the channel is, as an info document: its slug, title
@@ -62,7 +66,7 @@ use crate::animation::AURA_WIDTH;
 use crate::app::{AgentRowEnd, HoverTarget, PanelFocus, CHANNEL_MEMBER_ROWS};
 use crate::components::{
     cell_style, tree_row, truncate_record_info, CellState, Info, RowBadge, StatusIcon, Value,
-    ROW_INSET,
+    PLAN_BADGE, ROW_INSET,
 };
 use crate::events::{AgentSummary, ChannelSummary};
 use crate::host::PlacementView;
@@ -124,10 +128,10 @@ pub(super) fn render_channel_members(
 /// Member `index` of `members`, on two rows: the permanent agent it is an
 /// instance of, under the guides from the agent that spawned it, after
 /// its `@` (a subagent has none, so its guides run on through the icon
-/// column) or the spinner while it works, and its cloud if it runs in
-/// the cloud, with its code at the right, in a column `code_width` wide;
-/// then, in gray, what it works on. Lit by the keyboard while the panel
-/// is focused, else when it is the agent in the chat.
+/// column) or the spinner while it works, and its plan mode or its cloud,
+/// with its code at the right, in a column `code_width` wide; then, in
+/// gray, what it works on. Lit by the keyboard while the panel is
+/// focused, else when it is the agent in the chat.
 fn member_rows<'a>(
     app: &App,
     (width, code_width): (usize, usize),
@@ -156,7 +160,10 @@ fn member_rows<'a>(
         width,
         (&guides, theme.colors.muted),
         member_icon(app, member, theme),
-        (member_name(member), member_badge(theme, cloud.as_ref())),
+        (
+            member_name(member),
+            member_badge(theme, member.plan_mode, cloud.as_ref()),
+        ),
         cell,
         &end,
         &[],
@@ -184,11 +191,22 @@ fn member_icon(app: &App, member: &AgentSummary, theme: &Theme) -> StatusIcon {
     }
 }
 
-/// The cloud after a member's name when it runs in the cloud, from
-/// [`App::cloud_badge`]: gray as on PROJECTS, dimmer with the owner's
-/// name for another user's agent.
-fn member_badge<'b>(theme: &Theme, cloud: Option<&'b (String, bool)>) -> Option<RowBadge<'b>> {
+/// What follows a member's name, as on PROJECTS: `(P)` while it is in
+/// plan mode, which wins; else its cloud when it runs in the cloud, from
+/// [`App::cloud_badge`], gray, dimmer with the owner's name for another
+/// user's agent.
+fn member_badge<'b>(
+    theme: &Theme,
+    plan_mode: bool,
+    cloud: Option<&'b (String, bool)>,
+) -> Option<RowBadge<'b>> {
     let colors = &theme.colors;
+    if plan_mode {
+        return Some(RowBadge {
+            text: PLAN_BADGE,
+            color: colors.success,
+        });
+    }
     cloud.map(|(text, foreign)| RowBadge {
         text,
         color: if *foreign { colors.faint } else { colors.muted },

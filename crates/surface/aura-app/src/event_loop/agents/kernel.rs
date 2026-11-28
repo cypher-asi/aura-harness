@@ -203,6 +203,7 @@ impl KernelFactory {
             active_plan,
             building_plan: false,
             lead: false,
+            plan_build: plan_mode::Build::WhenAsked,
             tasks: Arc::clone(&self.tasks),
         };
         if let Some(checkpoint) = self.restore(session.agent_id(), tail) {

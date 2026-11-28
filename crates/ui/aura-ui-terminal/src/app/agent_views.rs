@@ -437,14 +437,18 @@ impl App {
             .map_or_else(|| "Agent".to_string(), |a| a.name.clone())
     }
 
-    /// Note in the Agents panel whether the agent with hex id `agent_id`
-    /// is in plan mode, until the next list says otherwise.
+    /// Note in the Agents panel and in the channels' MEMBERS whether the
+    /// agent with hex id `agent_id` is in plan mode, until the next list
+    /// says otherwise.
     fn set_agent_plan_mode(&mut self, agent_id: &str, on: bool) {
         if let Some(agent) = self.agents.iter_mut().find(|a| a.id == agent_id) {
             if agent.plan_mode != on {
                 agent.plan_mode = on;
                 self.ticks.redraw = true;
             }
+        }
+        if self.set_member_plan_mode(agent_id, on) {
+            self.ticks.redraw = true;
         }
     }
 }
