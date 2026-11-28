@@ -329,13 +329,59 @@ impl CloudHub {
     /// this hub is refused ([`CloudError::OutdatedNode`]), since its runs
     /// would start without the agent's conversation. [`Self::awake_node`]
     /// takes it anyway, so the agent can still be brought back.
+    ///
+    /// A node from before the merge queue is updated to the hub's aura
+    /// first, while nothing runs on it ([`Self::update_outdated_node`]).
     pub(super) async fn current_node(
         &self,
         agent: &str,
         boot: &BootReporter,
     ) -> CloudResult<NodeClient> {
-        let node = self.awake_node(agent, boot).await?;
+        let mut node = self.awake_node(agent, boot).await?;
+        if self.update_outdated_node(agent, boot).await {
+            node = self.node(agent)?;
+        }
         self.fleet.check_node_protocol(agent)?;
         Ok(node)
+    }
+
+    /// Whether `agent`'s node offered `tool` at its last claim: a node
+    /// from before the merge queue offers no `git_ship`, so the hub asks
+    /// it to ship with `git_commit_push` instead.
+    #[must_use]
+    pub fn node_offers(&self, agent: &str, tool: &str) -> bool {
+        self.fleet.node_offers(agent, tool)
+    }
+
+    /// Update `agent`'s node when it lacks `git_ship` and the hub has a
+    /// cloud build to give it. Returns whether the node was restarted.
+    /// A failure is logged and shown, and the old node keeps working.
+    async fn update_outdated_node(&self, agent: &str, boot: &BootReporter) -> bool {
+        if self
+            .fleet
+            .node_offers(agent, aura_core_protocol::cloud::SHIP_TOOL)
+        {
+            return false;
+        }
+        let binary = match self.snapshots.local_binary().await {
+            Ok(Some(binary)) => binary,
+            Ok(None) => return false,
+            Err(err) => {
+                tracing::warn!(%agent, error = %err, "no aura build to update an old cloud node with");
+                return false;
+            }
+        };
+        if let Err(err) = binary.ensure_loads_on_machines(&self.home) {
+            tracing::warn!(%agent, error = %err, "the hub's aura build can't run on the machines");
+            return false;
+        }
+        match self.fleet.update_node(agent, binary.bytes, boot).await {
+            Ok(update) => update == crate::fleet::NodeUpdate::Updated,
+            Err(err) => {
+                tracing::warn!(%agent, error = %err, "could not update an old cloud node");
+                boot.fact("node", format!("update failed, kept the old node: {err}"));
+                false
+            }
+        }
     }
 }
