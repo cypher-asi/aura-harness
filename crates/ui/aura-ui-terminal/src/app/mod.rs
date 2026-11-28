@@ -43,6 +43,7 @@ mod mouse;
 mod notifications;
 mod panel_layout;
 mod panes;
+pub(crate) mod paste;
 mod pending;
 mod plan_doc;
 pub mod plans;

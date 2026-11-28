@@ -1,5 +1,8 @@
 use super::*;
+use aura_agent_trace::RunSource;
 use aura_core_types::trace::StepAction;
+use aura_core_types::SubagentExit;
+use aura_engine::{HostedTurn, TurnObserver};
 
 #[test]
 fn latest_bundle_matches_the_agent_by_id_or_terminal_task() {

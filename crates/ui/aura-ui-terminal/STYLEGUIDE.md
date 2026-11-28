@@ -391,6 +391,18 @@ under a fold arrow, then the timeline, newest first.
   drawn, and where the first label of a run of them comes back, a blank
   row sets the next record apart
 - **Steps**: markers `faint`, the whole line `muted`
+- **Step groups**: a run of steps folds under one summary line. A
+  finished group shows its summary and a `muted` `N steps` row. A
+  running group shows its summary alone, with the spinner, the latest
+  step's number and the time (`⠏ Running 28 commands · step 46 · 3m
+  19s`): no numbered steps and no previews of what they thought or
+  printed, for a local agent, a cloud one, a spawned one and a turn the
+  chat reattached to after a restart. A click on the summary, or
+  `Ctrl+O` for every group, opens it: the numbered steps, and while it
+  runs a short tail of each finished thought and command; the same
+  folds it again. A click is remembered per group while the chat is
+  open. A cloud machine's boot console (`Waking cloud machine`) is a
+  block of its own and keeps its own fold.
 - **Live tail**: while a turn runs, the working line flush with the
   reply: `⬢` in `success`, the label bold `foreground`, the elapsed time
   `muted`. The to-do list is never part of the conversation.
@@ -420,7 +432,13 @@ under a fold arrow, then the timeline, newest first.
   `muted` `→ ` prompt and a `muted` placeholder (`Ask anything`, then
   `Add a follow-up`) set one column past the cursor so the cursor never
   covers its first letter. Login prompts replace the arrow. The terminal
-  has none: its prompt follows its output (see **Terminal**).
+  has none: its prompt follows its output (see **Terminal**). It grows to
+  8 rows, then scrolls: the wheel moves the view and leaves the cursor
+  where it is, and a key that moves the cursor brings the view back to
+  it. ↑/↓ walk the rows; ↑ on a draft's first row only goes to its start
+  (history is for a single-row draft). Ctrl+↑/↓ jump to the input's start
+  or end. A paste goes in whole, up to 4 MB, with a short notice past
+  2,000 characters; a bigger one is refused whole and says so.
 - **Footer**: the mode outside agent mode, the approval level, the model
   and what the agent has used in `muted`, separated by `faint` dots,
   with the status at the right, on the screen's last row. Parts that
