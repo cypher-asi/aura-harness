@@ -42,6 +42,7 @@
 //! - `assignments`: `assign`
 //! - `withdraw`: work a coordinator takes back, or hands to another
 //!   member, before it started; it never starts
+//! - `saved`: what is owed, queued and undelivered, kept across restarts
 //!
 //! # Invariants
 //!
@@ -51,8 +52,10 @@
 //! # Failure modes
 //!
 //! A channel that cannot be read leaves its agent without channel peers
-//! (logged): messages to them fail as to an unknown agent. A message sent
-//! as the terminal shuts down is lost.
+//! (logged): messages to them fail as to an unknown agent. What is owed,
+//! and the inbox messages queued or not yet delivered, survive a restart
+//! (`saved`); a message sent after the last save, as the terminal shuts
+//! down, is lost.
 
 use super::agent_events::AgentUi;
 use super::channels;
@@ -89,6 +92,7 @@ mod hooks;
 mod messages;
 mod peers;
 mod refusals;
+mod saved;
 mod starts;
 #[cfg(test)]
 mod tests;
@@ -106,6 +110,9 @@ pub(super) use hooks::{reach_of, refresh_reach, MachineMail};
 pub(super) use messages::deliver;
 use messages::{mail_view, new_id, send, shown};
 use peers::{circle, Circle, Named, Peer, Relation};
+#[cfg(test)]
+pub(super) use saved::SAVED_FILE;
+pub(super) use saved::{flush_saved, keep_saved, restore_saved, resume_saved};
 pub(super) use starts::give_up_unstarted;
 pub(super) use withdraw::take_withdrawn;
 
@@ -119,6 +126,8 @@ pub(crate) struct Inbox {
     state: Mutex<State>,
     /// The "not delivered" notices told lately ([`refusals`])
     refusals: refusals::Refusals,
+    /// Where `state`'s owed reports are kept between runs
+    saved: saved::Keeper,
 }
 
 #[derive(Default)]
