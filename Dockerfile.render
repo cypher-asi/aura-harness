@@ -13,6 +13,7 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY src/                          src/
 COPY crates/                       crates/
+COPY workspace-hack/               workspace-hack/
 
 RUN cargo build --release --bin aura --no-default-features \
     && strip target/release/aura
