@@ -193,5 +193,32 @@ jobs:
       - name: Install cargo-machete
         run: cargo install cargo-machete --locked
 
+      # `workspace-hack` depends on crates only to turn their features on.
       - name: cargo machete
-        run: cargo machete
+        run: cargo machete --skip workspace-hack
+
+  # ---------------------------------------------------------------------------
+  # `workspace-hack` up to date (`cargo hakari`).
+  #
+  # Every crate depends on `workspace-hack`, which lists every feature the
+  # workspace turns on in a dependency, so `cargo build`, `cargo test` and
+  # `-p` runs build each dependency one way. A dependency change it doesn't
+  # list splits those builds again; regenerate with
+  # `cargo hakari generate && cargo hakari manage-deps`.
+  # ---------------------------------------------------------------------------
+  hakari:
+    name: cargo hakari
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-hakari
+        run: cargo install cargo-hakari --locked
+
+      - name: workspace-hack up to date
+        run: |
+          cargo hakari generate --diff
+          cargo hakari manage-deps --dry-run
+          cargo hakari verify

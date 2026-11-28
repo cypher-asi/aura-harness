@@ -21,8 +21,6 @@
 //! more airtight; punted to the same cleanup that re-enables
 //! `trybuild` in CI.
 
-#![cfg(feature = "test-support")]
-
 use aura_store_db::{ReadStore, RocksStore, Store, WriteStore};
 use std::sync::Arc;
 

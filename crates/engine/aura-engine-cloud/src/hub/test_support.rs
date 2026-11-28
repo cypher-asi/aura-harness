@@ -1,6 +1,5 @@
 //! Hooks into a hub's internals for tests outside this crate that drive
 //! it against a real node served in-process (`aura-app`'s hub tests).
-//! Built with the `test-support` feature only.
 
 use std::collections::HashMap;
 use std::sync::Arc;

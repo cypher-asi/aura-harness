@@ -10,6 +10,7 @@ license.workspace = true
 aura-core-types = { path = "../../core/aura-core-types" }
 aura-gate-route = { path = "../aura-gate-route" }
 aura-model = { path = "../../model/aura-model" }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [dev-dependencies]
 aura-core-auth = { path = "../../core/aura-core-auth" }

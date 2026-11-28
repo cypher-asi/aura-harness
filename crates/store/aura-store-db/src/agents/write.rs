@@ -178,7 +178,7 @@ impl AgentStore {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
 impl AgentStore {
     /// Fault-injected variant of [`Self::apply`]; see
     /// [`crate::FaultAt`]. `BeforeBatchWrite` writes nothing,

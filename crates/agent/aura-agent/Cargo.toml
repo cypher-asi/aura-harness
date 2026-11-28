@@ -36,6 +36,7 @@ dashmap = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 colored = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [target.'cfg(windows)'.dependencies]
 which = { workspace = true }
@@ -46,12 +47,6 @@ tempfile = { workspace = true }
 # `MakeWriter` to assert on the exact event payload without a global
 # subscriber.
 tracing-subscriber = { workspace = true }
-# Layer E.3: stream pump tests use `tokio::test(start_paused = true)`
-# + `tokio::time::advance` to deterministically drive timeouts and
-# overlap windows without real wall-clock sleep (Rule 7.3). Both
-# helpers live behind the `test-util` feature, which is NOT part of
-# `tokio`'s `full` set so we opt in explicitly here.
-tokio = { version = "1.35", features = ["test-util"] }
 
 [lints]
 workspace = true

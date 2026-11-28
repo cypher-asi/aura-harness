@@ -68,7 +68,7 @@ pub enum ChannelError {
     Agent(#[from] AgentStoreError),
     /// A failure injected by
     /// [`ChannelStore::create_with_fault`](super::ChannelStore::create_with_fault).
-    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
     #[error("injected fault: {0:?}")]
     InjectedFault(crate::FaultAt),
 }

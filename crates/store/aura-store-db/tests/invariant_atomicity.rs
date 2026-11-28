@@ -20,7 +20,6 @@
 
 // Integration-test crate: test code may unwrap/expect.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-#![cfg(feature = "test-support")]
 
 use aura_core_types::{AgentId, Decision, ProposalSet, RecordEntry, Transaction};
 use aura_store_db::{FaultAt, ReadStore, RocksStore, Store, StoreError, WriteStore};

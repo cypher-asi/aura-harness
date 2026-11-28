@@ -55,7 +55,7 @@ mod tests;
 mod verify;
 
 pub use error::SealMigrationError;
-#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
 pub use fault::arm as arm_fault;
 pub use fault::FailAt;
 pub use marker::SEALED_MARKER_FILENAME;

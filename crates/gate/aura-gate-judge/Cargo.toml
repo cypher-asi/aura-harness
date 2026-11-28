@@ -14,10 +14,10 @@ aura-gate-route = { path = "../aura-gate-route" }
 aura-model = { path = "../../model/aura-model" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [dev-dependencies]
 aura-core-auth = { path = "../../core/aura-core-auth" }
-aura-gate-evidence = { path = "../aura-gate-evidence", features = ["test-support"] }
 
 [lints]
 workspace = true

@@ -6,10 +6,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-[features]
-# `GateLive::learn`, which fills the table for other crates' tests.
-test-support = ["aura-gate-route/test-support"]
-
 [dependencies]
 aura-agent = { path = "../../agent/aura-agent" }
 aura-agent-kernel = { path = "../../agent/aura-agent-kernel" }
@@ -27,12 +23,10 @@ aura-store-db = { path = "../../store/aura-store-db" }
 rayon = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [dev-dependencies]
 aura-core-auth = { path = "../../core/aura-core-auth" }
-# `GateLive::learn`, which the unit tests use too, fills the table with
-# `test-support`'s builder.
-aura-gate-route = { path = "../aura-gate-route", features = ["test-support"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 

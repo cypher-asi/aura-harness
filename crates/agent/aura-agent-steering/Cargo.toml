@@ -13,6 +13,7 @@ aura-context-prompts = { path = "../../context/aura-context-prompts" }
 aura-model = { path = "../../model/aura-model" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [dev-dependencies]
 # Phase 6a registry tests reuse the same fixture pattern the

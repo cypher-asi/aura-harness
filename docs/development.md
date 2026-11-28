@@ -4,8 +4,11 @@
 
 ```sh
 cargo fmt --all
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+
+# After adding, removing or changing a dependency (CI fails until you do)
+cargo hakari generate && cargo hakari manage-deps
 
 # Invariant grep gate
 bash scripts/check_invariants.sh
@@ -35,6 +38,15 @@ cargo test --release -p aura-agent --test many_agents_load -- --ignored --nocapt
 cargo test --release -p aura-ui-terminal --test ui_load -- --ignored --nocapture
 ```
 
+`cargo clippy` runs every check `cargo check` does, so run one, not both. CI also builds with `--all-features`, which adds only the TypeScript bindings export; you need it locally only when you change the wire types (see [Where to change things](#where-to-change-things)).
+
+### Keeping builds fast
+
+Cargo keeps one build of a crate per set of features, flags and dependencies, and rebuilds a crate and everything above it when any of those changes. So:
+
+- Every crate depends on [`workspace-hack`](../workspace-hack/Cargo.toml), which [cargo-hakari](https://docs.rs/cargo-hakari) fills with every feature any crate turns on in a dependency. `cargo build`, `cargo test`, `cargo clippy` and `-p` runs then build each dependency one way and reuse each other's work. Install it with `cargo install cargo-hakari --locked`, and after a dependency change run `cargo hakari generate && cargo hakari manage-deps`.
+- Don't put test helpers behind a cargo feature. A feature only tests turn on is a second build of the crate and of every crate above it, and the build flips between them each time you go from `cargo test` to `cargo run`. Compile the helpers in and mark them `#[doc(hidden)]`, as `aura_store_db::FaultAt` is.
+- Don't pass `--all-features` or set `RUSTFLAGS` for one command; either rebuilds the workspace, and again when you go back. Flags you always want belong in `~/.cargo/config.toml`.
 ### Profiling under load
 
 The two load tests take their sizes from the environment:
@@ -66,7 +78,8 @@ The desktop snapshot tests run the terminal UI in the window's shell, without a 
 - `cargo fmt --check`, `cargo clippy` with warnings denied, and `cargo test --workspace --all-features`.
 - `cargo check` on the MSRV (1.85), except `aura-desktop`, which needs 1.88 for wgpu.
 - `cargo deny check` (hard fail) and `cargo audit` (soft fail).
-- `cargo machete` for unused dependencies.
+- `cargo machete --skip workspace-hack` (cargo-machete 0.10 or newer) for unused dependencies.
+- `cargo hakari generate --diff` and `cargo hakari manage-deps --dry-run`, which fail while `workspace-hack` is out of date.
 - [`scripts/check_invariants.sh`](../scripts/check_invariants.sh), the invariant grep gate.
 - [`scripts/check_file_size.sh`](../scripts/check_file_size.sh), the 500-line file limit.
 
@@ -79,7 +92,7 @@ Each invariant's enforcement (grep band or Rust test) is listed in [invariants.m
 
 ## Where to change things
 
-- Adding a crate: put it in `crates/<layer>/`, name it `aura-<layer>-<part>`, add a `//! Layer: <layer>` tag to its `lib.rs`, and add it to `[workspace].members` in [`Cargo.toml`](../Cargo.toml) with the rest of its layer. Path dependencies within a layer are `../aura-…`; across layers they are `../../<layer>/aura-…`. Only surface crates, which are named after what you run, need an entry in `KNOWN_CRATES` in [`tests/layer_boundary.rs`](../tests/layer_boundary.rs). See [architecture.md](architecture.md#naming).
+- Adding a crate: put it in `crates/<layer>/`, name it `aura-<layer>-<part>`, add a `//! Layer: <layer>` tag to its `lib.rs`, and add it to `[workspace].members` in [`Cargo.toml`](../Cargo.toml) with the rest of its layer, then run `cargo hakari manage-deps` to give it its `workspace-hack` line. Path dependencies within a layer are `../aura-…`; across layers they are `../../<layer>/aura-…`. Only surface crates, which are named after what you run, need an entry in `KNOWN_CRATES` in [`tests/layer_boundary.rs`](../tests/layer_boundary.rs). See [architecture.md](architecture.md#naming).
 - Adding a tool: classify it in the mode gate table ([`mode_gate.rs`](../crates/agent/aura-agent-kernel/src/policy/check/mode_gate.rs)); [`mode_gate_catalog.rs`](../crates/engine/aura-engine/tests/mode_gate_catalog.rs) fails until you do.
 - Changing the wire types: update [`aura-core-protocol`](../crates/core/aura-core-protocol), regenerate the TypeScript bindings with `cargo test -p aura-core-protocol --features typescript export_typescript_bindings`, and land the matching change in `aura-os`.
 - Release notes: add one file per change in [`changelog.d/`](../changelog.d/README.md), named after your branch's last segment (`changelog.d/fix-scroll-rus12.md`), with the entry as it would read under `## [Unreleased]`. Don't edit [`CHANGELOG.md`](../CHANGELOG.md) directly: every parallel branch's entry used to collide at its top, and `git_ship` now refuses such a push. Keep each entry in one place: `aura changelog --check` fails when a fragment's entry is also under `[Unreleased]` in `CHANGELOG.md` (a direct merge or a hand-resolved conflict can put one back), and so does `tests/changelog_fragments.rs`, which the merge queue's tests run. At release time, `aura changelog` previews the entries and `aura changelog --write` puts them into `CHANGELOG.md` and deletes the fragments; both refuse a duplicate.

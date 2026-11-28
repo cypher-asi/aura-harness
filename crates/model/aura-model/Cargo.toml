@@ -22,6 +22,7 @@ async-trait = "0.1"
 futures-util = "0.3"
 colored = { workspace = true }
 terminal_size = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 # HTTP for direct API calls (more reliable than SDK wrappers)
 

@@ -17,6 +17,7 @@ license.workspace = true
 aura-config = { path = "../../config/aura-config" }
 regex = { workspace = true }
 tracing = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

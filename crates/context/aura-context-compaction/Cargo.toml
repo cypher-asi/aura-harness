@@ -11,6 +11,7 @@ aura-config = { path = "../../config/aura-config" }
 aura-model = { path = "../../model/aura-model" }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [lints]
 workspace = true

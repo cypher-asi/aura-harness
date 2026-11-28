@@ -17,6 +17,7 @@ clap = "4.5"
 tokio = { workspace = true }
 aura-config = { path = "crates/config/aura-config" }
 mimalloc = { workspace = true }
+workspace-hack = { version = "0.1", path = "workspace-hack" }
 
 # `aura` with no subcommand opens the desktop window. It needs Rust 1.88
 # (wgpu); build with `--no-default-features` for servers, containers and
@@ -80,7 +81,13 @@ members = [
     "crates/surface/aura-node",
     "crates/surface/aura-cli",
     "crates/surface/aura-desktop",
+    "workspace-hack",
 ]
+
+# Every crate depends on cargo-hakari's `workspace-hack` for the features
+# it turns on, never for its code.
+[workspace.metadata.cargo-machete]
+ignored = ["workspace-hack"]
 
 [profile.dev]
 debug = 0
@@ -161,7 +168,10 @@ thiserror = "1.0"
 anyhow = "1.0"
 
 # Async runtime
-tokio = { version = "1.35", features = ["full"] }
+# `test-util` (the paused clock) is on in every build, not just tests, so
+# `cargo build` and `cargo test` share one tokio and everything above it.
+# Until a test pauses the clock, tokio reads the time past one atomic load.
+tokio = { version = "1.35", features = ["full", "test-util"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 
 # HTTP
@@ -284,7 +294,7 @@ jsonwebtoken = { version = "~10.3", features = ["aws_lc_rs"] }
 
 [dev-dependencies]
 aura-app = { path = "crates/surface/aura-app" }
-aura-node = { path = "crates/surface/aura-node", features = ["test-support"] }
+aura-node = { path = "crates/surface/aura-node" }
 aura-config = { path = "crates/config/aura-config" }
 aura-agent-kernel = { path = "crates/agent/aura-agent-kernel" }
 aura-store-db = { path = "crates/store/aura-store-db" }

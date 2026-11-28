@@ -325,6 +325,7 @@ dependencies = [
  "tokio-tungstenite 0.26.2",
  "tokio-util",
  "tower 0.5.2",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -359,6 +360,7 @@ dependencies = [
  "uuid",
  "walkdir",
  "which",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -385,6 +387,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -397,6 +400,7 @@ dependencies = [
  "aura-model",
  "serde",
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -409,6 +413,7 @@ dependencies = [
  "proptest",
  "serde",
  "thiserror 1.0.69",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -434,6 +439,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -499,6 +505,7 @@ dependencies = [
  "uuid",
  "walkdir",
  "which",
+ "workspace-hack",
  "zeroize",
 ]
 
@@ -525,6 +532,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -546,6 +554,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -562,6 +571,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "url",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -581,6 +591,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -598,6 +609,7 @@ dependencies = [
  "sha2",
  "tokio",
  "url",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -614,6 +626,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -647,6 +660,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -662,6 +676,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tracing",
+ "workspace-hack",
  "zeroize",
 ]
 
@@ -673,6 +688,7 @@ dependencies = [
  "aura-model",
  "serde_json",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -691,6 +707,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -701,6 +718,7 @@ dependencies = [
  "regex",
  "tempfile",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -719,6 +737,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -731,6 +750,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -740,6 +760,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -751,6 +772,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -762,6 +784,7 @@ dependencies = [
  "serde",
  "serde_json",
  "ts-rs",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -779,6 +802,7 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -808,6 +832,7 @@ dependencies = [
  "unicode-width 0.2.0",
  "wgpu",
  "winit",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -837,6 +862,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -861,6 +887,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -906,6 +933,7 @@ dependencies = [
  "tracing",
  "uuid",
  "which",
+ "workspace-hack",
  "zeroize",
 ]
 
@@ -924,6 +952,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "workspace-hack",
  "zeroize",
 ]
 
@@ -945,6 +974,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tracing",
  "uuid",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -959,6 +989,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -977,6 +1008,7 @@ dependencies = [
  "tokio-util",
  "toml",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1010,6 +1042,7 @@ dependencies = [
  "tracing",
  "uuid",
  "which",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1025,6 +1058,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1039,6 +1073,7 @@ dependencies = [
  "aura-gate-lead",
  "aura-gate-live",
  "aura-gate-route",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1052,6 +1087,7 @@ dependencies = [
  "aura-model",
  "serde",
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1062,6 +1098,7 @@ dependencies = [
  "aura-core-types",
  "aura-gate-route",
  "aura-model",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1072,6 +1109,7 @@ dependencies = [
  "aura-model",
  "serde",
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1081,6 +1119,7 @@ dependencies = [
  "aura-config",
  "aura-core-types",
  "aura-gate-evidence",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1095,6 +1134,7 @@ dependencies = [
  "aura-model",
  "serde",
  "serde_json",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1110,6 +1150,7 @@ dependencies = [
  "aura-model",
  "serde_json",
  "tokio",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1135,6 +1176,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1145,8 +1187,8 @@ dependencies = [
  "aura-core-auth",
  "aura-core-types",
  "aura-gate-evidence",
- "aura-gate-route",
  "aura-model",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1170,6 +1212,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1228,6 +1271,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "which",
+ "workspace-hack",
  "zeroize",
 ]
 
@@ -1245,6 +1289,7 @@ dependencies = [
  "toml",
  "tracing",
  "walkdir",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1257,6 +1302,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tracing",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1280,6 +1326,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "workspace-hack",
  "zeroize",
 ]
 
@@ -1294,6 +1341,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1304,6 +1352,7 @@ dependencies = [
  "bytes",
  "tempfile",
  "thiserror 1.0.69",
+ "workspace-hack",
  "zstd",
 ]
 
@@ -1316,6 +1365,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 1.0.69",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1341,6 +1391,7 @@ dependencies = [
  "tokio",
  "tracing",
  "unicode-width 0.2.0",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1359,6 +1410,7 @@ dependencies = [
  "tracing",
  "two-face",
  "unicode-width 0.2.0",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -8377,6 +8429,82 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-wlr",
+]
+
+[[package]]
+name = "workspace-hack"
+version = "0.1.0"
+dependencies = [
+ "aho-corasick",
+ "bit-set 0.8.0",
+ "bit-vec 0.8.0",
+ "bitflags 2.10.0",
+ "bytemuck",
+ "bytes",
+ "cc",
+ "crc32fast",
+ "crypto-common",
+ "either",
+ "errno",
+ "futures-channel",
+ "futures-core",
+ "futures-sink",
+ "futures-task",
+ "futures-util",
+ "getrandom 0.2.16",
+ "getrandom 0.3.4",
+ "hashbrown 0.14.5",
+ "hashbrown 0.16.1",
+ "hyper 1.8.1",
+ "hyper-util",
+ "itertools 0.14.0",
+ "libc",
+ "linux-raw-sys 0.11.0",
+ "linux-raw-sys 0.4.15",
+ "log",
+ "memchr",
+ "mio",
+ "num-traits",
+ "once_cell",
+ "percent-encoding",
+ "phf_shared",
+ "ppv-lite86",
+ "prost",
+ "rand 0.8.6",
+ "rand 0.9.4",
+ "rand_chacha 0.9.0",
+ "rand_core 0.6.4",
+ "regex",
+ "regex-automata",
+ "regex-syntax",
+ "reqwest",
+ "rustc-hash 1.1.0",
+ "rustix 0.38.44",
+ "rustix 1.1.3",
+ "serde",
+ "serde_core",
+ "serde_json",
+ "simd-adler32",
+ "similar",
+ "smallvec",
+ "syn 2.0.114",
+ "syn 3.0.10",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tower 0.5.2",
+ "tracing",
+ "tracing-core",
+ "winapi",
+ "windows-sys 0.48.0",
+ "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
+ "zerocopy",
+ "zeroize",
+ "zstd-sys",
 ]
 
 [[package]]

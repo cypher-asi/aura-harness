@@ -12,6 +12,7 @@ aura-core-permissions = { path = "../../core/aura-core-permissions" }
 aura-core-types = { path = "../../core/aura-core-types" }
 serde = { workspace = true }
 thiserror = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [dev-dependencies]
 proptest = { workspace = true }

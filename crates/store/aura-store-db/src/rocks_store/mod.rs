@@ -54,14 +54,11 @@ use rocksdb::{BoundColumnFamily, DBWithThreadMode, MultiThreaded, WriteOptions};
 use std::sync::{Arc, Mutex};
 
 mod append;
-#[cfg(any(test, feature = "test-support"))]
 mod fault;
 mod open;
 mod read_store;
 
-#[cfg(any(test, feature = "test-support"))]
 pub use fault::FaultAt;
-#[cfg(any(test, feature = "test-support"))]
 pub(crate) use fault::{write_batch_with_fault, FaultWriteError};
 
 /// How many locks record appends are spread over. An agent always takes

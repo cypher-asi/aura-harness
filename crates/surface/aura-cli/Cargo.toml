@@ -34,6 +34,7 @@ serde_json = { workspace = true }
 aura-core-protocol = { path = "../../core/aura-core-protocol" }
 tokio = { workspace = true }
 dirs = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [lints]
 workspace = true

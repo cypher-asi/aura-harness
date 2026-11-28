@@ -1,0 +1,22 @@
+# Settings for `cargo hakari`, which keeps `workspace-hack` listing every
+# feature any crate in the workspace turns on in a dependency. With every
+# crate depending on it, `cargo build`, `cargo test` and `-p` runs build
+# each dependency one way and reuse each other's artifacts.
+#
+# After changing a dependency, run `cargo hakari generate` and
+# `cargo hakari manage-deps`; CI checks both. See docs/development.md.
+# Options: https://docs.rs/cargo-hakari/latest/cargo_hakari/config
+
+hakari-package = "workspace-hack"
+
+# Version 4 requires cargo-hakari 0.9.22 or above.
+dep-format-version = "4"
+
+resolver = "2"
+
+# The platforms we build on.
+platforms = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]

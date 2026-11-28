@@ -18,6 +18,7 @@ ts-rs = { version = "10", optional = true, features = ["serde-json-impl"] }
 # the harness-core type definitions they decode into. Both crates sit
 # in the `core` layer, so this is a same-layer (sibling) dependency.
 aura-core-types = { path = "../aura-core-types" }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [features]
 typescript = ["ts-rs"]

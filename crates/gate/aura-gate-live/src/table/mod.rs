@@ -41,7 +41,6 @@ use aura_model::ThinkingEffort;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
-#[cfg(any(test, feature = "test-support"))]
 mod learn;
 #[cfg(test)]
 mod tests;

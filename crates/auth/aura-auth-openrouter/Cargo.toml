@@ -17,6 +17,7 @@ serde_json = { workspace = true }
 # Same version as aura-auth-kit; derives a stable subject from a pasted key.
 sha2 = "0.10"
 url = "2.5"
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [dev-dependencies]
 axum = { workspace = true }

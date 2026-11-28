@@ -24,6 +24,7 @@ async-trait = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 dashmap = { workspace = true }
+workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
