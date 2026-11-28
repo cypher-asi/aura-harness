@@ -116,6 +116,7 @@ Locally, don't add `--all-features`, don't set `RUSTFLAGS` for one command, and 
 
 - After adding, removing or changing a dependency, run `cargo hakari generate && cargo hakari manage-deps` (install: `cargo install cargo-hakari --locked`). CI fails while `workspace-hack` is out of date.
 - Never put test helpers behind a cargo feature (no `test-support` features). Compile them in and mark them `#[doc(hidden)]`; a test-only feature rebuilds the crate and every crate above it each time you switch between `cargo test` and `cargo run`.
+- Crates set `[lib] doctest = false`. A doc example meant to run as a test needs that line removed from its crate; otherwise write it as a unit test.
 
 ---
 

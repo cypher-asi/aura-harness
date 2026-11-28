@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 aura-core-auth = { path = "../../core/aura-core-auth" }
 aura-auth-kit = { path = "../aura-auth-kit" }

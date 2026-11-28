@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+doctest = false
+
 # IMPORTANT — boundary contract (Phase 2 of the core-loop architecture
 # refactor): this crate is render-only. It must NOT depend on
 # `aura-agent`, `aura-engine-automaton`, `aura-node`, or `aura-reasoner`.

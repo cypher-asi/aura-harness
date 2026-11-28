@@ -8,9 +8,13 @@ rust-version = "1.88"
 license.workspace = true
 publish = false
 
+[lib]
+doctest = false
+
 [[bin]]
 name = "aura-desktop"
 path = "src/main.rs"
+test = false
 
 [dependencies]
 aura-ui = { path = "../../ui/aura-ui" }

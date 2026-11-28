@@ -18,3 +18,6 @@
   by every checkout, so worktrees building at once no longer wait on each
   other or pick up each other's builds. Run `scripts/setup-sccache.sh`
   once per machine to share compiled dependencies between checkouts.
+- `cargo test` runs doctests only in the two crates that have them, and
+  links no test binary for the binaries and the libraries without unit
+  tests.
