@@ -9,8 +9,9 @@ impl App {
         match cmd {
             UiCommand::SetChannels(channels) => self.set_channels(channels),
             UiCommand::SetChannelTasks { .. } => {
-                // The channel app shows only its chat, members, info and
-                // merge queue; members' tasks are seen from PROJECTS.
+                // A channel's TASKS lists the work in its project's folder
+                // by any agent (`SetTasks`), not its members' wherever
+                // they work.
             }
             UiCommand::ChannelPost { channel_id, post } => self.add_channel_post(channel_id, post),
             UiCommand::SetChannelPosts { channel_id, posts } => {

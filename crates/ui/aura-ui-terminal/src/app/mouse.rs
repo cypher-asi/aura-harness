@@ -2,7 +2,9 @@
 //! the pointer.
 
 use super::selection::Selection;
-use super::{contains, App, AppState, DetailView, HoverTarget, InputView, PanelFocus};
+use super::{
+    contains, tab_at, App, AppState, DetailView, HoverTarget, InputView, PanelFocus, RecordsTab,
+};
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Position;
 
@@ -432,7 +434,8 @@ impl App {
             return Some(target);
         }
         if contains(self.areas.record_tabs, column, row) {
-            return self.record_tab_at(column, row).map(HoverTarget::RecordTab);
+            return tab_at(self.areas.record_tabs, column, row, RecordsTab::layout)
+                .map(HoverTarget::RecordTab);
         }
         if let Some(index) = self.record_row_at(column, row) {
             return Some(HoverTarget::RecordRow(index));
@@ -442,9 +445,6 @@ impl App {
         }
         if let Some(index) = self.inbox_row_at(column, row) {
             return Some(HoverTarget::InboxRow(index));
-        }
-        if let Some(index) = self.task_row_at(column, row) {
-            return Some(HoverTarget::TaskRow(index));
         }
         if let Some(target) = self.hovered_side_panel(column, row) {
             return Some(target);

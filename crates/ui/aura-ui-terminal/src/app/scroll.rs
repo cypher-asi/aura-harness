@@ -5,6 +5,19 @@
 use super::processes::SIDE_PAGE;
 use super::{follow_selection, App, PanelFocus, RecordsTab, SidePanelTab};
 use crossterm::event::{KeyCode, KeyModifiers, MouseEventKind};
+use std::mem;
+
+/// Where a chat off screen was left scrolled, to scroll it back there when
+/// it comes back: the lines below its view, and how long it was then, so
+/// lines that came meanwhile push it up as they would have on screen (see
+/// [`App::sync_chat_scroll`]).
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct ChatPlace {
+    /// Lines below the view (0 follows the end)
+    offset: usize,
+    /// Lines the chat had when last drawn
+    lines: usize,
+}
 
 /// How far an info tab (POLICIES, HOST, a channel's INFO), a read-only
 /// document, is scrolled. The wheel and the navigation keys move it; the
@@ -73,6 +86,15 @@ impl App {
         let bottom_start = total_lines.saturating_sub(visible_rows);
         self.scroll_offset = self.scroll_offset.min(bottom_start);
         bottom_start - self.scroll_offset
+    }
+
+    /// Scroll the chat on screen to `place`, as another chat comes on
+    /// screen, and return where it was.
+    pub(super) fn replace_chat_place(&mut self, place: ChatPlace) -> ChatPlace {
+        ChatPlace {
+            offset: mem::replace(&mut self.scroll_offset, place.offset),
+            lines: mem::replace(&mut self.chat.line_count, place.lines),
+        }
     }
 
     /// Lines PageUp/PageDown move the chat: a screenful, less two lines
@@ -193,7 +215,6 @@ impl App {
             RecordsTab::Members => self.scroll_members(delta),
             RecordsTab::Policies => self.scroll_policies(delta),
             RecordsTab::Inbox => self.scroll_inbox(delta),
-            RecordsTab::ChannelTasks => self.task_list.move_by(delta),
         }
     }
 

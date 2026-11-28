@@ -156,7 +156,7 @@ fn test_right_click_on_the_channel_side_panel_opens_its_menu() {
     let id = app.channels()[0].id.clone();
     app.open_channel_by_id(&id);
     app.show_side_tab(SidePanelTab::ChannelInfo);
-    right_click_on_where(&mut app, "COORDINATOR", |_| true);
+    right_click_on_where(&mut app, "PROJECT", |row| !row.contains("PROJECTS"));
     assert_eq!(
         menu_items(&app),
         [MenuItem::EditChannel, MenuItem::ArchiveChannel]

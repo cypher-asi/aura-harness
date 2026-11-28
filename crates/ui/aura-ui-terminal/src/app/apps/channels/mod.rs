@@ -1,7 +1,7 @@
 //! Channels, an app of their own beside the agents: the agents panel's
 //! CHANNELS tab lists them, the chat panel holds the open channel's
-//! conversation and nothing else, and the right column has the channel's
-//! TASKS above a panel with its MEMBERS and INFO tabs.
+//! conversation and nothing else, and the right column is one panel with
+//! the channel's MEMBERS, INFO, QUEUE and TASKS tabs.
 //!
 //! The agents panel's tab picks the app on screen (see `apps`). A channel
 //! is open only while CHANNELS shows:
@@ -28,23 +28,27 @@
 //! that drops out of `SetChannels` closes here without telling it: the
 //! session already knows it is gone.
 //!
-//! While a channel is open the Record panel's place holds the channel's
-//! TASKS: every plan and task in the channel's project, by every agent
-//! working there (see [`RecordsTab::ChannelTasks`]). Below it the side
-//! panel lists only MEMBERS and INFO. The user's own layout flags are
-//! left alone, and the tabs shown before the channel opened come back
-//! when it closes, so leaving gives back exactly the layout there was.
-//! With CHANNELS showing and no channel open there is nothing to show
-//! beside the list: the right column hides, and the chat asks for a
-//! channel to be picked.
+//! The channel's chat is its coordinator's chat with the posts merged in,
+//! but it is scrolled on its own: scrolling the coordinator in an agent
+//! app leaves the channel where it was, and the other way round.
+//!
+//! While a channel is open the right column is one tall side panel with
+//! only the channel's MEMBERS, INFO and QUEUE, then TASKS: every plan and
+//! task in the channel's project, by every agent working there (see
+//! [`App::side_maximized`]). The user's own layout flags are left alone,
+//! and the side tab shown before the channel opened comes back when it
+//! closes, so leaving gives back exactly the layout there was. With
+//! CHANNELS showing and no channel open there is nothing to show beside
+//! the list: the right column hides, and the chat asks for a channel to
+//! be picked.
 
 mod list;
 mod side;
 
 pub(crate) use side::CHANNEL_MEMBER_ROWS;
 
-use crate::app::scroll::InfoScroll;
-use crate::app::{AgentsTab, App, ChatTab, RecordsTab, SidePanelTab};
+use crate::app::scroll::{ChatPlace, InfoScroll};
+use crate::app::{AgentsTab, App, ChatTab, SidePanelTab};
 use crate::events::{ChannelPostView, ChannelSummary, MergeQueueView, UiEvent};
 use ratatui::layout::Rect;
 use std::collections::HashMap;
@@ -86,9 +90,13 @@ pub(crate) struct ChannelState {
     /// The side tab shown before the channel opened, shown again when it
     /// closes
     side_tab_before: Option<SidePanelTab>,
-    /// The Kernel panel's tab shown before the channel opened, shown
-    /// again when it closes
-    records_tab_before: Option<RecordsTab>,
+    /// Where the chat of each channel not on screen was left scrolled, by
+    /// channel id
+    chat_places: HashMap<String, ChatPlace>,
+    /// The channel whose chat is on screen, and where its coordinator's
+    /// own chat was scrolled, given back when the channel's chat leaves
+    /// the screen
+    chat_shown: Option<(String, ChatPlace)>,
 }
 
 impl ChannelState {
@@ -317,7 +325,6 @@ impl App {
         self.switch_app(AgentsTab::Channels);
         if self.channels.open.is_none() {
             self.channels.side_tab_before = Some(self.side.tab);
-            self.channels.records_tab_before = Some(self.records.tab);
         }
         self.channels.open = Some(id.to_string());
         if self.apps.channel.as_deref() != Some(id) {
@@ -330,7 +337,6 @@ impl App {
         self.channels.selected = row;
         self.channels.forget_areas();
         self.show_side_tab(SidePanelTab::ChannelMembers);
-        self.show_records_tab(RecordsTab::ChannelTasks);
         self.refresh_side_scope();
         self.show_channel_chat();
         // The coordinator comes on screen now, as a listed agent does when
@@ -342,6 +348,7 @@ impl App {
         // a second time.
         let coordinator = self.channels.list[row].coordinator_id.clone();
         let switched = !coordinator.is_empty() && self.switch_on_screen(&coordinator);
+        self.sync_channel_chat_place();
         self.channels.awaiting_member =
             !switched && !self.channels.is_open_member(&self.active_agent_id);
         self.keep_channel_focus_on_screen();
@@ -358,17 +365,43 @@ impl App {
     }
 
     /// Undo what opening the channel did to the panels, now that
-    /// `channels.open` is `None`: show the tabs there were before it, and
-    /// TASKS lists the side panel's scope again.
+    /// `channels.open` is `None`: show the side tab there was before it,
+    /// and TASKS lists the side panel's scope again.
     fn left_channel(&mut self) {
         self.channels.forget_areas();
         self.channels.awaiting_member = false;
+        self.sync_channel_chat_place();
         let before = self.channels.side_tab_before.take().unwrap_or_default();
         self.show_side_tab(before);
-        // Set rather than shown: the agent the app goes to is not on
-        // screen yet, and POLICIES must not ask for the policies of the
-        // one leaving.
-        self.records.tab = self.channels.records_tab_before.take().unwrap_or_default();
         self.refresh_side_scope();
+    }
+
+    /// Scroll the chat on screen where what it shows was left: the open
+    /// channel's chat where the channel was, its coordinator's own chat
+    /// where the coordinator was. Called wherever a channel opens or
+    /// closes and an agent comes on screen; the two change places only
+    /// when the chat turns from one to the other.
+    pub(in crate::app) fn sync_channel_chat_place(&mut self) {
+        let shown = self.coordinated_channel().map(|channel| channel.id.clone());
+        if self.channels.chat_shown.as_ref().map(|(id, _)| id) == shown.as_ref() {
+            return;
+        }
+        self.put_channel_chat_place_away();
+        if let Some(id) = shown {
+            let place = self.channels.chat_places.remove(&id).unwrap_or_default();
+            let own = self.replace_chat_place(place);
+            self.channels.chat_shown = Some((id, own));
+        }
+    }
+
+    /// Keep where the channel's chat on screen was scrolled, and give its
+    /// coordinator's chat back its own scroll: as the channel closes, and
+    /// before the coordinator leaves the screen, so the chat kept for it
+    /// holds its own.
+    pub(in crate::app) fn put_channel_chat_place_away(&mut self) {
+        if let Some((id, own)) = self.channels.chat_shown.take() {
+            let place = self.replace_chat_place(own);
+            self.channels.chat_places.insert(id, place);
+        }
     }
 }

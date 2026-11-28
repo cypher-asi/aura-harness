@@ -187,13 +187,14 @@ fn test_queue_tab_is_picked_by_click_and_shift_arrows_cycle_the_channel_tabs() {
     }
     assert_eq!(app.focus(), PanelFocus::Sandbox);
     let mut shown = Vec::new();
-    for _ in 0..3 {
+    for _ in 0..4 {
         let _ = app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
         shown.push(app.side_tab());
     }
     assert_eq!(
         shown,
         [
+            SidePanelTab::Tasks,
             SidePanelTab::ChannelMembers,
             SidePanelTab::ChannelInfo,
             SidePanelTab::ChannelQueue
