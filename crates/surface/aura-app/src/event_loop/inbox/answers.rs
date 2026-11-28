@@ -72,18 +72,33 @@ pub(crate) fn give_up_seen(
     }
 }
 
-/// Give up everything `agent_id` owes, its work having not even started,
-/// `why`, telling each sender. Returns how many it owed.
-pub(crate) fn give_up_all(hub: &AgentHub, agent_id: AgentId, why: &str) -> usize {
+/// Tell the sender of every request `agent_id` owes that no answer is
+/// coming, its work having stopped `why` before any of it ran. Work its
+/// sender took back is dropped without a word: the sender knows.
+pub(crate) fn give_up_all(hub: &AgentHub, agent_id: AgentId, why: &str) {
+    let why = capped(why, STOPPED_CHARS);
     let owed = lock(&hub.inbox.state)
         .owed
         .remove(&agent_id)
         .unwrap_or_default();
-    let why = capped(why, STOPPED_CHARS);
-    for owed in &owed {
+    for owed in owed.iter().filter(|owed| !owed.withdrawn) {
         reply(hub, agent_id, owed, false, &stopped(&why, None));
     }
-    owed.len()
+}
+
+/// Why an archived agent's owed work won't be answered.
+pub(crate) const ARCHIVED: &str = "the agent was archived";
+
+/// After `agent_id`'s turn ended: when it was archived meanwhile, give up
+/// what it still owes ([`give_up_all`]), its queued work having been
+/// dropped.
+pub(crate) fn give_up_if_archived(hub: &AgentHub, agent_id: AgentId) {
+    let archived = lock(&hub.registry)
+        .find(agent_id)
+        .is_some_and(|agent| agent.archived);
+    if archived {
+        give_up_all(hub, agent_id, ARCHIVED);
+    }
 }
 
 /// The reply of work that stopped `why`, having said `said` last.
@@ -123,7 +138,11 @@ fn take_seen(hub: &AgentHub, agent_id: AgentId, messages: &[Message]) -> Vec<(Ow
 fn take_oldest(hub: &AgentHub, agent_id: AgentId) -> Option<Owed> {
     let mut state = lock(&hub.inbox.state);
     let owed = state.owed.get_mut(&agent_id)?;
-    let oldest = (!owed.is_empty()).then(|| owed.remove(0));
+    // One taken back never started, so it isn't the one that ran.
+    let oldest = owed
+        .iter()
+        .position(|request| !request.withdrawn)
+        .map(|at| owed.remove(at));
     if owed.is_empty() {
         state.owed.remove(&agent_id);
     }

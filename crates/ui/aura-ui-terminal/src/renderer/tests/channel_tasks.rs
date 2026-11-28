@@ -50,7 +50,7 @@ fn test_the_tasks_tab_right_of_queue_draws_the_projects_plans() {
 }
 
 #[test]
-fn test_a_hosted_channel_hands_its_four_tabs_to_the_front_end() {
+fn test_a_hosted_channel_hands_its_five_tabs_to_the_front_end() {
     use crate::app::{Pane, PaneTab, SidePanelTab};
 
     let mut app = channel_tasks_app();
@@ -69,6 +69,7 @@ fn test_a_hosted_channel_hands_its_four_tabs_to_the_front_end() {
             PaneTab::Side(SidePanelTab::ChannelInfo),
             PaneTab::Side(SidePanelTab::ChannelQueue),
             PaneTab::Side(SidePanelTab::Tasks),
+            PaneTab::Side(SidePanelTab::ChannelHistory),
         ]
     );
 }

@@ -1,7 +1,8 @@
 //! The CHANNELS list: following the agent on screen, the list and its
 //! posts arriving, its rows, archiving a channel, and its keys.
 
-use crate::app::{contains, follow_selection, App, NotificationType};
+use crate::app::wheel_views::WheelList;
+use crate::app::{contains, App, NotificationType};
 use crate::events::{ChannelPostView, ChannelSummary, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
@@ -67,8 +68,11 @@ impl App {
     /// "+ New channel" is pinned below them, so it never scrolls.
     pub(crate) fn sync_channels_scroll(&mut self, visible_rows: usize) {
         let state = &mut self.channels;
-        state.scroll =
-            follow_selection(state.scroll, state.selected, visible_rows, state.list.len());
+        state.scroll = self.panels.wheel.place(
+            WheelList::Channels,
+            (state.scroll, state.selected),
+            (visible_rows, state.list.len()),
+        );
     }
 
     /// Record where the list's rows were drawn this frame.

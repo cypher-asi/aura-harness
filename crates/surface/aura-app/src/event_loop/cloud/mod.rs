@@ -78,10 +78,11 @@ use boot::BootConsoleUi;
 pub(super) use ended::handle_ended;
 use machine::MachineRows;
 pub(super) use machine::{list_sandbox, read_sandbox_file, refresh_machine_plans, MachinePlans};
+pub(super) use member_start::start_in_cloud;
+use member_start::{within, Start, START_TIMEOUT};
 use moving::MoveMark;
 pub(super) use placement::{
     handle_host_action, handle_set_placement, handle_setup, on_archive, refresh_reach,
-    start_in_cloud,
 };
 pub(super) use publish::start;
 use publish::start_publisher;
@@ -115,6 +116,9 @@ struct Shared {
     hub: Mutex<Option<Arc<CloudHub>>>,
     /// Agents being moved, each held by a [`MoveMark`].
     moving: Mutex<HashSet<AgentId>>,
+    /// New members whose cloud start failed, and why, until the loop hears
+    /// their move ended
+    failed_starts: Mutex<std::collections::HashMap<AgentId, String>>,
     /// Wakes the HOST publisher before its next refresh is due.
     changed: tokio::sync::Notify,
     /// Cloud agents with a turn running, and how to stop it.

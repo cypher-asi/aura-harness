@@ -7,6 +7,9 @@ use crate::event_loop::turns::Prompt;
 use aura_agent::checkpoint::{Checkpoints, SessionCheckpoint};
 use tokio::sync::mpsc;
 
+/// Why a cloud turn that was cancelled ended: not a failure of its own.
+pub(super) const STOPPED: &str = "it was stopped";
+
 /// Prompts and commands for a cloud agent, or for one being moved.
 /// Returns the work when it is for the local kernel after all. Work for
 /// a moving agent, or a cloud agent with a turn running, waits in its
@@ -16,6 +19,9 @@ pub(in crate::event_loop) async fn submit(
     agent: AgentId,
     work: Work,
 ) -> Option<Work> {
+    if is_withdrawn(state, agent, &work).await {
+        return None;
+    }
     if let Some(root) = state.cloud.machine_root(agent) {
         let note = spawned_on_machine(state, agent, root);
         system(state, agent, note).await;
@@ -31,6 +37,10 @@ pub(in crate::event_loop) async fn submit(
         state.idle.remove(&agent);
     }
     if !state.cloud.is_cloud(agent) {
+        if lock(&state.hub.cloud_members).contains(&agent) {
+            start_before(state, agent, work).await;
+            return None;
+        }
         return Some(work);
     }
     let hub = state.cloud.hub()?;
@@ -47,6 +57,40 @@ pub(in crate::event_loop) async fn submit(
     }
     run(state, hub, agent, work).await;
     None
+}
+
+/// Whether `work` for `agent` is an assignment its coordinator took back
+/// before it started: then it is dropped unrun, and its chat says so.
+async fn is_withdrawn(state: &LoopState<'_>, agent: AgentId, work: &Work) -> bool {
+    let Work::Prompt { prompt, .. } = work else {
+        return false;
+    };
+    if !crate::event_loop::inbox::take_withdrawn(&state.hub, agent, &prompt.text) {
+        return false;
+    }
+    let first = prompt.text.lines().next().unwrap_or_default().to_string();
+    system(
+        state,
+        agent,
+        format!("Its coordinator took this back before it started: {first}"),
+    )
+    .await;
+    true
+}
+
+/// `work` for `agent`, a member of a channel whose agents run only in the
+/// cloud, which has no cloud machine here: none started, its start was
+/// lost to a restart, or the cloud isn't connected. It never runs on this
+/// computer, in a folder other agents share: its machine is started (or
+/// found again) first and the work waits for it, or, when that can't be
+/// done, the member fails and whoever assigned it work is told.
+async fn start_before(state: &mut LoopState<'_>, agent: AgentId, work: Work) {
+    lock(&state.hub.cloud_starts).remove(&agent);
+    info!(%agent, "A cloud channel's member has no machine here; starting one before its work");
+    if super::start_in_cloud(state, agent).await {
+        state.queued.push_back(agent, work);
+        crate::event_loop::hud::send_queued(state, agent).await;
+    }
 }
 
 /// Start the work queued for `agent` where it runs now, through
@@ -156,6 +200,7 @@ async fn start_turn(
         .lock()
         .insert(agent, cancel.clone());
     lock(&state.hub.cloud_turns).insert(agent);
+    state.hub.status.clear(agent);
     crate::event_loop::agents::send_agent_list(state).await;
     let mut row = crate::event_loop::handlers::turn_summary(
         agent,
@@ -177,7 +222,7 @@ async fn start_turn(
         );
         let copied = copied_session(&ui, &mut rx, sessions, agent).await;
         let failure = match end {
-            _ if stopped => Some("it was stopped".to_string()),
+            _ if stopped => Some(STOPPED.to_string()),
             TurnEnd::Done => None,
             TurnEnd::Failed(why) => Some(why),
         };

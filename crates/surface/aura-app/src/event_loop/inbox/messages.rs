@@ -86,6 +86,7 @@ impl Envelope<'_> {
                 thread: thread.clone(),
                 subject: subject.clone(),
                 todo: todo.map(str::to_string),
+                withdrawn: false,
             });
         }
         Some((subject, thread))
@@ -229,8 +230,12 @@ pub(in crate::event_loop) async fn deliver(
         // A member may have joined: every placed member reaches it now.
         crate::event_loop::cloud::refresh_reach(state).await;
     }
-    if lock(&state.hub.cloud_starts).remove(&to) {
-        crate::event_loop::cloud::start_in_cloud(state, to).await;
+    // A member that can't have its machine fails, and its senders are
+    // told: the message must not run here instead.
+    if lock(&state.hub.cloud_starts).remove(&to)
+        && !crate::event_loop::cloud::start_in_cloud(state, to).await
+    {
+        return;
     }
     if kind != InboxKind::Assignment {
         if let Some(steering) = state.hub.steering(to) {

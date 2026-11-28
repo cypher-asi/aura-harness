@@ -1,58 +1,70 @@
 //! Why an agent that isn't working is idle, for its peers: what
-//! `list_agents` and `get_agent_state` show as its `state` ([`Standings`]).
+//! `list_agents` and `get_agent_state` show as its `state`
+//! ([`state_of`]).
 //!
-//! The loop writes it: a new member of a cloud channel is starting in
-//! the cloud while it moves to a machine of its own, an agent whose work
-//! could not start failed to start, and one the stall sweep gave up on
-//! stalled. How much work waits in its queue is noted as the queue
-//! changes ([`super::hud::send_queued`]).
+//! Most of it is read where it is kept: a start in the cloud and a
+//! failure from the agent's status ([`super::subagents::AgentStatus`]),
+//! a new member of a cloud channel not yet started from the hub's cloud
+//! starts. Kept here: how much work waits in each queue, noted as the
+//! queue changes ([`super::hud::send_queued`]), the agents the stall
+//! sweep gave up on, and the sweep's counts ([`super::stalls`]).
 //!
 //! # Invariants
 //!
-//! * A standing says why an agent is idle; working always wins over it.
-//! * Starting work clears a failure or a stall: it is no longer idle.
+//! * Working always wins over why an agent would be idle.
+//! * Starting a turn clears a stall: the agent is no longer idle.
 
-use super::subagents::lock;
-use aura_core_types::time::now_ms;
+use super::subagents::{lock, AgentHub};
 use aura_core_types::AgentId;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
-
-/// Why an idle agent is idle.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Standing {
-    /// Moving to a cloud machine of its own before its first work: the
-    /// boot stage it reached, and what that stage waits on.
-    Starting {
-        stage: Option<String>,
-        waiting: Option<String>,
-    },
-    /// Its work could not start, and why.
-    FailedToStart(String),
-    /// It owed reports with nothing running or queued, and why.
-    Stalled(String),
-}
 
 /// What peers are told of an agent's state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StateView {
     pub state: &'static str,
     pub why: Option<String>,
-    pub since_ms: Option<u64>,
 }
 
-/// Each agent's [`Standing`], since when, and its queue's length.
+/// Queue lengths, stalls and the stall sweep's counts.
 #[derive(Default)]
 pub(crate) struct Standings {
-    standing: Mutex<HashMap<AgentId, (Standing, u64)>>,
     queued: Mutex<HashMap<AgentId, usize>>,
-    /// The stall sweep's count of sweeps in a row each agent owing
-    /// answers was seen idle, and whether it was retried already
-    /// ([`super::stalls`]).
+    stalled: Mutex<HashSet<AgentId>>,
+    /// Sweeps in a row each agent owing answers was seen idle, and
+    /// whether it was retried already.
     strikes: Mutex<HashMap<AgentId, (u8, bool)>>,
 }
 
 impl Standings {
+    /// `count` pieces of work wait in `agent`'s queue.
+    pub(crate) fn set_queued(&self, agent: AgentId, count: usize) {
+        let mut queued = lock(&self.queued);
+        if count == 0 {
+            queued.remove(&agent);
+        } else {
+            queued.insert(agent, count);
+        }
+    }
+
+    fn queued(&self, agent: AgentId) -> Option<usize> {
+        lock(&self.queued).get(&agent).copied()
+    }
+
+    /// The stall sweep gave up on `agent`.
+    pub(crate) fn stall(&self, agent: AgentId) {
+        lock(&self.stalled).insert(agent);
+    }
+
+    /// `agent`'s turn starts: it is not stalled any more.
+    pub(crate) fn started(&self, agent: AgentId) {
+        lock(&self.stalled).remove(&agent);
+    }
+
+    fn is_stalled(&self, agent: AgentId) -> bool {
+        lock(&self.stalled).contains(&agent)
+    }
+
     /// One more sweep saw `agent` idle while it owes answers: how many in
     /// a row now, and whether it was retried already.
     pub(crate) fn strike(&self, agent: AgentId) -> (u8, bool) {
@@ -76,114 +88,38 @@ impl Standings {
     }
 
     /// Forget the counts of agents not in `owing`, which owe nothing now.
-    pub(crate) fn keep_strikes(&self, owing: &std::collections::HashSet<AgentId>) {
+    pub(crate) fn keep_strikes(&self, owing: &HashSet<AgentId>) {
         lock(&self.strikes).retain(|agent, _| owing.contains(agent));
-    }
-    /// `agent` stands as `standing` from now on.
-    pub(crate) fn set(&self, agent: AgentId, standing: Standing) {
-        lock(&self.standing).insert(agent, (standing, now_ms()));
-    }
-
-    /// `agent`, starting in the cloud, reached boot `stage` or waits on
-    /// `waiting` now; since when it started stays as it was.
-    pub(crate) fn note_boot(&self, agent: AgentId, stage: Option<&str>, waiting: Option<&str>) {
-        let mut standings = lock(&self.standing);
-        let Some((
-            Standing::Starting {
-                stage: at,
-                waiting: on,
-            },
-            _,
-        )) = standings.get_mut(&agent)
-        else {
-            return;
-        };
-        if let Some(stage) = stage {
-            *at = Some(stage.to_string());
-            *on = None;
-        }
-        if let Some(waiting) = waiting {
-            *on = Some(waiting.to_string()).filter(|what| !what.is_empty());
-        }
-    }
-
-    /// `agent` stands as nothing in particular any more.
-    pub(crate) fn clear(&self, agent: AgentId) {
-        lock(&self.standing).remove(&agent);
-    }
-
-    /// Clear a failure or a stall of `agent`, whose work starts now.
-    pub(crate) fn started(&self, agent: AgentId) {
-        let mut standings = lock(&self.standing);
-        if matches!(
-            standings.get(&agent),
-            Some((Standing::FailedToStart(_) | Standing::Stalled(_), _))
-        ) {
-            standings.remove(&agent);
-        }
-    }
-
-    /// How `agent` stands, and since when.
-    pub(crate) fn get(&self, agent: AgentId) -> Option<(Standing, u64)> {
-        lock(&self.standing).get(&agent).cloned()
-    }
-
-    /// `count` pieces of work wait in `agent`'s queue.
-    pub(crate) fn set_queued(&self, agent: AgentId, count: usize) {
-        let mut queued = lock(&self.queued);
-        if count == 0 {
-            queued.remove(&agent);
-        } else {
-            queued.insert(agent, count);
-        }
-    }
-
-    /// What peers are told of `agent`, `working` or not.
-    pub(crate) fn view(&self, agent: AgentId, working: bool) -> StateView {
-        if working {
-            return StateView {
-                state: "working",
-                why: None,
-                since_ms: None,
-            };
-        }
-        if let Some((standing, since)) = self.get(agent) {
-            let (state, why) = match standing {
-                Standing::Starting { stage, waiting } => {
-                    ("starting in the cloud", Some(starting_why(stage, waiting)))
-                }
-                Standing::FailedToStart(why) => ("failed to start", Some(why)),
-                Standing::Stalled(why) => ("stalled", Some(why)),
-            };
-            return StateView {
-                state,
-                why,
-                since_ms: Some(since),
-            };
-        }
-        match lock(&self.queued).get(&agent).copied() {
-            Some(count) => StateView {
-                state: "queued",
-                why: Some(format!("{count} piece(s) of work wait for it to be free")),
-                since_ms: None,
-            },
-            None => StateView {
-                state: "idle",
-                why: None,
-                since_ms: None,
-            },
-        }
     }
 }
 
-/// What a start in the cloud is doing, from the boot `stage` it reached
-/// and what that stage waits on.
-fn starting_why(stage: Option<String>, waiting: Option<String>) -> String {
-    match (stage, waiting) {
-        (Some(stage), Some(waiting)) => format!("{stage}: {waiting}"),
-        (Some(stage), None) => stage,
-        (None, Some(waiting)) => waiting,
-        (None, None) => "connecting to the cloud".to_string(),
+/// What `agent`'s peers are told of it: `working`, `starting in the
+/// cloud`, `stalled` or `failed` (with why), `queued` or `idle`.
+pub(crate) fn state_of(hub: &AgentHub, agent: AgentId) -> StateView {
+    let view = |state, why| StateView { state, why };
+    if hub.is_working(agent) {
+        return view("working", None);
+    }
+    if hub.status.is_starting(agent) || lock(&hub.cloud_starts).contains(&agent) {
+        return view(
+            "starting in the cloud",
+            Some("its work waits until its machine is up".to_string()),
+        );
+    }
+    if let Some(why) = hub.status.failure(agent) {
+        let state = if hub.standing.is_stalled(agent) {
+            "stalled"
+        } else {
+            "failed"
+        };
+        return view(state, Some(why));
+    }
+    match hub.standing.queued(agent) {
+        Some(count) => view(
+            "queued",
+            Some(format!("{count} piece(s) of work wait for it to be free")),
+        ),
+        None => view("idle", None),
     }
 }
 
@@ -192,40 +128,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn working_wins_then_a_standing_then_the_queue() {
+    fn strikes_count_sweeps_in_a_row_and_remember_a_retry() {
         let standings = Standings::default();
         let agent = AgentId::new([1; 32]);
-        assert_eq!(standings.view(agent, false).state, "idle");
-        standings.set_queued(agent, 2);
-        assert_eq!(standings.view(agent, false).state, "queued");
-        standings.set(
-            agent,
-            Standing::Starting {
-                stage: None,
-                waiting: None,
-            },
-        );
-        standings.note_boot(agent, Some("Project snapshot"), None);
-        standings.note_boot(agent, None, Some("boxd is building it"));
-        let view = standings.view(agent, false);
-        assert_eq!(view.state, "starting in the cloud");
+        assert_eq!(standings.strike(agent), (1, false));
+        assert_eq!(standings.strike(agent), (2, false));
+        standings.retried(agent);
+        standings.unstrike(agent);
+        assert_eq!(standings.strike(agent), (1, true));
+        standings.keep_strikes(&HashSet::new());
         assert_eq!(
-            view.why.as_deref(),
-            Some("Project snapshot: boxd is building it")
+            standings.strike(agent),
+            (1, false),
+            "forgotten once it owes nothing"
         );
-        assert!(view.since_ms.is_some());
-        assert_eq!(standings.view(agent, true).state, "working");
-
-        standings.started(agent);
-        assert_eq!(
-            standings.view(agent, false).state,
-            "starting in the cloud",
-            "a start goes on until its move ends"
-        );
-        standings.set(agent, Standing::FailedToStart("no model".into()));
-        assert_eq!(standings.view(agent, false).state, "failed to start");
-        standings.started(agent);
-        standings.set_queued(agent, 0);
-        assert_eq!(standings.view(agent, false).state, "idle");
     }
 }

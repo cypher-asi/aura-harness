@@ -1,170 +1,181 @@
-//! A new member of a cloud channel starting on a machine of its own: its
-//! peers see how far it got ([`super::super::standing`]), and the agents
-//! waiting on its work hear when the start is slow or fails.
+//! A new member of a channel whose agents run in the cloud starting on a
+//! machine of its own.
+//!
+//! # Invariant
+//!
+//! Such a member only ever works in the cloud. When its machine can't be
+//! had (no project folder to start from, no connection, a failed or
+//! too-slow start), it doesn't fall back to this computer: it fails. Its
+//! row shows the failure in red, its chat says why, the work queued for
+//! it is dropped, and whoever assigned it work is told at once, with
+//! `ok=false` and the reason.
 
+use super::placement::{place, place_request};
 use super::*;
 use crate::event_loop::inbox;
-use crate::event_loop::standing::Standing;
+use std::future::Future;
 
-/// How long a new member may take to start in the cloud before the
-/// agents waiting on its work hear about it.
-pub(super) const SLOW_START: Duration = Duration::from_secs(15 * 60);
+/// Longest a machine may take to start: past it the start fails instead
+/// of leaving the agent moving, its work waiting, forever. A fresh
+/// machine usually starts in a few minutes; this leaves room for a slow
+/// one but not for a stuck one.
+pub(super) const START_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 
-/// A watch noting on `hub` the boot stage `agent` reached and what it
-/// waits on, for its peers.
-pub(super) fn boot_watch(hub: &Arc<AgentHub>, agent: AgentId) -> boot::BootWatch {
-    let hub = Arc::clone(hub);
-    Arc::new(move |event| match event {
-        BootEvent::Stage {
-            stage,
-            state: StageState::Started,
-        } => hub.standing.note_boot(agent, Some(stage.label()), None),
-        BootEvent::Waiting { what, .. } => {
-            hub.standing
-                .note_boot(agent, None, Some(what.as_deref().unwrap_or_default()));
-        }
-        _ => {}
-    })
+/// Why a new member of a cloud channel can't start when its project gives
+/// a machine nothing to start from.
+const NO_PROJECT_FOLDER: &str =
+    "the channel has no project folder for a cloud machine to start from";
+
+/// How a placement was asked for, which sets what its failure means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Start {
+    /// The user moved an agent: a failure leaves it here, where it was.
+    Move,
+    /// A new member of a cloud channel starts: a failure fails it.
+    Member,
 }
 
-/// Whether `agent` is starting in the cloud.
-pub(super) fn is_starting(hub: &AgentHub, agent: AgentId) -> bool {
-    matches!(
-        hub.standing.get(agent),
-        Some((Standing::Starting { .. }, _))
+/// `work`, given up as failed after `limit`: its error as text, or that
+/// it took too long.
+pub(super) async fn within<T, E: std::fmt::Display>(
+    limit: Duration,
+    work: impl Future<Output = Result<T, E>>,
+) -> Result<T, String> {
+    match tokio::time::timeout(limit, work).await {
+        Ok(result) => result.map_err(|err| err.to_string()),
+        Err(_) => Err(format!(
+            "the machine did not start within {} minutes",
+            limit.as_secs() / 60
+        )),
+    }
+}
+
+/// Start `agent`, a new member of a channel whose agents run in the
+/// cloud, on a cloud machine of its own before its first work, which
+/// waits in its queue meanwhile. Returns whether the start is under way;
+/// when it couldn't begin, the member failed ([`fail_cloud_start`]) and
+/// the work must not run. Its project's default placement stays as it
+/// is: the channel, not the project, puts it there.
+pub(in crate::event_loop) async fn start_in_cloud(
+    state: &mut LoopState<'_>,
+    agent: AgentId,
+) -> bool {
+    // A channel without a project it can use keeps its members in the
+    // launch project, whose folder is not theirs to take to a machine.
+    if lock(&state.hub.hidden_members).contains(&agent) {
+        fail_cloud_start(state, agent, NO_PROJECT_FOLDER, None).await;
+        return false;
+    }
+    state.hub.status.set_starting(agent, true);
+    state.hub.send_agent_list().await;
+    let ui = AgentUi::new(state.commands.clone(), agent);
+    let console = BootConsoleUi::new(ui, "Starting in the cloud");
+    let why = match connect(state, Some(&console)).await {
+        Ok(hub) => match place_request(state, &hub, agent) {
+            Some(request) => {
+                let mark = MoveMark::take(&state.cloud.shared, agent);
+                place(state, hub, request, console, (mark, Start::Member));
+                return true;
+            }
+            None => NO_PROJECT_FOLDER.to_string(),
+        },
+        Err(why) => why,
+    };
+    fail_cloud_start(state, agent, &why, Some(&console)).await;
+    false
+}
+
+/// After `agent`'s move ended: whether it was a new member's start that
+/// failed, which then fails the member. The start is over either way.
+pub(in crate::event_loop) async fn settle_start(state: &mut LoopState<'_>, agent: AgentId) -> bool {
+    state.hub.status.set_starting(agent, false);
+    let failed = state.cloud.shared.failed_starts.lock().remove(&agent);
+    let Some(why) = failed else {
+        return false;
+    };
+    fail_cloud_start(state, agent, &why, None).await;
+    true
+}
+
+/// `agent`, a new member of a cloud channel, could not start on a cloud
+/// machine because of `why`: fail it. It never works here instead.
+pub(in crate::event_loop) async fn fail_cloud_start(
+    state: &mut LoopState<'_>,
+    agent: AgentId,
+    why: &str,
+    console: Option<&BootConsoleUi>,
+) {
+    let note = failed_start_note(why);
+    state.hub.status.fail(agent, &note);
+    while state.queued.pop_front(agent).is_some() {}
+    crate::event_loop::hud::send_queued(state, agent).await;
+    state.hub.factory_flows.leave(agent);
+    inbox::give_up_all(&state.hub, agent, &note);
+    let shown = match console {
+        Some(console) => console.end(false, note.clone()).await,
+        None => false,
+    };
+    if !shown {
+        AgentUi::new(state.commands.clone(), agent)
+            .send(UiCommand::ShowError(note))
+            .await;
+    }
+    state.hub.send_agent_list().await;
+}
+
+/// What a member that could not start on a cloud machine because of `why`
+/// says, in its chat and to whoever assigned it work.
+fn failed_start_note(why: &str) -> String {
+    let why = why.trim().trim_end_matches('.');
+    format!(
+        "Could not start on a cloud machine: {why}. This channel's agents run only in the \
+         cloud, so it did not start on this computer instead."
     )
 }
 
-/// After `after`, tell the agents `agent` owes answers when it is still
-/// starting in the cloud, with how far it got. Told once.
-pub(super) async fn report_slow_start(hub: Arc<AgentHub>, agent: AgentId, after: Duration) {
-    tokio::time::sleep(after).await;
-    if !is_starting(&hub, agent) {
-        return;
+#[cfg(test)]
+impl CloudState {
+    /// Hold `agent` as moving, as a start under way does.
+    pub(in crate::event_loop) fn begin_test_move(&self, agent: AgentId) {
+        self.shared.moving.lock().insert(agent);
     }
-    let minutes = after.as_secs() / 60;
-    let at = hub
-        .standing
-        .view(agent, false)
-        .why
-        .unwrap_or_else(|| "connecting".to_string());
-    let note = format!(
-        "it has been starting on a cloud machine for {minutes} minutes and has not begun the work \
-         yet (now: {at}). The first start after a new build makes the machine images again, which \
-         can take a while; it starts the work as soon as its machine is up."
-    );
-    warn!(%agent, %at, "A new cloud member is slow to start");
-    inbox::tell_waiting(&hub, agent, &note);
-}
 
-/// `agent`'s start in the cloud ended, `ok` or not, as `note` says: its
-/// peers no longer see it starting, and when it failed, the agents it
-/// owes answers hear that it works on this computer instead. Nothing for
-/// an agent that wasn't starting, such as one the user moved.
-pub(super) fn start_ended(hub: &AgentHub, agent: AgentId, ok: bool, note: &str) {
-    if !is_starting(hub, agent) {
-        return;
-    }
-    hub.standing.clear(agent);
-    if !ok {
-        inbox::tell_waiting(hub, agent, note);
+    /// Note that `agent`'s start failed because of `why`, as a failed or
+    /// too-slow placement does before its move ends.
+    pub(in crate::event_loop) fn fail_test_start(&self, agent: AgentId, why: &str) {
+        self.shared
+            .failed_starts
+            .lock()
+            .insert(agent, why.to_string());
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event_loop::inbox::{assign, AssignArgs};
-    use crate::event_loop::notices::Notice;
-    use crate::event_loop::subagents::tests::fixture;
-
-    /// `#site`'s coordinator, a new member it assigned a task, and the
-    /// notices sent once the task was.
-    async fn assigned() -> (
-        crate::event_loop::subagents::tests::Fixture,
-        AgentId,
-        AgentId,
-        tokio::sync::mpsc::UnboundedReceiver<Notice>,
-    ) {
-        let mut fixture = fixture("unused");
-        let mut notices = fixture.hub.take_notices();
-        let channel = crate::event_loop::channels::create_channel(
-            &fixture.hub,
-            aura_store_db::NewChannel {
-                slug: "site".into(),
-                title: "Site".into(),
-                ..aura_store_db::NewChannel::default()
-            },
-        )
-        .await
-        .unwrap();
-        let brief = AssignArgs {
-            to: None,
-            agent: Some("reviewer".into()),
-            subject: "Footer".into(),
-            prompt: "Review the footer.".into(),
-            todo_id: None,
-        };
-        assign(&fixture.hub, channel.coordinator, brief)
-            .await
-            .unwrap();
-        fixture.drain_commands();
-        let assignment = notices.try_recv().unwrap();
-        let starting = Standing::Starting {
-            stage: Some("Project snapshot".into()),
-            waiting: None,
-        };
-        fixture.hub.standing.set(assignment.to, starting);
-        (fixture, channel.coordinator, assignment.to, notices)
-    }
 
     #[tokio::test]
-    async fn a_slow_start_tells_the_assigner_once_and_how_far_it_got() {
-        let (fixture, coordinator, member, mut notices) = assigned().await;
-        report_slow_start(Arc::clone(&fixture.hub), member, Duration::ZERO).await;
-        let told = notices.try_recv().unwrap();
-        assert_eq!(told.to, coordinator);
-        assert!(
-            told.prompt.contains("owes you a report on \"Footer\""),
-            "{}",
-            told.prompt
-        );
-        assert!(
-            told.prompt.contains("(now: Project snapshot)"),
-            "{}",
-            told.prompt
-        );
-
-        // Once it started, nothing.
-        start_ended(&fixture.hub, member, true, "Now running in the cloud.");
-        report_slow_start(Arc::clone(&fixture.hub), member, Duration::ZERO).await;
-        assert!(notices.try_recv().is_err());
-        assert_eq!(fixture.hub.standing.view(member, false).state, "idle");
-    }
-
-    #[tokio::test]
-    async fn a_failed_start_tells_the_assigner_it_works_here_instead() {
-        let (fixture, coordinator, member, mut notices) = assigned().await;
-        start_ended(
-            &fixture.hub,
-            member,
-            false,
-            "No boxd key — it works on this computer instead.",
-        );
-        let told = notices.try_recv().unwrap();
-        assert_eq!(told.to, coordinator);
-        assert!(told
-            .prompt
-            .ends_with("No boxd key — it works on this computer instead."));
-        assert!(!is_starting(&fixture.hub, member));
+    async fn a_start_that_never_ends_fails_after_its_limit() {
+        let stuck = std::future::pending::<Result<(), String>>();
+        let failed = within(Duration::from_millis(10), stuck).await;
         assert_eq!(
-            fixture.hub.inbox.owed_by(member),
-            1,
-            "it still owes the work"
+            failed,
+            Err("the machine did not start within 0 minutes".to_string())
         );
+        let refused = within(START_TIMEOUT, async { Err::<(), _>("boxd said no") }).await;
+        assert_eq!(refused, Err("boxd said no".to_string()));
+        let started = within(START_TIMEOUT, async { Ok::<_, String>(7) }).await;
+        assert_eq!(started, Ok(7));
+    }
 
-        // A move the user asked for tells no one.
-        start_ended(&fixture.hub, member, false, "Could not move.");
-        assert!(notices.try_recv().is_err());
+    #[test]
+    fn the_note_says_why_and_that_it_did_not_run_here() {
+        let note = failed_start_note(" boxd machine limit reached: 4 of 4 machines in use. ");
+        assert_eq!(
+            note,
+            "Could not start on a cloud machine: boxd machine limit reached: 4 of 4 machines \
+             in use. This channel's agents run only in the cloud, so it did not start on this \
+             computer instead."
+        );
     }
 }

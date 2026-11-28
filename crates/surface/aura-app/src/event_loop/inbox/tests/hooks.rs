@@ -205,7 +205,6 @@ async fn a_cloud_members_undelivered_request_is_told_to_it() {
 
 #[tokio::test]
 async fn a_peers_state_says_why_it_is_idle() {
-    use crate::event_loop::standing::Standing;
     let hooked = member_hooks().await;
     let hub = Arc::clone(&hooked.fixture.hub);
     let coordinator = PeerHooks::new(link(&hooked.fixture), hooked.coordinator, None);
@@ -213,38 +212,23 @@ async fn a_peers_state_says_why_it_is_idle() {
     let state = || async { coordinator.snapshot(&member).await.unwrap() };
 
     let idle = state().await;
-    assert_eq!(
-        (idle["working"].clone(), idle["state"].clone()),
-        (false.into(), "idle".into())
-    );
+    assert_eq!(idle["working"], false);
+    assert_eq!(idle["state"], "idle");
     assert!(idle.get("why").is_none());
 
-    hub.standing.set(
-        hooked.member,
-        Standing::Starting {
-            stage: None,
-            waiting: None,
-        },
-    );
-    hub.standing.note_boot(
-        hooked.member,
-        Some("Project snapshot"),
-        Some("boxd is building it"),
-    );
+    hub.status.set_starting(hooked.member, true);
     let starting = state().await;
     assert_eq!(starting["state"], "starting in the cloud");
-    assert_eq!(starting["why"], "Project snapshot: boxd is building it");
-    assert!(starting["since_ms"].as_u64().is_some());
+    assert!(starting["why"].is_string());
 
-    hub.standing.clear(hooked.member);
+    hub.status.set_starting(hooked.member, false);
     hub.standing.set_queued(hooked.member, 1);
     assert_eq!(state().await["state"], "queued");
 
-    hub.standing
-        .set(hooked.member, Standing::FailedToStart("no model".into()));
+    hub.status.fail(hooked.member, "no model");
     let failed = state().await;
-    assert_eq!(
-        (failed["state"].clone(), failed["why"].clone()),
-        ("failed to start".into(), "no model".into())
-    );
+    assert_eq!(failed["state"], "failed");
+    assert_eq!(failed["why"], "no model");
+    hub.standing.stall(hooked.member);
+    assert_eq!(state().await["state"], "stalled");
 }

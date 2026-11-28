@@ -67,6 +67,7 @@ pub(super) fn render_chat_lines(
         (padded, height),
         theme,
     );
+    light_jumped(frame.buffer_mut(), &layout, (body, height), theme);
     place_links(frame.buffer_mut(), app, &layout, &packed, (padded, height));
     let RowLayout {
         image_hits,
@@ -140,6 +141,36 @@ fn draw_visible(
     (fade, packed)
 }
 
+/// Light the rows of the block a jump went to, those on screen, across
+/// the chat's `body`, in the selection's colours.
+fn light_jumped(
+    buffer: &mut Buffer,
+    layout: &RowLayout,
+    (body, height): (Rect, usize),
+    theme: &Theme,
+) {
+    let Some((first, rows)) = layout.flash else {
+        return;
+    };
+    let start = layout.start;
+    let lit = first.max(start)..(first + rows).min(start + height);
+    let style = Style::default()
+        .bg(theme.colors.selection)
+        .fg(theme.colors.on_selection);
+    for row in lit {
+        let Ok(y) = u16::try_from(row - start) else {
+            continue;
+        };
+        let area = Rect {
+            y: body.y.saturating_add(y),
+            height: 1,
+            ..body
+        }
+        .intersection(body);
+        buffer.set_style(area, style);
+    }
+}
+
 /// Put the links of the rows on screen where they were drawn, underline
 /// the one the pointer is on, and hand them to `app` for the pointer.
 fn place_links(
@@ -175,6 +206,9 @@ struct RowLayout {
     padding: usize,
     /// First row on screen
     start: usize,
+    /// The rows of the block a jump lit, while it is: its first row and
+    /// how many
+    flash: Option<(usize, usize)>,
 }
 
 /// Bring the line cache up to date, lay out where its blocks and `tail`
@@ -186,10 +220,17 @@ fn layout_rows(
     theme: &Theme,
     tail: &LiveTail,
 ) -> RowLayout {
+    let jump = app.pending_chat_jump();
+    let lit = app.chat_flash();
     let (shown, cache, groups) = app.chat_line_cache();
     let width = padded.width as usize;
     let reflowed = cache.update(shown, (width, measure), theme, spinner, &groups);
     let gap = cache.block_gap();
+    let jump = jump.and_then(|key| cache.row_of(key, gap).map(|(row, _)| (key, row)));
+    let flash = jump
+        .map(|(key, _)| key)
+        .or(lit)
+        .and_then(|key| cache.row_of(key, gap));
     let BlockHits {
         mut toggle_rows,
         image_hits,
@@ -205,6 +246,9 @@ fn layout_rows(
     let height = padded.height as usize;
     let padding = end_padding(app.terminal_pane(), last_prompt_row, content, height);
     let total = content + padding;
+    if let Some((key, row)) = jump {
+        app.land_chat_jump(key, row, (total, height));
+    }
     let start = app.sync_chat_scroll(total, height, reflowed);
     app.set_chat_layout(toggle_rows, start);
     app.set_chat_rows(Some((padded, start)));
@@ -218,6 +262,7 @@ fn layout_rows(
         total,
         padding,
         start,
+        flash,
     }
 }
 

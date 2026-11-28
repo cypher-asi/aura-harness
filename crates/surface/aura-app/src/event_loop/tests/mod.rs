@@ -30,6 +30,7 @@ mod channel_chat;
 mod channel_plan;
 mod channels_projects;
 mod channels_projects_zode;
+mod cloud_members;
 mod commands_and_cancel;
 mod compare_runs;
 mod delegation;
@@ -51,6 +52,7 @@ mod rewinding;
 mod stalls;
 mod subtasks;
 pub(in crate::event_loop) mod support;
+mod withdrawn_work;
 
 use fixture::{
     borrowed, completed, drain, fixture, fixture_with_gate, lock_registry_agent, loop_state,

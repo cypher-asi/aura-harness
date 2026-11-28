@@ -14,7 +14,7 @@
 //! opens the drawer.
 //!
 //! The drawer lists only the items still open. The closed ones (done and
-//! cancelled) sit under its "Task history" row, folded by default: a
+//! cancelled) sit under its "Finished to-dos" row, folded by default: a
 //! click on that row, `Alt+H` or `/todos history` opens or folds it.
 //!
 //! Mouse: a left press on the header row folds or opens the drawer, one

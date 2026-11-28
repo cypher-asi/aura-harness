@@ -5,6 +5,7 @@ mod agents;
 mod bench_panel;
 mod benchmarks;
 mod boot;
+mod channel_history;
 mod channel_queue;
 mod channel_side;
 mod channel_welcome;
@@ -54,7 +55,7 @@ mod bench;
 mod tests;
 
 pub(crate) use crate::components::format_ago;
-pub(crate) use chat_lines::{ChatLineCache, GroupState};
+pub(crate) use chat_lines::{post_block_key, ChatLineCache, GroupState};
 pub(crate) use chat_panel::format_elapsed;
 
 use columns::{columns, split_right_column};

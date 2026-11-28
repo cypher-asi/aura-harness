@@ -76,7 +76,8 @@ async fn the_sweep_reports_a_member_still_idle_after_its_retry_and_leaves_parked
         report.prompt
     );
     assert!(report.prompt.ends_with(&task_report_line("3", false)));
-    assert_eq!(state.hub.standing.view(member, false).state, "stalled");
+    let view = crate::event_loop::standing::state_of(&state.hub, member);
+    assert_eq!(view.state, "stalled");
 }
 
 #[tokio::test]
@@ -107,7 +108,7 @@ async fn work_that_cannot_start_reports_what_its_agent_owes() {
     assert!(report
         .prompt
         .contains("Stopped before finishing: its local model is not running"));
-    let view = state.hub.standing.view(member, false);
-    assert_eq!(view.state, "failed to start");
+    let view = crate::event_loop::standing::state_of(&state.hub, member);
+    assert_eq!(view.state, "failed");
     assert_eq!(view.why.as_deref(), Some("its local model is not running"));
 }

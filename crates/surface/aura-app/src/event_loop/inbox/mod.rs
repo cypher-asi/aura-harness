@@ -40,6 +40,8 @@
 //! - `hooks`: `send_to_agent`, `list_agents` and `get_agent_state`, and
 //!   the requests of members on cloud machines
 //! - `assignments`: `assign`
+//! - `withdraw`: work a coordinator takes back, or hands to another
+//!   member, before it started; it never starts
 //!
 //! # Invariants
 //!
@@ -88,8 +90,11 @@ mod peers;
 mod starts;
 #[cfg(test)]
 mod tests;
+mod withdraw;
 
-pub(super) use answers::{answer, answer_seen, give_up, give_up_all, give_up_seen};
+pub(super) use answers::{
+    answer, answer_seen, give_up, give_up_all, give_up_if_archived, give_up_seen, ARCHIVED,
+};
 pub use assignments::AssignTool;
 #[cfg(test)]
 pub(crate) use assignments::{assign, AssignArgs};
@@ -98,7 +103,8 @@ pub(super) use hooks::{reach_of, refresh_reach, MachineMail};
 pub(super) use messages::deliver;
 use messages::{mail_view, new_id, send, shown};
 use peers::{circle, Circle, Named, Peer, Relation};
-pub(super) use starts::{give_up_unstarted, tell_waiting};
+pub(super) use starts::give_up_unstarted;
+pub(super) use withdraw::take_withdrawn;
 
 /// Requests one thread between two agents carries; then they have to
 /// settle it some other way.
@@ -138,6 +144,9 @@ struct Owed {
     subject: String,
     /// The sender's todo it is for
     todo: Option<String>,
+    /// Whether its sender took it back before it started
+    /// ([`withdraw`](withdraw::withdraw)): it must not start
+    withdrawn: bool,
 }
 
 impl Inbox {
@@ -184,7 +193,6 @@ impl Inbox {
     }
 }
 
-#[cfg(test)]
 impl Inbox {
     /// How many answers `agent` owes.
     pub(crate) fn owed_by(&self, agent: AgentId) -> usize {

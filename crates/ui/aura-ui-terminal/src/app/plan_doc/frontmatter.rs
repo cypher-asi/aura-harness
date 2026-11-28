@@ -9,6 +9,12 @@ pub(super) struct Frontmatter {
     pub(super) name: String,
     pub(super) overview: String,
     pub(super) todos: Vec<FrontTodo>,
+    /// The origin keys `create_plan` stamps; empty when a plan has none
+    pub(super) created_at: String,
+    pub(super) updated_at: String,
+    pub(super) author: String,
+    pub(super) model: String,
+    pub(super) machine: String,
 }
 
 #[derive(Debug, Default)]
@@ -30,6 +36,11 @@ pub(super) fn read_frontmatter(lines: &[&str]) -> Frontmatter {
                 "name" => meta.name = scalar(value, more),
                 "overview" => meta.overview = scalar(value, more),
                 "todos" => meta.todos = read_todos(more),
+                "created_at" => meta.created_at = scalar(value, more),
+                "updated_at" => meta.updated_at = scalar(value, more),
+                "author" => meta.author = scalar(value, more),
+                "model" => meta.model = scalar(value, more),
+                "machine" => meta.machine = scalar(value, more),
                 _ => {}
             }
         }

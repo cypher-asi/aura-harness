@@ -8,6 +8,7 @@
 //! making a channel starts: Enter on it opens its latest instance, as a
 //! click does, instead of asking the session for a new one.
 
+use crate::app::wheel_views::WheelList;
 use crate::app::{contains, AgentsTab, App, NotificationType};
 use crate::events::{AgentDefinitionSummary, AgentSummary, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -54,7 +55,12 @@ impl App {
     /// Keep the highlighted row inside a list `visible_rows` tall.
     /// "+ New agent" is pinned below the list, so it never scrolls.
     pub fn sync_definitions_scroll(&mut self, visible_rows: usize) {
-        self.definitions.follow_selection(visible_rows);
+        let list = &self.definitions;
+        self.definitions.scroll = self.panels.wheel.place(
+            WheelList::Roster,
+            (list.scroll, list.selected),
+            (visible_rows, list.len()),
+        );
     }
 
     /// Record where the permanent agents rows were drawn this frame.

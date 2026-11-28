@@ -17,7 +17,8 @@
 //!   `r` and `c`; Esc on CHAT hands them back.
 
 use super::{BenchMode, BenchRequest};
-use crate::app::{contains, follow_selection, App, PanelFocus};
+use crate::app::wheel_views::WheelList;
+use crate::app::{contains, App, PanelFocus};
 use crate::events::{starts_project, AgentSummary};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
@@ -258,11 +259,10 @@ impl App {
     pub(crate) fn sync_bench_list_scroll(&mut self, visible_rows: usize) {
         let rows = self.bench_rows();
         let selected = self.highlighted_bench_row(&rows);
-        self.bench.list_scroll = follow_selection(
-            self.bench.list_scroll,
-            selected,
-            visible_rows,
-            rows.len() - 1,
+        self.bench.list_scroll = self.panels.wheel.place(
+            WheelList::Bench,
+            (self.bench.list_scroll, selected),
+            (visible_rows, rows.len() - 1),
         );
     }
 

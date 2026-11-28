@@ -128,6 +128,12 @@ async fn finish_turn(state: &mut LoopState<'_>, agent_id: AgentId, failure: Opti
     let cancelled = state.hub.stop_running(agent_id);
     let interrupted = state.hub.inbox.take_interrupted(agent_id) && cancelled;
     let failed = failure.is_some();
+    if let Some(why) = failure {
+        state
+            .hub
+            .status
+            .fail(agent_id, &format!("Its turn failed: {why}"));
+    }
     let status = if failed {
         ProcessStatus::Failed
     } else if cancelled {
@@ -157,6 +163,7 @@ async fn finish_turn(state: &mut LoopState<'_>, agent_id: AgentId, failure: Opti
             state.hub.inbox.park(agent_id);
         } else {
             inbox::give_up(state, agent_id, failure.unwrap_or("it was stopped"));
+            inbox::give_up_if_archived(&state.hub, agent_id);
         }
     }
 }

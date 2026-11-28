@@ -142,6 +142,9 @@ pub(super) fn aura_icon(app: &App) -> StatusIcon {
     StatusIcon::new(&glyph, color)
 }
 
+/// The icon of an agent whose work failed, in the Stop button's red.
+pub(in crate::renderer) const FAILED_ICON: &str = "!";
+
 /// The braille spinner the chat shows beside work in flight, for a
 /// working agent or folded project in the projects list.
 pub(super) fn working_icon(app: &App, theme: &Theme) -> StatusIcon {

@@ -14,7 +14,6 @@
 //! * A sweep never starts work for an agent that is working or moving.
 
 use super::delivery::{deliver, start_next};
-use super::standing::Standing;
 use super::steering::SteerSource;
 use super::subagents::lock;
 use super::LoopState;
@@ -68,6 +67,7 @@ fn is_idle(state: &LoopState<'_>, agent: AgentId) -> bool {
     live && !state.hub.is_working(agent)
         && !state.cloud.is_running(agent)
         && !state.cloud.is_moving(agent)
+        && !state.hub.status.is_starting(agent)
         && !lock(&state.hub.cloud_starts).contains(&agent)
 }
 
@@ -94,12 +94,11 @@ pub(super) fn carry_on(asks: &[(String, String)]) -> String {
     text
 }
 
-/// Give up what `agent` owes: retrying it did not help.
+/// Give up what `agent` owes: retrying it did not help. Its row and its
+/// peers show it stalled until its next turn starts.
 fn give_up(state: &LoopState<'_>, agent: AgentId) {
-    let given = super::inbox::give_up_all(&state.hub, agent, WENT_IDLE);
-    warn!(%agent, given, "Stall sweep: still idle after a retry; its reports are given up");
-    state
-        .hub
-        .standing
-        .set(agent, Standing::Stalled(WENT_IDLE.to_string()));
+    warn!(%agent, "Stall sweep: still idle after a retry; its reports are given up");
+    super::inbox::give_up_all(&state.hub, agent, WENT_IDLE);
+    state.hub.status.fail(agent, WENT_IDLE);
+    state.hub.standing.stall(agent);
 }

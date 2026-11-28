@@ -112,48 +112,7 @@ async fn move_to_cloud(
         return;
     };
     set_project_default(state, &hub, agent, Placement::Cloud);
-    place(state, hub, request, console, mark);
-}
-
-/// Move `agent`, a new member of a channel whose agents run in the cloud,
-/// to a cloud machine of its own before it starts its first work, which
-/// waits in its queue meanwhile. Its project's default placement stays as
-/// it is: the channel, not the project, puts it there. Without the cloud
-/// (no boxd key, no project folder to start from, no connection) it
-/// stays here, and its chat says why.
-pub(in crate::event_loop) async fn start_in_cloud(state: &mut LoopState<'_>, agent: AgentId) {
-    // A channel without a project it can use keeps its members in the
-    // launch project, whose folder is not theirs to take to a machine.
-    if lock(&state.hub.hidden_members).contains(&agent) {
-        state.hub.standing.clear(agent);
-        system(state, agent, local_instead(agent, NO_PROJECT_FOLDER)).await;
-        return;
-    }
-    let ui = AgentUi::new(state.commands.clone(), agent);
-    let watch = member_start::boot_watch(&state.hub, agent);
-    let console = BootConsoleUi::new(ui, "Starting in the cloud").with_watch(watch);
-    let why = match connect(state, Some(&console)).await {
-        Ok(hub) => match place_request(state, &hub, agent) {
-            Some(request) => {
-                let slow = member_start::report_slow_start(
-                    Arc::clone(&state.hub),
-                    agent,
-                    member_start::SLOW_START,
-                );
-                tokio::spawn(slow);
-                let mark = MoveMark::take(&state.cloud.shared, agent);
-                place(state, hub, request, console, mark);
-                return;
-            }
-            None => NO_PROJECT_FOLDER.to_string(),
-        },
-        Err(why) => why,
-    };
-    let note = local_instead(agent, &why);
-    member_start::start_ended(&state.hub, agent, false, &note);
-    if !console.end(false, note.clone()).await {
-        system(state, agent, note).await;
-    }
+    place(state, hub, request, console, (mark, Start::Move));
 }
 
 /// Bring the reach of every placed channel member up to date
@@ -164,40 +123,28 @@ pub(in crate::event_loop) async fn refresh_reach(state: &LoopState<'_>) {
     }
 }
 
-/// Why a new member of a cloud channel stays here when its project
-/// gives a machine nothing to start from.
-const NO_PROJECT_FOLDER: &str =
-    "The channel has no project folder for a cloud machine to start from";
-
-/// What the chat of `agent`, a new member of a channel whose agents run
-/// in the cloud, says when it works here instead because of `why`.
-fn local_instead(agent: AgentId, why: &str) -> String {
-    info!(%agent, why, "A cloud channel's new member stays local");
-    format!("{why} — it works on this computer instead.")
-}
-
 /// Place the agent `request` asks for on a cloud machine, showing the
 /// move on `console` and holding its `mark` until the move ends. Work
 /// sent meanwhile waits in its queue; the loop starts it once it hears
 /// the move ended, in the cloud or, when the move failed, here.
-fn place(
+pub(super) fn place(
     state: &mut LoopState<'_>,
     hub: Arc<CloudHub>,
     request: PlaceRequest,
     console: BootConsoleUi,
-    mark: MoveMark,
+    (mark, start): (MoveMark, Start),
 ) {
     let agent = request.agent;
+    let shared = Arc::clone(&state.cloud.shared);
     // The local kernel must not write for it from here on, and
     // its machine traces the conversation as a run of its own.
     state.idle.remove(&agent);
     state.hub.traces.close(agent);
     let ui = AgentUi::new(state.commands.clone(), agent);
-    let app = Arc::clone(&state.hub);
     tokio::spawn(async move {
         let (boot, events) = BootReporter::channel();
         let shown = console.pump(events);
-        let result = hub.place(request, &boot).await;
+        let result = within(START_TIMEOUT, hub.place(request, &boot)).await;
         drop(boot);
         let _ = shown.await;
         if result.is_ok() {
@@ -209,12 +156,14 @@ fn place(
                 "Now running in the cloud on {} ({} vCPU). Its record syncs back here; `/local` brings it back.",
                 view.machine.name, view.machine.vcpu
             )),
-            Err(err) => (false, format!("Could not move the agent to the cloud: {err}")),
+            Err(err) => {
+                if start == Start::Member {
+                    shared.failed_starts.lock().insert(agent, err.clone());
+                }
+                (false, format!("Could not move the agent to the cloud: {err}"))
+            }
         };
         info!(%agent, %note, "placement");
-        // A new member that could not start there works here instead.
-        let told = format!("{note} — it works on this computer instead.");
-        member_start::start_ended(&app, agent, ok, &told);
         console.end(ok, note).await;
         // After the console's last line, so queued work shows below it.
         drop(mark);
@@ -263,7 +212,11 @@ fn recall(
     });
 }
 
-fn place_request(state: &LoopState<'_>, hub: &CloudHub, agent: AgentId) -> Option<PlaceRequest> {
+pub(super) fn place_request(
+    state: &LoopState<'_>,
+    hub: &CloudHub,
+    agent: AgentId,
+) -> Option<PlaceRequest> {
     let registry = lock(&state.hub.registry);
     let entry = registry.find(agent)?;
     let project = registry.project_of(agent)?;

@@ -4,7 +4,8 @@
 use super::fold;
 use crate::animation::AURA_WIDTH;
 use crate::app::processes::SIDE_PAGE;
-use crate::app::{contains, follow_selection, App};
+use crate::app::wheel_views::WheelList;
+use crate::app::{contains, App};
 use crate::components::ROW_INSET;
 use crate::events::MergeQueueView;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -86,8 +87,13 @@ impl App {
         let selected = self.channels.member_selected;
         let row = shown.iter().position(|&i| i == selected).unwrap_or(0);
         let state = &mut self.channels;
-        state.member_scroll =
-            follow_selection(state.member_scroll, row, visible_members, shown.len());
+        // Keyed by the member, not its row, which folding moves.
+        state.member_scroll = self.panels.wheel.place_keyed(
+            WheelList::ChannelMembers,
+            selected,
+            (state.member_scroll, row),
+            (visible_members, shown.len()),
+        );
         state.member_scroll
     }
 
@@ -252,6 +258,12 @@ impl App {
     #[must_use]
     pub(crate) fn open_channel_queue(&self) -> Option<&MergeQueueView> {
         let id = self.channels.open.as_deref()?;
+        self.channels.merge_queues.get(id)
+    }
+
+    /// The merge queue of channel `id`'s repo, once the session sent it.
+    #[must_use]
+    pub(crate) fn channel_queue(&self, id: &str) -> Option<&MergeQueueView> {
         self.channels.merge_queues.get(id)
     }
 

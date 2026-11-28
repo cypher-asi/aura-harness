@@ -16,7 +16,7 @@ pub(super) fn peer_row(hub: &AgentHub, peer: &Peer) -> serde_json::Value {
         )
     };
     let working = hub.is_working(peer.agent.agent_id);
-    let standing = hub.standing.view(peer.agent.agent_id, working);
+    let standing = crate::event_loop::standing::state_of(hub, peer.agent.agent_id);
     let mut row = serde_json::json!({
         "agent_id": peer.agent.agent_id.to_hex(),
         "code": peer.agent.code,
@@ -29,9 +29,6 @@ pub(super) fn peer_row(hub: &AgentHub, peer: &Peer) -> serde_json::Value {
     });
     if let Some(why) = standing.why {
         row["why"] = serde_json::json!(why);
-    }
-    if let Some(since_ms) = standing.since_ms {
-        row["since_ms"] = serde_json::json!(since_ms);
     }
     if let Some((finished, text)) = report {
         row["last_report"] = serde_json::json!({ "finished": finished, "text": text });

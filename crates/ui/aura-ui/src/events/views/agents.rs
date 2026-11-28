@@ -75,6 +75,14 @@ pub struct AgentSummary {
     /// apart so a channel can show it under the member's name.
     #[serde(default)]
     pub title: Option<String>,
+    /// Why it stopped working, when its last turn or its start failed:
+    /// its row shows it in red until its next turn starts
+    #[serde(default)]
+    pub error: Option<String>,
+    /// Whether it is starting on a cloud machine of its own, which it
+    /// needs before it can work
+    #[serde(default)]
+    pub starting: bool,
 }
 
 impl AgentSummary {

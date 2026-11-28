@@ -13,12 +13,7 @@ pub(super) struct BootConsoleUi {
     id: String,
     title: String,
     begun: Arc<AtomicBool>,
-    /// Sees each event before it is shown ([`Self::with_watch`]).
-    watch: Option<BootWatch>,
 }
-
-/// What sees a boot console's events as they come.
-pub(super) type BootWatch = Arc<dyn Fn(&BootEvent) + Send + Sync>;
 
 impl BootConsoleUi {
     pub(super) fn new(ui: AgentUi, title: &str) -> Self {
@@ -31,14 +26,7 @@ impl BootConsoleUi {
             ),
             title: title.to_string(),
             begun: Arc::default(),
-            watch: None,
         }
-    }
-
-    /// This console, with `watch` seeing each event before it shows.
-    pub(super) fn with_watch(mut self, watch: BootWatch) -> Self {
-        self.watch = Some(watch);
-        self
     }
 
     async fn send(&self, update: BootUpdate) {
@@ -61,9 +49,6 @@ impl BootConsoleUi {
     }
 
     pub(super) async fn show(&self, events: Vec<BootEvent>) {
-        if let Some(watch) = &self.watch {
-            events.iter().for_each(|event| watch(event));
-        }
         self.begin().await;
         for update in boot_updates(events) {
             self.send(update).await;

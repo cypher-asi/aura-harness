@@ -19,6 +19,11 @@
 //! Files written before the header existed have no marker; their body is
 //! everything after the frontmatter, and the next write upgrades them.
 //!
+//! `create_plan` also stamps where the plan came from (see [`PlanOrigin`]):
+//! when it was created and last rewritten, the author, its model and the
+//! machine. Each is optional, so plans from before them still parse and
+//! render without them.
+//!
 //! While a plan is built, its todos are the agent's `todo_write` list:
 //! [`todo_items`] seeds the list from the plan and [`sync_todo_list`]
 //! writes the list's progress back to the frontmatter and the checklist.
@@ -26,8 +31,10 @@
 mod body;
 mod create;
 mod header;
+mod origin;
 
-pub use create::{create_plan, CreatePlanTool};
+pub use create::{create_plan, create_plan_from, CreatePlanTool};
+pub use origin::{machine_name, PlanOrigin};
 
 use crate::todo::TodoItem;
 use header::{after_header, generated_header};
@@ -70,6 +77,23 @@ pub struct PlanMeta {
     pub name: String,
     #[serde(default)]
     pub overview: String,
+    /// When the plan was first written (RFC 3339, UTC); none on plans
+    /// from before it was recorded
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    /// When `create_plan` last rewrote it (RFC 3339, UTC); todo progress
+    /// alone does not count
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    /// Id (hex) of the agent that wrote it
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    /// Model the author ran on when it last wrote the plan
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Where it was written: a cloud machine's hostname, or `local`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
     #[serde(default)]
     pub todos: Vec<PlanTodo>,
 }
@@ -210,5 +234,7 @@ pub fn sync_todo_list(path: &Path, items: &[TodoItem]) -> Result<bool, String> {
     Ok(true)
 }
 
+#[cfg(test)]
+mod origin_tests;
 #[cfg(test)]
 mod tests;

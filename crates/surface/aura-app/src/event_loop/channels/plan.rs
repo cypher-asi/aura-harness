@@ -66,6 +66,8 @@ pub(crate) async fn start_planner(
     if !modes::switch_mode(state, planner, &kernel, PermissionMode::Plan).await {
         return;
     }
+    // A planner plans here, in plan mode, in any channel.
+    lock(&state.hub.cloud_members).remove(&planner);
     if lock(&state.hub.cloud_starts).remove(&planner) {
         AgentUi::new(state.commands.clone(), planner)
             .send(system_message(PLANS_HERE.to_string()))
