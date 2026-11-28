@@ -1,6 +1,7 @@
 //! The `create_plan` tool.
 
 use super::body::normalize_body;
+use super::origin::PlanOrigin;
 use super::{
     is_plan_path, PlanFile, PlanMeta, PlanTodo, TodoStatus, CREATE_PLAN_TOOL_NAME, PLANS_DIR,
     PLAN_SUFFIX, SAVED_PREFIX,
@@ -101,8 +102,26 @@ fn read_plan(sandbox: &Sandbox, path: &str) -> Result<PlanFile, ToolError> {
 }
 
 /// Write a new plan, or rewrite the one at `args.path` keeping the status
-/// of todos whose id it already has.
+/// of todos whose id it already has. The plan is stamped with the time
+/// and this machine only; [`create_plan_from`] knows the caller too.
+///
+/// # Errors
+/// When the arguments are invalid or the plan can't be read or written.
 pub fn create_plan(sandbox: &Sandbox, args: &serde_json::Value) -> Result<ToolResult, ToolError> {
+    create_plan_from(sandbox, args, &PlanOrigin::now())
+}
+
+/// [`create_plan`], stamped with `origin`. A rewrite keeps when the plan
+/// was created, by whom and where, and records when and on which model
+/// it was rewritten.
+///
+/// # Errors
+/// When the arguments are invalid or the plan can't be read or written.
+pub fn create_plan_from(
+    sandbox: &Sandbox,
+    args: &serde_json::Value,
+    origin: &PlanOrigin,
+) -> Result<ToolResult, ToolError> {
     let name = required_str(args, "name")?.trim().to_string();
     let overview = str_arg(args, "overview")
         .unwrap_or_default()
@@ -116,14 +135,14 @@ pub fn create_plan(sandbox: &Sandbox, args: &serde_json::Value) -> Result<ToolRe
         .map(|todo| planned_todo(todo, previous.as_ref()))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let plan = PlanFile {
-        meta: PlanMeta {
-            name,
-            overview,
-            todos: planned,
-        },
-        body,
+    let mut meta = PlanMeta {
+        name,
+        overview,
+        todos: planned,
+        ..PlanMeta::default()
     };
+    origin.stamp(&mut meta, previous.as_ref().map(|plan| &plan.meta));
+    let plan = PlanFile { meta, body };
     write_plan(sandbox, &path, &plan)?;
     let output = saved_output(&path, &plan, previous.is_some());
     Ok(ToolResult::success(CREATE_PLAN_TOOL_NAME, output).with_metadata("plan_path", path))
@@ -209,7 +228,9 @@ impl Tool for CreatePlanTool {
         args: serde_json::Value,
     ) -> Result<ToolResult, ToolError> {
         let sandbox = ctx.sandbox.clone();
-        crate::fs_tools::spawn_blocking_tool(move || create_plan(&sandbox, &args)).await
+        let origin = PlanOrigin::of_call(ctx);
+        crate::fs_tools::spawn_blocking_tool(move || create_plan_from(&sandbox, &args, &origin))
+            .await
     }
 }
 
