@@ -61,6 +61,7 @@ mod place;
 pub mod plans;
 mod pull;
 mod reach;
+mod reattach;
 mod recall;
 mod request;
 mod seed;
@@ -76,8 +77,9 @@ pub use self::busy::WAITING;
 pub use self::outcomes::{CommitsOutcome, PatchOutcome, PullOutcome};
 pub use self::persist::SyncStatus;
 pub use self::reach::{MailDesk, Reach};
+pub use self::reattach::RUN_GONE;
 pub use self::request::{cloud_policy, TurnAsk};
-pub use self::turn::{map_outbound, RemoteEvent};
+pub use self::turn::{map_outbound, RemoteEvent, WORKING};
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};

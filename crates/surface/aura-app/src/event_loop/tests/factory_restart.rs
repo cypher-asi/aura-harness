@@ -54,8 +54,8 @@ async fn crash_mid_turn(
     state: &mut LoopState<'_>,
     done: &mut mpsc::Receiver<WorkDone>,
     member: AgentId,
-) -> Vec<AgentId> {
-    owed::keep_saved(state).unwrap().await.unwrap();
+) -> owed::Resume {
+    owed::save_now(state).await;
     drop(next_done(done).await);
     state.hub.stop_running(member);
     state.in_flight = 0;
@@ -132,7 +132,11 @@ async fn a_member_cut_off_mid_plan_plans_again_in_plan_mode_then_builds_and_ship
     let coordinator = assigned(&fixture, &mut state, &mut notices, origin.path()).await;
 
     let restored = crash_mid_turn(&mut state, &mut done, member).await;
-    assert_eq!(restored, [member], "its planning turn is queued again");
+    assert_eq!(
+        restored.queued_agents(),
+        [member],
+        "its planning turn is queued again"
+    );
     assert_eq!(state.hub.factory_flows.stage(member), Some(Stage::Planning));
     assert_eq!(
         state.hub.mode_of(member),
@@ -190,7 +194,11 @@ async fn a_member_cut_off_mid_build_builds_its_plan_again_and_ships() {
     let plan = state.hub.factory_flows.plan_of(member).unwrap();
 
     let restored = crash_mid_turn(&mut state, &mut done, member).await;
-    assert_eq!(restored, [member], "its build is queued again");
+    assert_eq!(
+        restored.queued_agents(),
+        [member],
+        "its build is queued again"
+    );
     assert_eq!(state.hub.factory_flows.stage(member), Some(Stage::Building));
     assert_eq!(state.hub.factory_flows.plan_of(member), Some(plan));
     assert_eq!(
@@ -222,7 +230,11 @@ async fn a_member_cut_off_mid_ship_is_asked_to_ship_again() {
     assert_eq!(state.hub.factory_flows.stage(member), Some(Stage::Shipping));
 
     let restored = crash_mid_turn(&mut state, &mut done, member).await;
-    assert_eq!(restored, [member], "the ship prompt is queued again");
+    assert_eq!(
+        restored.queued_agents(),
+        [member],
+        "the ship prompt is queued again"
+    );
     assert_eq!(state.hub.factory_flows.stage(member), Some(Stage::Shipping));
     owed::resume_saved(&mut state, restored).await;
     run_out(&mut state, &mut done, member).await;
@@ -245,14 +257,17 @@ async fn members_out_of_the_flow_stay_out_after_a_restart() {
     // It failed: the stall sweep or a start that never ran took it out.
     state.hub.factory_flows.assign(member);
     state.hub.factory_flows.leave(member);
-    owed::keep_saved(&state).unwrap().await.unwrap();
+    owed::save_now(&state).await;
     state.hub.factory_flows.forget_all();
-    assert!(owed::restore_saved(&mut state).await.is_empty());
+    assert!(owed::restore_saved(&mut state)
+        .await
+        .queued_agents()
+        .is_empty());
     assert_eq!(state.hub.factory_flows.stage(member), None);
 
     // An archived member's stage is dropped too.
     state.hub.factory_flows.assign(member);
-    owed::keep_saved(&state).unwrap().await.unwrap();
+    owed::save_now(&state).await;
     lock(&state.hub.registry).archive(member).unwrap();
     state.hub.factory_flows.forget_all();
     owed::restore_saved(&mut state).await;
@@ -273,10 +288,13 @@ async fn a_member_waiting_on_a_reply_keeps_planning_without_new_work() {
     // It planned, asked a question, and waits for the answer.
     state.hub.factory_flows.assign(member);
     assert!(state.hub.factory_flows.begin(member));
-    owed::keep_saved(&state).unwrap().await.unwrap();
+    owed::save_now(&state).await;
     state.hub.factory_flows.forget_all();
     assert!(
-        owed::restore_saved(&mut state).await.is_empty(),
+        owed::restore_saved(&mut state)
+            .await
+            .queued_agents()
+            .is_empty(),
         "nothing to run"
     );
     assert_eq!(state.hub.factory_flows.stage(member), Some(Stage::Planning));

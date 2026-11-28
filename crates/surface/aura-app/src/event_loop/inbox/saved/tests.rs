@@ -1,7 +1,11 @@
 //! The saved inbox's file: round trips, bad files, limits, and entries
 //! for agents that are gone.
 
-use super::file::{self, MAX_BYTES, MAX_QUEUED, VERSION};
+use super::file::{
+    self, SavedKind, SavedNotice, SavedOwed, SavedQueued, SavedRequest, MAX_BYTES, MAX_QUEUED,
+    VERSION,
+};
+use super::snapshot::live_entries;
 use super::*;
 use crate::event_loop::subagents::tests::fixture;
 use tempfile::TempDir;
@@ -24,6 +28,7 @@ fn queued(agent: &str, text: &str) -> SavedQueued {
         agent: agent.to_string(),
         text: text.to_string(),
         request: SavedRequest::New,
+        ..SavedQueued::default()
     }
 }
 
@@ -35,7 +40,7 @@ fn sample() -> Snapshot {
             &a,
             "PRC1: Footer\n(inbox assignment 1 from PRC1, x)",
         )],
-        notices: vec![SavedNotice {
+        outbox: vec![SavedNotice {
             to: b,
             shown: "✉ REN4 replied: Footer".to_string(),
             prompt: "REN4 replied: Footer\n(inbox reply 9 from REN4, y)\n\nDone.".to_string(),
@@ -141,7 +146,7 @@ async fn entries_for_agents_gone_or_archived_are_dropped_on_restore() {
     assert!(kept.withdrawn, "taken back stays taken back");
     assert_eq!(kept.todo.as_deref(), Some("3"));
     assert_eq!(kept.from.to_hex(), coordinator);
-    let texts: Vec<&str> = restored.queued.iter().map(|q| q.1.as_str()).collect();
+    let texts: Vec<&str> = restored.queued.iter().map(|q| q.1.text.as_str()).collect();
     assert_eq!(texts, ["kept"]);
 }
 

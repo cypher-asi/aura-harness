@@ -179,6 +179,7 @@ async fn run_prompt(
             hub: Arc::clone(&state.hub),
             agent,
         }),
+        run_started: Some(state.hub.inbox.save_poke()),
     };
     crate::event_loop::factory::hooks::plan_first_in_cloud(&state.hub, agent);
     state.hub.factory_flows.note_prompt(agent, &prompt.text);
@@ -249,7 +250,7 @@ async fn start_turn(
 
 /// The session of `agent`'s turn as copied here, with its totals shown
 /// in `ui`. The hub copies it before it lets go of `rx`.
-async fn copied_session(
+pub(super) async fn copied_session(
     ui: &AgentUi,
     rx: &mut mpsc::Receiver<RemoteEvent>,
     sessions: Option<Checkpoints>,

@@ -58,6 +58,9 @@ pub(super) struct TurnExtras {
     /// Where the turn notes, for the agent's rows and its peers, that it
     /// waits for the one already under way on its machine
     pub(super) waiting: Option<WaitingMark>,
+    /// Woken once the machine took the turn, so the loop saves the run
+    /// it runs in, to follow it again after a restart
+    pub(super) run_started: Option<Arc<tokio::sync::Notify>>,
 }
 
 /// The note that a cloud turn of `agent` waits for the one already under
@@ -158,6 +161,11 @@ pub(super) async fn forward(
         }
         if let Some(mark) = &extras.waiting {
             mark.set(says_waiting(&event)).await;
+        }
+        if let (Some(started), RemoteEvent::Status(status)) = (&extras.run_started, &event) {
+            if status == crate::cloud::hub::WORKING {
+                started.notify_one();
+            }
         }
         chat.end_wake(&event).await;
         chat.close_open(&event).await;

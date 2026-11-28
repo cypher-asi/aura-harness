@@ -28,6 +28,7 @@ use super::test_node::TestNode;
 use super::{CloudHub, PatchOutcome, PlaceRequest, RemoteEvent};
 
 mod machine;
+mod reattach;
 mod record;
 mod session;
 
@@ -87,8 +88,18 @@ async fn placed(config: CloudConfig) -> Placed {
 
 /// [`placed`], what fake boxd runs in the machine being `exec(node)`.
 async fn placed_with(config: CloudConfig, exec: fn(&TestNode) -> ExecHandler) -> Placed {
-    let hub_dir = tempfile::tempdir().expect("tempdir");
     let node_dir = tempfile::tempdir().expect("tempdir");
+    let node = TestNode::serve(node_dir.path(), "done").await;
+    placed_on(config, exec, (node, node_dir)).await
+}
+
+/// [`placed_with`], on `node` served in its folder.
+async fn placed_on(
+    config: CloudConfig,
+    exec: fn(&TestNode) -> ExecHandler,
+    (node, node_dir): (TestNode, tempfile::TempDir),
+) -> Placed {
+    let hub_dir = tempfile::tempdir().expect("tempdir");
     let store: Arc<dyn Store> =
         Arc::new(RocksStore::open(hub_dir.path().join("db"), false).expect("open"));
     let fake = FakeProvider::new();
@@ -100,7 +111,6 @@ async fn placed_with(config: CloudConfig, exec: fn(&TestNode) -> ExecHandler) ->
         AuraBinary::Installed,
     )
     .expect("hub");
-    let node = TestNode::serve(node_dir.path(), "done").await;
     fake.on_exec(exec(&node));
     fake.insert_machine(machine(&node.base));
     let agent = AgentId::new([6; 32]);

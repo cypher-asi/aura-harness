@@ -267,6 +267,17 @@ impl AgentHub {
         removed
     }
 
+    /// The top-level agents with work in flight here, not the spawns
+    /// running for them: what a restart cuts short.
+    pub(crate) fn running_agents(&self) -> Vec<AgentId> {
+        let running: Vec<AgentId> = lock(&self.running).keys().copied().collect();
+        let registry = lock(&self.registry);
+        running
+            .into_iter()
+            .filter(|agent| registry.find(*agent).is_some_and(|a| a.parent.is_none()))
+            .collect()
+    }
+
     /// Whether `agent_id` has work in flight.
     pub(crate) fn is_running(&self, agent_id: AgentId) -> bool {
         lock(&self.running).contains_key(&agent_id)
