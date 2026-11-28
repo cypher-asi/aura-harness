@@ -217,6 +217,15 @@ impl WorkQueues {
     /// The queued messages that came through the inbox, each with its
     /// agent, every agent's oldest first: what survives a restart
     /// ([`super::inbox`]). Messages with images are left out.
+    /// Whether `agent`'s queue holds a prompt saying `text`.
+    pub(super) fn has_prompt(&self, agent: AgentId, text: &str) -> bool {
+        self.by_agent.get(&agent).is_some_and(|queue| {
+            queue.iter().any(
+                |queued| matches!(&queued.work, Work::Prompt { prompt, .. } if prompt.text == text),
+            )
+        })
+    }
+
     pub(super) fn inbox_prompts(&self) -> Vec<(AgentId, &Prompt)> {
         let prompts = self.by_agent.iter().flat_map(|(agent, queue)| {
             queue.iter().filter_map(move |queued| match &queued.work {

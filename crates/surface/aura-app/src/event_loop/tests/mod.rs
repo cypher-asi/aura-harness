@@ -37,6 +37,7 @@ mod commands_and_cancel;
 mod compare_runs;
 mod delegation;
 mod escalation;
+mod factory_restart;
 mod fixture;
 mod flow;
 mod gate_learning;
