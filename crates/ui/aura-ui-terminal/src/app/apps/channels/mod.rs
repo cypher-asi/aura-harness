@@ -65,7 +65,7 @@ pub(crate) struct ChannelState {
     /// Highlighted row of the list; `list.len()` is "+ New channel"
     selected: usize,
     /// First visible row of the list
-    scroll: usize,
+    pub(in crate::app) scroll: usize,
     /// Where the list's rows were drawn this frame
     rows_area: Option<Rect>,
     /// Where "+ New channel" was drawn this frame
@@ -78,7 +78,7 @@ pub(crate) struct ChannelState {
     /// Highlighted row of the MEMBERS side tab
     member_selected: usize,
     /// First visible row of the MEMBERS side tab
-    member_scroll: usize,
+    pub(in crate::app) member_scroll: usize,
     /// Where the MEMBERS side tab's rows were drawn this frame
     member_rows_area: Option<Rect>,
     /// How far the INFO side tab is scrolled

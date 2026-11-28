@@ -1,7 +1,8 @@
 //! The open channel's side panel: the MEMBERS, INFO and QUEUE tabs.
 
 use crate::app::processes::SIDE_PAGE;
-use crate::app::{contains, follow_selection, App};
+use crate::app::wheel_views::WheelList;
+use crate::app::{contains, App};
 use crate::events::MergeQueueView;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
@@ -22,11 +23,10 @@ impl App {
     pub(crate) fn sync_channel_members_scroll(&mut self, visible_members: usize) -> usize {
         let members = self.channels.open_members();
         let state = &mut self.channels;
-        state.member_scroll = follow_selection(
-            state.member_scroll,
-            state.member_selected,
-            visible_members,
-            members,
+        state.member_scroll = self.panels.wheel.place(
+            WheelList::ChannelMembers,
+            (state.member_scroll, state.member_selected),
+            (visible_members, members),
         );
         state.member_scroll
     }

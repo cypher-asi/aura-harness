@@ -21,9 +21,10 @@
 mod store;
 mod thread;
 
+use crate::app::wheel_views::WheelList;
 use std::collections::{HashMap, HashSet};
 
-use super::{contains, follow_selection, processes::SIDE_PAGE, App, PanelFocus, RecordsTab};
+use super::{contains, processes::SIDE_PAGE, App, PanelFocus, RecordsTab};
 use crate::events::MailView;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
@@ -110,7 +111,7 @@ pub(crate) struct Inbox {
     /// Highlighted row
     selected: usize,
     /// First row on screen
-    scroll: usize,
+    pub(in crate::app) scroll: usize,
     /// Wrapped row of each message header the open thread view drew last
     /// frame, counted from the top of its content, to map clicks
     thread_headers: Vec<(usize, u64)>,
@@ -161,11 +162,10 @@ impl App {
     /// Keep the highlighted row inside a list `visible_rows` tall,
     /// returning the first row to show.
     pub fn sync_inbox_scroll(&mut self, visible_rows: usize) -> usize {
-        self.inbox.scroll = follow_selection(
-            self.inbox.scroll,
-            self.inbox.selected,
-            visible_rows,
-            self.inbox.rows.len(),
+        self.inbox.scroll = self.panels.wheel.place(
+            WheelList::Inbox,
+            (self.inbox.scroll, self.inbox.selected),
+            (visible_rows, self.inbox.rows.len()),
         );
         self.inbox.scroll
     }

@@ -185,15 +185,6 @@ impl App {
         }
     }
 
-    /// Rows one wheel notch moves in the agents panel: one for the apps
-    /// whose wheel moves the highlight, three for scrolling PROJECTS.
-    pub(super) const fn agents_panel_wheel_step(&self) -> usize {
-        match self.agents_tab {
-            AgentsTab::Projects => 3,
-            _ => 1,
-        }
-    }
-
     /// What the pointer is over in the app in front's list.
     pub(super) fn hovered_agents_panel(&self, column: u16, row: u16) -> Option<HoverTarget> {
         match self.agents_tab {
