@@ -7,6 +7,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### An agent that errors out reads in the Stop button's red, in its chat too
+
+##### Fixed
+
+- An error in an agent's chat is now drawn in the Stop button's red after
+  a `✗`, where it was gray like any other note. This holds for every way
+  an agent errors out: it can't start, it can't get a cloud machine, its
+  turn ends in an error, or it stalls.
+- A stalled member's chat now says why, and its rows turn red at once
+  rather than at the next refresh.
+- A cloud agent whose work the cloud turns away (it belongs to another
+  user, or its model's plan isn't linked) now shows that as a red error
+  in its chat, and its rows turn red at once.
+- The rows, their `!` icons, chat errors and the Stop button now take
+  their red from one place, so they can't drift apart.
+
 ### Channel members no longer stall silently
 
 ##### Fixed

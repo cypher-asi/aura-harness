@@ -86,7 +86,7 @@ pub(super) use placement::{
 };
 pub(super) use publish::start;
 use publish::start_publisher;
-pub(super) use submit::{new_session, start_queued, submit};
+pub(super) use submit::{new_session, refused, start_queued, submit};
 use view::{build_view, placement_state};
 
 /// What a cloud task tells the loop it is done with.

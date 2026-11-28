@@ -469,7 +469,7 @@ fn render_stop_button(frame: &mut Frame, x: u16, inner: Rect, app: &App, theme: 
         height: 1,
     };
     let style = Style::default()
-        .fg(theme.colors.error)
+        .fg(crate::renderer::failure_color(theme))
         .add_modifier(Modifier::BOLD);
     let style = if app.hover() == Some(HoverTarget::StopTurn) {
         style.bg(theme.colors.surface_hover)

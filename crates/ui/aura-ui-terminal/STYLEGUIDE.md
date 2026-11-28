@@ -62,14 +62,21 @@ themes keep working:
 - **Ready (`●`)** and **working (`⬢`)**: `success`
 - **Waiting (`◐`)**: `warning`
 - **Error (`✗`)**: `error`
-- **Failed agent**: an agent whose last turn failed, or a channel member
-  whose cloud machine could not start, is drawn in `error`, the red of
-  the input's `■ Stop`, until its next turn starts. On PROJECTS its
-  name is `error` and its icon column shows `!` in `error`. On a
-  channel's MEMBERS the `!` replaces the `@` and its second row reads
-  `Failed: <why>` in `error`, cut to fit, in place of its title. Its
-  chat shows the whole reason as an error. Any new way an agent fails
-  (a stall, say) uses the same red and the same `!`.
+- **Failed agent**: an agent that errored out is drawn in the Stop
+  button's red until its next turn starts. It errors out by failing to
+  start (its session won't open, its local model is down, the cloud
+  refuses it), by failing to get a cloud machine, by a turn that ends
+  in an error, or by stalling (the stall sweep gave up on it). All four
+  look the same in all three places:
+  - On PROJECTS its name is red and its icon column shows `!` in red.
+  - On a channel's MEMBERS the `!` replaces the `@` and its second row
+    reads `Failed: <why>` in red, cut to fit, in place of its title.
+  - Its chat shows the whole reason as an error: `✗ ` then the reason,
+    both in red. Other harness notes keep `* ` in `muted`.
+
+  The red is `failure_color(theme)` (`renderer/mod.rs`), the one the
+  input's `■ Stop` is drawn in, never a red of its own. Any new way an
+  agent fails uses it and the same `!`.
 - **Starting**: a channel member whose cloud machine is starting reads
   `Starting in the cloud…` in `muted` on its MEMBERS row, so a member
   still starting can't be mistaken for an idle one.

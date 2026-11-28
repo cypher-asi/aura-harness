@@ -319,7 +319,7 @@ impl<'s> Swarm<'s> {
         let icon = self.agent_icon(index);
         let ago = agent.last_active_ms.map(|ms| format_ago(ms, self.now_ms));
         let name = if agent.error.is_some() {
-            Style::default().fg(theme.colors.error)
+            Style::default().fg(crate::renderer::failure_color(theme))
         } else if agent.depth == 0 {
             Style::default().fg(theme.colors.foreground)
         } else {
@@ -373,7 +373,7 @@ impl<'s> Swarm<'s> {
         if app.agent_row_busy(index) {
             working_icon(app, self.theme)
         } else if failed {
-            StatusIcon::new(FAILED_ICON, self.theme.colors.error)
+            StatusIcon::new(FAILED_ICON, crate::renderer::failure_color(self.theme))
         } else {
             StatusIcon::new(marker.unwrap_or(""), self.theme.colors.muted)
         }
