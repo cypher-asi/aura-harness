@@ -194,3 +194,94 @@ async fn work_given_up_stays_given_up_across_a_restart() {
     assert_eq!(state.hub.inbox.owed_by(member), 0);
     assert!(notices.try_recv().is_err(), "not told again");
 }
+
+/// The id of the one item queued for `agent`.
+fn only_queued_id(state: &LoopState<'_>, agent: AgentId) -> u64 {
+    let [item] = state.queued.views(agent).try_into().unwrap();
+    item.id
+}
+
+#[tokio::test]
+async fn a_queued_assignment_the_user_removed_stays_gone_across_a_restart() {
+    let (fixture, _commands) = fixture();
+    let coordinator = channel_with_member(&fixture).await;
+    let member = fixture.second;
+    let mut notices = fixture.hub.take_notices();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut state = loop_state(&fixture, &mut b);
+    owed::restore_saved(&mut state).await;
+    assign_footer(&fixture, coordinator, &code(&fixture, member)).await;
+    let assignment = notices.try_recv().unwrap();
+    queue(&mut state, member, &assignment);
+    owed::keep_saved(&state).unwrap().await.unwrap();
+    assert!(saved_text(&state).contains("Make the footer links work."));
+
+    // The user takes it out of the queue: its debt is settled, and the
+    // save after that event leaves both out.
+    let remove = UiEvent::RemoveQueued {
+        agent_id: member.to_hex(),
+        id: only_queued_id(&state, member),
+    };
+    handle_ui_event(&mut state, remove, &links).await;
+    assert_reported(&mut notices, coordinator, false);
+    assert_eq!(state.hub.inbox.owed_by(member), 0);
+    owed::keep_saved(&state).unwrap().await.unwrap();
+    assert!(
+        !saved_text(&state).contains("Footer"),
+        "{}",
+        saved_text(&state)
+    );
+
+    let restored = restart(&mut state, &mut notices).await;
+    assert!(restored.is_empty());
+    assert_eq!(state.queued.len(member), 0, "the item stays gone");
+    assert_eq!(state.hub.inbox.owed_by(member), 0, "the debt stays settled");
+    assert!(state.hub.inbox.owing().is_empty(), "the sweep sees nothing");
+    assert!(notices.try_recv().is_err(), "not told again");
+}
+
+#[tokio::test]
+async fn a_queued_assignment_edited_with_its_marker_kept_survives_a_restart() {
+    let (fixture, _commands) = fixture();
+    let coordinator = channel_with_member(&fixture).await;
+    let member = fixture.second;
+    let mut notices = fixture.hub.take_notices();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    owed::restore_saved(&mut state).await;
+    assign_footer(&fixture, coordinator, &code(&fixture, member)).await;
+    let assignment = notices.try_recv().unwrap();
+    queue(&mut state, member, &assignment);
+
+    // The user adds to it; its marker stays, so it is still owed.
+    let edited = format!("{}\n\nAlso fix the header.", assignment.prompt);
+    let edit = UiEvent::EditQueued {
+        agent_id: member.to_hex(),
+        id: only_queued_id(&state, member),
+        text: edited.clone(),
+    };
+    handle_ui_event(&mut state, edit, &links).await;
+    assert!(notices.try_recv().is_err(), "nobody is told");
+    let before = state.hub.inbox.owing();
+
+    let restored = restart(&mut state, &mut notices).await;
+    assert_eq!(restored, [member]);
+    assert_eq!(
+        state.hub.inbox.owing(),
+        before,
+        "owed as before the restart"
+    );
+    let [item] = state.queued.views(member).try_into().unwrap();
+    assert_eq!(item.text, edited, "the edit is kept");
+
+    owed::resume_saved(&mut state, restored).await;
+    let finished = next_done(&mut done).await;
+    assert_eq!(finished.agent_id, member);
+    handle_work_done(&mut state, finished).await;
+    assert!(user_texts(&state, member).contains(&edited));
+    assert_eq!(state.hub.inbox.owed_by(member), 0);
+    assert_reported(&mut notices, coordinator, true);
+}
