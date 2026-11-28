@@ -3,7 +3,7 @@
 
 use super::{node_title, GraphState};
 use crate::app::file_view::FileView;
-use crate::app::{App, DetailView, NotificationType, PanelFocus};
+use crate::app::{App, DetailView, NotificationType};
 use crate::events::{TraceNode, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent};
 
@@ -181,10 +181,9 @@ impl App {
                 ));
             }
             (Some(_), Some(index)) => {
-                self.records.selected = index;
-                self.records.tab = crate::app::RecordsTab::Kernel;
-                self.focus = PanelFocus::Records;
-                self.open_detail(DetailView::Record);
+                if self.show_kernel_record(index) {
+                    self.open_detail(DetailView::Record);
+                }
             }
         }
     }

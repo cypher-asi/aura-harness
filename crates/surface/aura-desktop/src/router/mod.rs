@@ -30,6 +30,7 @@ mod arrangement;
 mod events;
 mod placement;
 mod routing;
+mod selection;
 #[cfg(test)]
 pub(crate) mod testing;
 #[cfg(test)]
@@ -79,6 +80,8 @@ pub struct Tabs {
     unlisted: Option<(String, Vec<UiCommand>)>,
     /// The tabs of the last run, until the first list brings them back.
     restore: Option<Arrangement>,
+    /// The last run's selection, for the tabs to come back on.
+    remembered: selection::Remembered,
 }
 
 impl Tabs {
@@ -102,6 +105,7 @@ impl Tabs {
             asker: None,
             unlisted: None,
             restore: Some(restore),
+            remembered: selection::Remembered::default(),
         }
     }
 

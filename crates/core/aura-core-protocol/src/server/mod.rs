@@ -100,6 +100,9 @@ pub enum OutboundMessage {
     /// [`crate::ModelSelection::title_model`]. Sent before the turn's
     /// `assistant_message_end`, and only when the model gave one.
     ChatTitle(ChatTitle),
+    /// One model call of the turn ended, with the tool calls it made.
+    /// Text after it is the next call's, a reply of its own.
+    IterationComplete(IterationComplete),
 }
 
 /// Payload for `chat_title`.
@@ -107,6 +110,18 @@ pub enum OutboundMessage {
 #[cfg_attr(feature = "typescript", derive(TS), ts(export))]
 pub struct ChatTitle {
     pub title: String,
+}
+
+/// Payload for `iteration_complete`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct IterationComplete {
+    /// The model call's index in the turn, from 0.
+    pub iteration: u64,
+    /// Input tokens the call used.
+    pub input_tokens: u64,
+    /// Output tokens the call wrote.
+    pub output_tokens: u64,
 }
 
 /// Payload for `session_ready`.

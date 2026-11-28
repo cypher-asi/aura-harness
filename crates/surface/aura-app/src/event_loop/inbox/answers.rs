@@ -1,5 +1,6 @@
 //! What an agent was asked, answered when the turn that saw it ends:
-//! with the agent's last words, or with why its work stopped.
+//! with the agent's last words, or with why its work stopped and what it
+//! said before.
 
 use super::*;
 
@@ -47,29 +48,37 @@ pub(crate) fn answer_seen(hub: &AgentHub, agent_id: AgentId, messages: &[Message
 /// Tell the senders of the requests `agent_id` owes that no answer is
 /// coming, its work having stopped `why`: those whose messages are in
 /// `messages`, its conversation, else (without one) the oldest, which
-/// was the one that ran.
+/// was the one that ran. Each reply carries the last thing the agent
+/// said after the request, so work done before the stop isn't lost.
 pub(crate) fn give_up_seen(
     hub: &AgentHub,
     agent_id: AgentId,
     messages: Option<&[Message]>,
     why: &str,
 ) {
-    let dropped: Vec<Owed> = match messages {
+    let dropped: Vec<(Owed, Option<String>)> = match messages {
         Some(messages) => take_seen(hub, agent_id, messages)
             .into_iter()
-            .map(|(owed, _)| owed)
+            .map(|(owed, at)| (owed, messages.get(at + 1..).and_then(last_words)))
             .collect(),
-        None => take_oldest(hub, agent_id).into_iter().collect(),
+        None => take_oldest(hub, agent_id)
+            .into_iter()
+            .map(|owed| (owed, None))
+            .collect(),
     };
-    for owed in dropped {
-        let why = capped(why, STOPPED_CHARS);
-        reply(
-            hub,
-            agent_id,
-            &owed,
-            false,
-            &format!("Stopped before finishing: {why}"),
-        );
+    let why = capped(why, STOPPED_CHARS);
+    for (owed, said) in dropped {
+        reply(hub, agent_id, &owed, false, &stopped(&why, said.as_deref()));
+    }
+}
+
+/// The reply of work that stopped `why`, having said `said` last.
+fn stopped(why: &str, said: Option<&str>) -> String {
+    match said {
+        Some(said) => {
+            format!("Stopped before finishing: {why}\n\nWhat it said last:\n{said}")
+        }
+        None => format!("Stopped before finishing: {why}"),
     }
 }
 

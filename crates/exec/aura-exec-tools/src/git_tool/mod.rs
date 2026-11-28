@@ -1,4 +1,5 @@
-//! Git mutation tools (`git_commit`, `git_push`, `git_commit_push`).
+//! Git mutation tools (`git_commit`, `git_push`, `git_commit_push`,
+//! `git_ship`).
 //!
 //! This module centralises every mutating `git` subprocess invocation
 //! behind the kernel-mediated tool pipeline. See `docs/invariants.md` §1
@@ -14,8 +15,11 @@
 //!   looks above the root for a repository: a root that isn't the top of
 //!   its own repository fails instead of committing the checkout around it.
 //! - Restricts itself to the allow-listed subcommand (`add`, `commit`,
-//!   `push`, plus the read-only helpers `diff --cached`, `rev-parse`
-//!   and `remote get-url` used to implement commit and push).
+//!   `push`, `fetch` and `merge` for `git_ship`'s pull, plus the
+//!   read-only helpers `diff --cached`, `rev-parse` and `remote get-url`
+//!   used to implement commit and push).
+//! - Never updates a [`PROTECTED_BRANCHES`] branch: the merge queue's
+//!   target only changes through the queue.
 //! - Takes no credentials as arguments: `git push` goes to `origin` and
 //!   authenticates with git's own configuration (a credential helper or
 //!   SSH key; on a cloud machine, the credential store its claim wrote,
@@ -40,23 +44,26 @@
 //!   loop and the failure classifiers.
 //! - [`mod@commit_push`] — `git_commit_push_impl` (the transactional
 //!   commit-and-push pair the dev-loop relies on).
+//! - [`mod@ship`] — `git_ship_impl` (commit, pull the target branch,
+//!   push, queue: how an agent finishes a task).
 //! - [`mod@sandbox`] — `ToolContext` bridging helpers
 //!   (`workspace_timeout`, `push_policy_for`, `push_branch_for`,
 //!   `str_arg`, `opt_str`, `opt_bool`).
-//! - [`mod@tools`] — the three `Tool` impls and their argument parsing
-//!   and result shaping.
+//! - [`mod@tools`] — the commit and push `Tool` impls and their argument
+//!   parsing and result shaping; [`mod@tools_ship`] holds `git_ship`'s.
 //! - `tests` — unit tests for the helpers above; declared
 //!   `#[cfg(test)] mod tests;` so the module path matches `super::*`.
 //!
 //! `mod.rs` keeps the public-facing surface: [`GitToolError`],
 //! [`CommitInfo`], [`PushPolicy`], [`PushTarget`], [`Pushed`],
 //! [`CommitPushOutcome`] and the `GIT_*_TOOL_NAMES` constants used by
-//! the catalog. `pub use` re-exports the impl functions and the three
-//! `Tool` impls so the `aura_exec_tools::git_tool::git_push_impl` and
+//! the catalog. `pub use` re-exports the impl functions and the `Tool`
+//! impls so the `aura_exec_tools::git_tool::git_push_impl` and
 //! `aura_exec_tools::git_tool::GitPushTool` paths keep resolving.
 
 use std::time::Duration;
 
+use aura_exec_merge_queue::{QueuedPush, MERGE_QUEUE_KEY};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -68,7 +75,9 @@ mod executor;
 mod push;
 mod redact;
 mod sandbox;
+mod ship;
 mod tools;
+mod tools_ship;
 
 #[cfg(test)]
 mod tests;
@@ -76,7 +85,9 @@ mod tests;
 pub use commit::git_commit_impl;
 pub use commit_push::git_commit_push_impl;
 pub use push::git_push_impl;
+pub use ship::{git_ship_impl, ShipRequest, Shipped};
 pub use tools::{GitCommitPushTool, GitCommitTool, GitPushTool};
+pub use tools_ship::GitShipTool;
 
 // -----------------------------------------------------------------------
 // Error type
@@ -126,6 +137,24 @@ pub enum GitToolError {
     /// ([`crate::ToolConfig::push_branch`]) and the push named another.
     #[error("this machine pushes only its own branch `{allowed}`; pushing `{branch}` is refused")]
     BranchNotAllowed { branch: String, allowed: String },
+
+    /// The push named a [`PROTECTED_BRANCHES`] branch, which only the
+    /// merge queue updates.
+    #[error(
+        "`{branch}` only changes through the merge queue: push your own branch \
+         (git_ship does it) and the queue merges it"
+    )]
+    ProtectedBranch { branch: String },
+
+    /// `git_ship`'s merge of the target branch into the agent's branch
+    /// conflicted; the merge was aborted, so the branch is as it was.
+    #[error(
+        "merging origin/{target} into your branch conflicts in: {}. The merge was aborted \
+         and nothing was pushed. Merge {target} into your branch yourself, resolve the \
+         conflicts, commit, and call git_ship again",
+        files.join(", ")
+    )]
+    MergeConflict { target: String, files: Vec<String> },
 
     /// The remote refused the credentials or they grant no access to
     /// the repository. Not retried.
@@ -178,12 +207,12 @@ impl From<GitToolError> for ToolError {
                 exit_code,
                 stderr,
             } => Self::CommandFailed(format!("git {op} exited {exit_code}: {stderr}")),
-            err @ (GitToolError::DetachedHead | GitToolError::BranchNotAllowed { .. }) => {
-                Self::InvalidArguments(err.to_string())
-            }
-            err @ (GitToolError::NoOrigin | GitToolError::Unauthorized { .. }) => {
-                Self::CommandFailed(err.to_string())
-            }
+            err @ (GitToolError::DetachedHead
+            | GitToolError::BranchNotAllowed { .. }
+            | GitToolError::ProtectedBranch { .. }) => Self::InvalidArguments(err.to_string()),
+            err @ (GitToolError::NoOrigin
+            | GitToolError::Unauthorized { .. }
+            | GitToolError::MergeConflict { .. }) => Self::CommandFailed(err.to_string()),
             GitToolError::RemoteStorageExhausted { op, stderr } => Self::CommandFailed(format!(
                 "git {op} failed: remote storage exhausted ({stderr}). \
                  Free space on the remote (or switch remotes) before retrying."
@@ -261,12 +290,26 @@ pub struct Pushed {
     pub remote: String,
     /// The branch it updated.
     pub branch: String,
+    /// The commit the branch points at after the push.
+    pub head: String,
     /// Commits `origin` didn't have as far as this repository knew
     /// (best-effort, at most 50).
     pub commits: Vec<CommitInfo>,
 }
 
 impl Pushed {
+    /// The merge queue's marker for this push. Its `remote` is the
+    /// remote's name (`origin`), not the masked URL: the queue fetches
+    /// from and lands through it with git.
+    #[must_use]
+    pub fn marker(&self) -> QueuedPush {
+        QueuedPush {
+            branch: self.branch.clone(),
+            head: self.head.clone(),
+            remote: Some(push::REMOTE.to_string()),
+        }
+    }
+
     fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
             "pushed": true,
@@ -277,8 +320,44 @@ impl Pushed {
                 .iter()
                 .map(|c| serde_json::json!({"sha": c.sha, "message": c.message}))
                 .collect::<Vec<_>>(),
+            MERGE_QUEUE_KEY: self.marker().to_json(),
+            "queued": true,
         })
     }
+}
+
+/// Branches no push may update: whichever of them is the merge queue's
+/// target only moves when the queue lands an entry on it.
+pub const PROTECTED_BRANCHES: &[&str] = &["main", "master"];
+
+/// Refuse `branch` when it is one of [`PROTECTED_BRANCHES`].
+pub(crate) fn check_not_protected(branch: &str) -> Result<(), GitToolError> {
+    if PROTECTED_BRANCHES.contains(&branch) {
+        return Err(GitToolError::ProtectedBranch {
+            branch: branch.to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Refuse `branch` when the merge queue config in `workspace`
+/// (`.aura/merge-queue.toml`) names it as the queue's target: like the
+/// [`PROTECTED_BRANCHES`], it only changes through the queue.
+pub(crate) async fn check_not_queue_target(
+    workspace: &std::path::Path,
+    branch: &str,
+) -> Result<(), GitToolError> {
+    let path = workspace.join(aura_exec_merge_queue::config::CONFIG_PATH);
+    // No config (or an unreadable one) names no other target.
+    let Ok(text) = tokio::fs::read_to_string(&path).await else {
+        return Ok(());
+    };
+    if aura_exec_merge_queue::config::target_in(&text).as_deref() == Some(branch) {
+        return Err(GitToolError::ProtectedBranch {
+            branch: branch.to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// Outcome of [`git_commit_push_impl`].
@@ -306,10 +385,12 @@ pub struct CommitPushOutcome {
 pub const GIT_LOCAL_TOOL_NAMES: &[&str] = &["git_commit"];
 
 /// Git tools that talk to a remote: they push to the workspace's
-/// `origin` with git's configured credentials. Without a remote they
-/// fail; they should usually stay ask-gated by the caller's tri-state
-/// tool policy so an agent does not push to an upstream unasked.
-pub const GIT_REMOTE_TOOL_NAMES: &[&str] = &["git_push", "git_commit_push"];
+/// `origin` with git's configured credentials (`git_ship` also fetches
+/// from it). Without a remote they fail (`git_ship` then only commits
+/// and queues the local branch); they should usually stay ask-gated by
+/// the caller's tri-state tool policy so an agent does not push to an
+/// upstream unasked.
+pub const GIT_REMOTE_TOOL_NAMES: &[&str] = &["git_push", "git_commit_push", "git_ship"];
 
 /// The full set of git tool names registered by this module.
-pub const GIT_TOOL_NAMES: &[&str] = &["git_commit", "git_push", "git_commit_push"];
+pub const GIT_TOOL_NAMES: &[&str] = &["git_commit", "git_push", "git_commit_push", "git_ship"];

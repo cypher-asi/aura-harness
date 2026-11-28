@@ -104,6 +104,7 @@ pub fn run(args: DesktopOptions, mode: Option<AgentMode>) -> anyhow::Result<()> 
     let _guard = runtime.enter();
 
     let tabs_file = (!args.demo).then(|| router::arrangement_file(args.dir.as_deref()));
+    let mut selection_file = None;
     let (handles, task) = if args.demo {
         (demo::start(&runtime), None)
     } else {
@@ -114,6 +115,7 @@ pub fn run(args: DesktopOptions, mode: Option<AgentMode>) -> anyhow::Result<()> 
             approval: args.approval,
         };
         let session = runtime.block_on(aura_app::session::start(&options, mode))?;
+        selection_file = Some(aura_ui_terminal::LastSelection::file_in(&session.data_dir));
         let handles = shell::Handles {
             events: session.events,
             commands: session.commands,
@@ -125,6 +127,7 @@ pub fn run(args: DesktopOptions, mode: Option<AgentMode>) -> anyhow::Result<()> 
         theme: args.theme,
         verbose: args.verbose,
         tabs_file,
+        selection_file,
     };
     let result = shell::run(handles, &options, launched);
     if let Some(task) = task {

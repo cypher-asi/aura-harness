@@ -19,7 +19,10 @@ impl App {
             UiCommand::SetProjects(projects) => self.cmd_set_projects(projects),
             UiCommand::SetAgents(agents) => self.cmd_set_agents(agents),
             UiCommand::SetArchivedAgents(agents) => self.set_archived(agents),
-            UiCommand::SetActiveAgent(agent_id) => self.cmd_set_active_agent(&agent_id),
+            UiCommand::SetActiveAgent(agent_id) => {
+                self.cmd_set_active_agent(&agent_id);
+                self.bring_back_selection();
+            }
             UiCommand::SwitchFailed(agent_id) => self.cmd_switch_failed(&agent_id),
             UiCommand::SetAgentDefinitions(definitions) => self.set_definitions(definitions),
             UiCommand::SetProcesses(processes) => self.set_processes(processes),

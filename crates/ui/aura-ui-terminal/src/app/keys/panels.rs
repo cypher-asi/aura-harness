@@ -23,6 +23,7 @@ impl App {
             RecordsTab::Members => self.handle_members_key(key),
             RecordsTab::Policies => self.handle_policies_key(key),
             RecordsTab::Inbox => self.handle_inbox_key(key),
+            RecordsTab::ChannelTasks => self.handle_tasks_key(key),
         }
         KeyResult::continue_running()
     }
@@ -39,6 +40,7 @@ impl App {
             SidePanelTab::Tasks => self.handle_tasks_key(key),
             SidePanelTab::ChannelMembers => self.handle_channel_members_key(key),
             SidePanelTab::ChannelInfo => self.handle_channel_info_key(key),
+            SidePanelTab::ChannelQueue => self.handle_channel_queue_key(key),
         }
         KeyResult::continue_running()
     }

@@ -21,6 +21,7 @@ impl Shell {
         self.open_editors(now);
         self.update_bar(area, cols);
         self.save_tabs();
+        self.selection.keep(self.tabs.last_selection());
     }
 
     /// Draw the terminal UI of the tab in front into its grid, `cols` by

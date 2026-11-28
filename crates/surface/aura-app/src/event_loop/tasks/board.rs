@@ -423,18 +423,37 @@ impl TaskBoard {
     /// there, and in the channel on screen when its agent is a member.
     async fn show(&self, (workspace, view): (PathBuf, TaskView)) {
         self.refresh_channel(&view.agent_id).await;
+        self.send_if_here(&workspace, UiCommand::UpsertTask(view))
+            .await;
+    }
+
+    /// Show `view`, a plan in `workspace` just written or moved on, in
+    /// the TASKS tab of the agent on screen when it works there, whichever
+    /// agent wrote it: a member planning in the folder of the channel on
+    /// screen shows in the channel's TASKS at once.
+    pub(crate) async fn show_plan(&self, workspace: &Path, view: PlanView) {
+        self.send_if_here(workspace, UiCommand::UpsertPlan(view))
+            .await;
+    }
+
+    /// Send `command` to the TASKS tab of the agent on screen when it
+    /// works in `workspace`.
+    async fn send_if_here(&self, workspace: &Path, command: UiCommand) {
         let Some((commands, shown)) = &self.ui else {
             return;
         };
         let Some(agent) = shown.get() else {
             return;
         };
-        let here = lock(&self.board).workspaces.get(&agent) == Some(&workspace);
+        let here = lock(&self.board)
+            .workspaces
+            .get(&agent)
+            .is_some_and(|at| at == workspace);
         if here {
             let _ = commands
                 .send(UiCommand::ForAgent {
                     agent_id: agent.to_hex(),
-                    command: Box::new(UiCommand::UpsertTask(view)),
+                    command: Box::new(command),
                 })
                 .await;
         }

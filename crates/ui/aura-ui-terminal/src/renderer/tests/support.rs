@@ -93,8 +93,13 @@ pub(super) fn app_with_auth(user: Option<&str>, plans: &[&str]) -> crate::App {
 pub(super) const INPUT_FROM_BOTTOM: usize = 3;
 
 pub(super) fn render_rows(app: &mut crate::App, width: u16) -> Vec<String> {
+    render_rows_sized(app, width, 30)
+}
+
+/// [`render_rows`] on a screen `height` rows tall.
+pub(super) fn render_rows_sized(app: &mut crate::App, width: u16, height: u16) -> Vec<String> {
     let mut terminal =
-        ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 30)).unwrap();
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
     terminal
         .draw(|frame| super::super::render(frame, app, &test_theme()))
         .unwrap();

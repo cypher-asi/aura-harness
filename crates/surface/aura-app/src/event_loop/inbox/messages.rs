@@ -224,6 +224,9 @@ pub(in crate::event_loop) async fn deliver(
         to, shown, prompt, ..
     } = notice;
     info!(agent = %to, %shown, "Delivering an inbox message");
+    if kind == InboxKind::Assignment {
+        crate::event_loop::factory::hooks::on_assignment(state, to);
+    }
     if lock(&state.hub.cloud_starts).remove(&to) {
         crate::event_loop::cloud::start_in_cloud(state, to).await;
     }

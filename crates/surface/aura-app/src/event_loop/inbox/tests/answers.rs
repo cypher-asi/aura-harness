@@ -269,3 +269,64 @@ async fn work_that_stops_tells_its_senders_no_answer_is_coming() {
     );
     assert_eq!(fixture.hub.inbox.owed_by(member), 0);
 }
+
+#[tokio::test]
+async fn work_that_stops_passes_on_what_the_agent_said_before() {
+    let mut fixture = fixture("unused");
+    let mut notices = fixture.hub.take_notices();
+    let (coordinator, member, kickoff) = member_owing_two(&mut fixture, &mut notices).await;
+
+    let mut messages = conversation(
+        &kickoff.prompt,
+        "Read the router; the bug is in the footer.",
+    );
+    messages.push(Message::user("Carry on."));
+    give_up_seen(
+        &fixture.hub,
+        member,
+        Some(&messages),
+        "the agent was archived",
+    );
+    let [stopped] = take_all(&mut notices).try_into().unwrap();
+    assert_eq!(stopped.to, coordinator);
+    assert!(
+        stopped.prompt.ends_with(
+            "\n\nStopped before finishing: the agent was archived\n\n\
+             What it said last:\nRead the router; the bug is in the footer."
+        ),
+        "{}",
+        stopped.prompt
+    );
+    let circle = circle_of(&fixture.hub, coordinator).unwrap();
+    let peer = circle.find(&member.to_hex()).unwrap().clone();
+    let row = peer_row(&fixture.hub, &peer);
+    assert_eq!(row["last_report"]["finished"], false);
+}
+
+#[tokio::test]
+async fn a_turn_the_user_stopped_leaves_its_answer_to_the_next_one() {
+    let mut fixture = fixture("unused");
+    let mut notices = fixture.hub.take_notices();
+    let (coordinator, member, kickoff) = member_owing_two(&mut fixture, &mut notices).await;
+    let hub = &fixture.hub;
+
+    hub.inbox.interrupt(member);
+    assert!(
+        hub.inbox.take_interrupted(member),
+        "the stop was the user's"
+    );
+    assert!(!hub.inbox.take_interrupted(member), "and only that turn's");
+    assert_eq!(hub.inbox.owed_by(member), 2, "nothing was given up");
+
+    let mut messages = conversation(&kickoff.prompt, "Half way through.");
+    messages.push(Message::user("Also check the links."));
+    messages.push(Message::assistant("Links checked; all fixed."));
+    answer_seen(hub, member, &messages);
+    let [report] = take_all(&mut notices).try_into().unwrap();
+    assert_eq!(report.to, coordinator);
+    assert!(
+        report.prompt.ends_with("\n\nLinks checked; all fixed."),
+        "{}",
+        report.prompt
+    );
+}

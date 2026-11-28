@@ -52,6 +52,19 @@ pub(crate) struct ChatView {
     /// Images of messages sent to a busy agent, by message text, until
     /// the chat shows the message
     pub(crate) queued_images: VecDeque<(String, Vec<std::sync::Arc<image_preview::ImagePreview>>)>,
+    /// Policy decisions of calls the turn in flight has not shown yet,
+    /// until it shows them or ends
+    pub(crate) early_policies: Vec<EarlyPolicy>,
+}
+
+/// A tool call's policy decision that came before the call: a cloud turn's
+/// copied record can overtake its stream.
+#[derive(Debug)]
+pub(crate) struct EarlyPolicy {
+    /// Tool use id of the call
+    pub(crate) id: String,
+    pub(crate) tool: String,
+    pub(crate) decision: String,
 }
 
 impl Default for ChatView {
@@ -78,6 +91,7 @@ impl Default for ChatView {
             pending_image_areas: Vec::new(),
             detail_image_rect: None,
             queued_images: VecDeque::new(),
+            early_policies: Vec::new(),
         }
     }
 }

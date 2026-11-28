@@ -183,7 +183,7 @@ async fn spawn_git_times_out() {
     .await;
     let err = git_push_impl(
         dir.path(),
-        to_branch("main"),
+        to_branch("work"),
         PushPolicy::single(Duration::from_millis(50)),
     )
     .await

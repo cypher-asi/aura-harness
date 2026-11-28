@@ -9,6 +9,8 @@ license.workspace = true
 [dependencies]
 aura-core-types = { path = "../../core/aura-core-types" }
 aura-exec-traits = { path = "../aura-exec-traits" }
+# Push results carry the merge queue's `QueuedPush` marker.
+aura-exec-merge-queue = { path = "../aura-exec-merge-queue" }
 # `permissions` reads `Identity` records off the per-agent log through
 # the backend-neutral `ReadStore`.
 aura-store-record = { path = "../../store/aura-store-record" }

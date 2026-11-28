@@ -2,7 +2,7 @@ use super::*;
 use crate::host::PlacementView;
 
 // ========================================================================
-// Channel form and the CHANNELS tab's menu
+// Channel form
 // ========================================================================
 
 /// `app_with_channel` with "+ New channel" chosen.
@@ -28,12 +28,12 @@ fn app_with_channel_form_and_projects() -> (App, mpsc::Receiver<UiEvent>) {
     (app, rx)
 }
 
-fn form_focus(app: &App) -> Option<super::super::channel_form::ChannelField> {
+pub(super) fn form_focus(app: &App) -> Option<super::super::channel_form::ChannelField> {
     app.channel_form()
         .map(super::super::channel_form::ChannelForm::focus)
 }
 
-fn form_project(app: &App) -> Option<String> {
+pub(super) fn form_project(app: &App) -> Option<String> {
     app.channel_form()
         .and_then(super::super::channel_form::ChannelForm::project)
         .map(|project| project.id.clone())
@@ -226,7 +226,7 @@ fn test_left_and_right_on_the_project_cycle_none_each_project_and_new() {
     assert!(new_project(&app), "Left from None is New project");
 }
 
-fn new_project(app: &App) -> bool {
+pub(super) fn new_project(app: &App) -> bool {
     app.channel_form()
         .is_some_and(super::super::channel_form::ChannelForm::is_new_project)
 }
@@ -362,191 +362,4 @@ fn test_esc_cancels_the_form_without_an_event() {
     assert_eq!(app.state(), AppState::Idle);
     assert!(app.channel_form().is_none());
     assert!(rx.try_recv().is_err());
-}
-
-/// Right-click `#zode`'s row of the list, its `#` in the icon column, not
-/// the chat bar's title row naming the open channel.
-fn right_click_on_channel_row(app: &mut App) {
-    right_click_on_where(app, "#  zode", |row| !row.contains("Zode release"));
-}
-
-/// Right-click `#zode`'s row and run "Edit channel…", the first item.
-fn open_edit_form(app: &mut App) {
-    right_click_on_channel_row(app);
-    app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.state(), AppState::ChannelForm);
-}
-
-#[test]
-fn test_a_channels_menu_offers_edit_and_archive() {
-    use super::super::context_menu::MenuItem;
-    for (mut app, _rx) in [app_with_projects_channel(), app_with_channel()] {
-        right_click_on_channel_row(&mut app);
-        assert_eq!(
-            menu_items(&app),
-            [MenuItem::EditChannel, MenuItem::ArchiveChannel]
-        );
-        let text = drawn_text(&mut app);
-        for label in ["Edit channel…", "Archive channel…"] {
-            assert!(text.contains(label), "{label}:\n{text}");
-        }
-    }
-}
-
-#[test]
-fn test_edit_channel_opens_the_form_filled_in_on_the_title() {
-    use super::super::channel_form::ChannelField;
-    let (mut app, mut rx) = app_with_projects_channel();
-    open_edit_form(&mut app);
-    assert!(app.context_menu().is_none());
-    let form = app.channel_form().expect("the form is open");
-    assert!(form.is_edit());
-    assert_eq!(form.text(ChannelField::Slug), "zode");
-    assert_eq!(form.text(ChannelField::Title), "Zode release");
-    assert_eq!(form.text(ChannelField::Description), "Ship the zode crate");
-    assert_eq!(form.focus(), ChannelField::Title);
-    assert_eq!(form_project(&app), Some("p2".to_string()));
-    let text = drawn_text(&mut app);
-    assert!(text.contains(" EDIT #zode "), "{text}");
-    assert!(rx.try_recv().is_err(), "opening sends nothing");
-}
-
-#[test]
-fn test_the_edit_form_never_focuses_the_slug() {
-    use super::super::channel_form::ChannelField;
-    let (mut app, _rx) = app_with_projects_channel();
-    open_edit_form(&mut app);
-    let mut seen = Vec::new();
-    for code in [KeyCode::Tab, KeyCode::Down, KeyCode::BackTab, KeyCode::Up] {
-        for _ in 0..ChannelField::ALL.len() {
-            app.handle_key(key(code));
-            seen.extend(form_focus(&app));
-        }
-    }
-    assert!(!seen.contains(&ChannelField::Slug), "{seen:?}");
-    type_keys(&mut app, "x");
-    assert_eq!(
-        app.channel_form()
-            .map(|form| form.text(ChannelField::Slug).to_string()),
-        Some("zode".to_string())
-    );
-}
-
-#[test]
-fn test_the_edit_form_submits_update_channel_with_the_new_project() {
-    let (mut app, mut rx) = app_with_projects_channel();
-    open_edit_form(&mut app);
-    type_keys(&mut app, " 2");
-    app.handle_key(key(KeyCode::Tab));
-    app.handle_key(key(KeyCode::Tab));
-    app.handle_key(key(KeyCode::Left));
-    assert_eq!(form_project(&app), Some("p1".to_string()));
-    app.handle_key(key(KeyCode::Enter));
-    app.handle_key(key(KeyCode::Right));
-    app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.state(), AppState::Idle);
-    assert!(app.channel_form().is_none());
-    assert!(matches!(
-        rx.try_recv(),
-        Ok(UiEvent::UpdateChannel {
-            channel_id,
-            title,
-            description,
-            project_id: Some(project),
-            placement: PlacementView::Cloud,
-        }) if channel_id == "c1"
-            && title == "Zode release 2"
-            && description == "Ship the zode crate"
-            && project == "p1"
-    ));
-    assert!(rx.try_recv().is_err(), "exactly one event");
-}
-
-#[test]
-fn test_choosing_none_in_the_edit_form_clears_the_project() {
-    let (mut app, mut rx) = app_with_projects_channel();
-    open_edit_form(&mut app);
-    app.handle_key(key(KeyCode::BackTab));
-    app.handle_key(key(KeyCode::BackTab));
-    app.handle_key(key(KeyCode::Right));
-    assert!(new_project(&app), "after the last project is New project");
-    app.handle_key(key(KeyCode::Right));
-    assert_eq!(form_project(&app), None, "then None");
-    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
-    assert!(matches!(
-        rx.try_recv(),
-        Ok(UiEvent::UpdateChannel { channel_id, project_id: None, .. }) if channel_id == "c1"
-    ));
-}
-
-#[test]
-fn test_esc_in_the_edit_form_sends_nothing() {
-    let (mut app, mut rx) = app_with_projects_channel();
-    open_edit_form(&mut app);
-    type_keys(&mut app, "changed");
-    app.handle_key(key(KeyCode::Esc));
-    assert_eq!(app.state(), AppState::Idle);
-    assert!(app.channel_form().is_none());
-    assert!(rx.try_recv().is_err());
-}
-
-#[test]
-fn test_archive_channel_asks_first() {
-    let (mut app, mut rx) = app_with_projects_channel();
-    right_click_on_channel_row(&mut app);
-    app.handle_key(key(KeyCode::End));
-    app.handle_key(key(KeyCode::Enter));
-    assert!(rx.try_recv().is_err(), "not before y");
-    app.handle_key(key(KeyCode::Char('n')));
-    assert!(rx.try_recv().is_err(), "anything else cancels");
-
-    right_click_on_channel_row(&mut app);
-    app.handle_key(key(KeyCode::End));
-    app.handle_key(key(KeyCode::Enter));
-    app.handle_key(key(KeyCode::Char('y')));
-    assert!(matches!(rx.try_recv(), Ok(UiEvent::ArchiveChannel(id)) if id == "c1"));
-}
-
-#[test]
-fn test_right_click_on_the_channel_side_panel_opens_its_menu() {
-    use super::super::context_menu::MenuItem;
-    let (mut app, _rx) = app_with_projects_channel();
-    let id = app.channels()[0].id.clone();
-    app.open_channel_by_id(&id);
-    app.show_side_tab(SidePanelTab::ChannelInfo);
-    right_click_on_where(&mut app, "PROJECT", |row| !row.contains("PROJECTS"));
-    assert_eq!(
-        menu_items(&app),
-        [MenuItem::EditChannel, MenuItem::ArchiveChannel]
-    );
-    app.handle_key(key(KeyCode::Enter));
-    assert!(
-        app.channel_form().is_some_and(|form| form.is_edit()),
-        "Edit channel… opens the edit form"
-    );
-}
-
-#[test]
-fn test_kernel_panel_commands_leave_the_layout_alone_while_a_channel_is_open() {
-    let (_dir, mut app) = app_in_channel("co");
-    let before = (
-        app.panels.record_visible,
-        app.panels.side_expanded,
-        app.panels.sandbox_visible,
-    );
-    app.show_members();
-    app.show_policies();
-    app.show_inbox();
-    assert_eq!(
-        (
-            app.panels.record_visible,
-            app.panels.side_expanded,
-            app.panels.sandbox_visible,
-        ),
-        before
-    );
-    assert!(
-        !app.record_panel_visible(),
-        "the channel still fills the column"
-    );
 }

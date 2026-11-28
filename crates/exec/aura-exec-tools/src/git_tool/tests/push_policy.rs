@@ -169,7 +169,7 @@ async fn git_push_retries_on_timeout_then_errors_out() {
         attempts: 2,
     };
     let start = std::time::Instant::now();
-    let err = git_push_impl(dir.path(), to_branch("main"), policy)
+    let err = git_push_impl(dir.path(), to_branch("work"), policy)
         .await
         .expect_err("push must time out on all attempts");
     assert!(matches!(err, GitToolError::Timeout(_, _)), "got {err:?}");
