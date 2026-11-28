@@ -58,7 +58,7 @@ fn a_bare_url_in_prose_is_a_link_without_the_punctuation_after_it() {
     );
     assert_eq!(
         span_style(&parsed.spans, "https://x.dev/a").fg,
-        Some(theme().colors.warning)
+        Some(theme().colors.muted)
     );
     assert_eq!(span_style(&parsed.spans, ", (or ").fg, base().fg);
 }

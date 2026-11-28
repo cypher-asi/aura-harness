@@ -33,12 +33,18 @@ fn a_link_is_underlined_only_while_the_pointer_is_on_it() {
     let buffer = render_buffer(&mut app, WIDTH);
     let row = row_of(&buffer, "the docs");
     let (column, style) = find_cell(&buffer, row, "the docs").unwrap();
-    assert_eq!(style.fg, Some(test_theme().colors.warning), "link colored");
+    assert_eq!(
+        style.fg,
+        Some(test_theme().colors.muted),
+        "link gray at rest"
+    );
     assert!(!underlined(&buffer, row, "the docs"), "not underlined yet");
 
     mouse_at(&mut app, MouseEventKind::Moved, (column + 2, row));
     let buffer = render_buffer(&mut app, WIDTH);
     assert!(underlined(&buffer, row, "the docs"));
+    let (_, hovered) = find_cell(&buffer, row, "the docs").unwrap();
+    assert_eq!(hovered.fg, Some(test_theme().colors.muted), "still gray");
     assert!(
         underlined(&buffer, row, "https://example.com/docs"),
         "its URL too"
@@ -102,7 +108,7 @@ fn a_link_to_a_file_is_drawn_but_does_not_open() {
     let row = row_of(&buffer, "passwords");
     for label in ["passwords", "lib"] {
         let (column, style) = find_cell(&buffer, row, label).unwrap();
-        assert_eq!(style.fg, Some(test_theme().colors.warning));
+        assert_eq!(style.fg, Some(test_theme().colors.muted));
         mouse_at(&mut app, MouseEventKind::Moved, (column, row));
         assert!(!app.hovers_link(), "{label}");
         click(&mut app, (column, row));
@@ -227,8 +233,8 @@ fn a_link_in_measured_prose_is_found_in_the_cells_it_was_packed_into() {
     let buffer = drawn_buffer(&mut app);
     let row = app.prose_rows()[0].clone();
     let label = (row.x..row.x + row.width)
-        .find(|&x| buffer[(x, row.y)].fg == test_theme().colors.warning)
-        .expect("the label is drawn in the link color");
+        .find(|&x| buffer[(x, row.y)].fg == test_theme().colors.muted)
+        .expect("the label is drawn in the link gray");
     // On the grid the label would be 30 columns in; packed it is near 15.
     assert!(label < row.x + 20, "packed at {label}");
     mouse_at(&mut app, MouseEventKind::Moved, (label, row.y));

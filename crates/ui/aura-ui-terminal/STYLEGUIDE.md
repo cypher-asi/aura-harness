@@ -399,6 +399,9 @@ under a fold arrow, then the timeline, newest first.
 - **Selected item**: `selection` fill, `on_selection` text
 - **Hover state**: `surface_hover` fill
 - **Clickable text** (records link, collapsed steps): `muted`
+- **Links** in the chat: `muted`, with the ` (url)` after a label, and
+  not underlined at rest. The pointer over a link underlines every row of
+  it; a click opens web and mail links only.
 
 ## Code Examples
 
