@@ -91,6 +91,7 @@ impl AgentHub {
             channels: parts.channels,
             channel_chat: crate::event_loop::channels::ChannelChat::default(),
             inbox: crate::event_loop::inbox::Inbox::default(),
+            standing: crate::event_loop::standing::Standings::default(),
             factory_flows: crate::event_loop::factory::Flows::default(),
             status: status::AgentStatus::default(),
             post_summaries,

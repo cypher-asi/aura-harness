@@ -30,11 +30,13 @@ async fn mail_for_a_local_agent_without_a_host_is_refused_and_resends_are_retrie
     );
 }
 
-/// A desk that keeps what it is handed, or refuses it all with `refuse`.
+/// A desk that keeps what it is handed, or refuses it all with `refuse`,
+/// and keeps what it is told was not delivered.
 #[derive(Default)]
 struct Desk {
     filed: Mutex<Vec<RemoteMail>>,
     refuse: Option<String>,
+    refused: Mutex<Vec<(RemoteMail, String)>>,
 }
 
 #[async_trait::async_trait]
@@ -45,6 +47,10 @@ impl MailDesk for Desk {
         }
         self.filed.lock().push(mail);
         Ok(())
+    }
+
+    fn refused(&self, mail: &RemoteMail, why: &str) {
+        self.refused.lock().push((mail.clone(), why.to_string()));
     }
 }
 
@@ -160,4 +166,59 @@ async fn a_request_the_desk_refuses_is_acked_undelivered_and_may_come_again() {
         Some("the thread is full"),
         "forgotten, so a resend reaches the desk again"
     );
+}
+
+#[tokio::test]
+async fn a_refused_request_is_told_to_the_desk_for_its_sender() {
+    let (hub, _fake, _dir) = hub();
+    let member = AgentId::new([2; 32]);
+    let coordinator = AgentId::new([4; 32]);
+    place_cloud(&hub, member, "aura-a", &Owner::Local);
+    let desk = Arc::new(Desk {
+        refuse: Some("the thread is full".into()),
+        ..Desk::default()
+    });
+    hub.attach_desk(Arc::clone(&desk) as Arc<dyn MailDesk>);
+    hub.set_reach(member, vec![reach(coordinator, "COO1")]);
+
+    let _ = hub
+        .take_mail(&mail_to(member, "aura-a", coordinator, 1))
+        .await;
+    let refused = desk.refused.lock().clone();
+    assert_eq!(
+        refused.len(),
+        1,
+        "its machine drops the ack: the desk tells it"
+    );
+    assert_eq!((refused[0].0.from, refused[0].0.to), (member, coordinator));
+    assert_eq!(refused[0].1, "the thread is full");
+
+    // A reply that isn't delivered tells no one: replies aren't answered.
+    let mut reply = mail_to(member, "aura-a", coordinator, 2);
+    reply.kind = MeshMailKind::Reply;
+    let _ = hub.take_mail(&reply).await;
+    assert_eq!(desk.refused.lock().len(), 1);
+}
+
+#[tokio::test]
+async fn a_request_from_an_agent_spawned_on_a_members_machine_is_filed_as_the_members() {
+    let (hub, _fake, _dir) = hub();
+    let member = AgentId::new([2; 32]);
+    let other = AgentId::new([3; 32]);
+    let spawned = AgentId::new([6; 32]);
+    place_cloud(&hub, member, "aura-a", &Owner::Local);
+    place_cloud(&hub, other, "aura-b", &Owner::Local);
+    let desk = Arc::new(Desk::default());
+    hub.attach_desk(Arc::clone(&desk) as Arc<dyn MailDesk>);
+    hub.set_reach(member, vec![reach(other, "RUS197")]);
+
+    // Before, it went straight to the other member's machine, which the
+    // app never heard of: a turn it couldn't see, or a lost message.
+    let ack = hub.take_mail(&mail_to(spawned, "aura-a", other, 1)).await;
+    assert_eq!(ack_error(ack), None);
+    let filed = desk.filed.lock().clone();
+    assert_eq!(filed.len(), 1, "filed at the desk, not forwarded");
+    assert_eq!((filed[0].from, filed[0].to), (member, other));
+    assert!(filed[0].text.contains("Sent by scout"), "{}", filed[0].text);
+    assert!(filed[0].text.ends_with("hi"));
 }

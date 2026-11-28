@@ -146,8 +146,13 @@ pub(super) async fn send_instructions_of(state: &LoopState<'_>, agent_id: AgentI
     }
 }
 
-/// Show `agent_id` the work that waits for it.
+/// Show `agent_id` the work that waits for it, and note for its peers how
+/// much does ([`super::standing`]).
 pub(super) async fn send_queued(state: &LoopState<'_>, agent_id: AgentId) {
+    state
+        .hub
+        .standing
+        .set_queued(agent_id, state.queued.len(agent_id));
     AgentUi::new(state.commands.clone(), agent_id)
         .send(UiCommand::SetQueue(state.queued.views(agent_id)))
         .await;
