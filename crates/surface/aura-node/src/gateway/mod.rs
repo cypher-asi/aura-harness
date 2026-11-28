@@ -33,5 +33,6 @@ mod terminal_ws;
 #[cfg(test)]
 mod tests;
 
+pub use handlers::cloud::HUB_SKILLS_DIR;
 pub use middleware::create_router;
 pub use state::{RouterState, RouterStateConfig};

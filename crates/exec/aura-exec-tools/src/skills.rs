@@ -22,12 +22,18 @@ pub const LOAD_SKILL_TOOL_NAME: &str = "load_skill";
 
 /// Where `load_skill` finds an agent's skills.
 pub trait SkillSource: Send + Sync {
-    /// The full instructions of skill `name` for `caller`.
+    /// The full instructions of skill `name` for `caller`, or the text of
+    /// one `file` of its folder (`references/api.md`).
     ///
     /// # Errors
     /// Why it can't be loaded: for an unknown name, which skills the
     /// caller does have.
-    fn load(&self, caller: Option<AgentId>, name: &str) -> Result<String, String>;
+    fn load(
+        &self,
+        caller: Option<AgentId>,
+        name: &str,
+        file: Option<&str>,
+    ) -> Result<String, String>;
 }
 
 /// `load_skill`: return one of the caller's skills in full.
@@ -49,11 +55,12 @@ pub fn load_skill_definition() -> ToolDefinition {
         LOAD_SKILL_TOOL_NAME,
         "Load the full instructions of one of your skills, by the name the skills list in \
          your instructions gives it. Call it before a task the skill covers, then follow \
-         what it returns.",
+         what it returns. With `file`, load one of the reference files the skill lists.",
         serde_json::json!({
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "The skill's name"}
+                "name": {"type": "string", "description": "The skill's name"},
+                "file": {"type": "string", "description": "A reference file of the skill, as it lists them (references/api.md)"}
             },
             "required": ["name"]
         }),
@@ -81,9 +88,10 @@ impl Tool for LoadSkillTool {
             .map(str::trim)
             .filter(|name| !name.is_empty())
             .ok_or_else(|| ToolError::InvalidArguments("give the skill's `name`".into()))?;
+        let file = args.get("file").and_then(serde_json::Value::as_str);
         let text = self
             .source
-            .load(ctx.caller_agent_id, name)
+            .load(ctx.caller_agent_id, name, file)
             .map_err(ToolError::InvalidArguments)?;
         Ok(ToolResult::success(LOAD_SKILL_TOOL_NAME, text))
     }
@@ -97,10 +105,16 @@ mod tests {
     struct Fixed;
 
     impl SkillSource for Fixed {
-        fn load(&self, _caller: Option<AgentId>, name: &str) -> Result<String, String> {
-            match name {
-                "deploy" => Ok("Tag, build, then publish.".into()),
-                other => Err(format!("no skill `{other}`; your skills: deploy")),
+        fn load(
+            &self,
+            _caller: Option<AgentId>,
+            name: &str,
+            file: Option<&str>,
+        ) -> Result<String, String> {
+            match (name, file) {
+                ("deploy", Some("references/api.md")) => Ok("GET /v1".into()),
+                ("deploy", _) => Ok("Tag, build, then publish.".into()),
+                (other, _) => Err(format!("no skill `{other}`; your skills: deploy")),
             }
         }
     }
@@ -118,6 +132,10 @@ mod tests {
         let result = call(serde_json::json!({"name": "deploy"})).await.unwrap();
         assert!(result.ok, "{result:?}");
         assert!(String::from_utf8_lossy(&result.stdout).contains("Tag, build, then publish."));
+        let reference = call(serde_json::json!({"name": "deploy", "file": "references/api.md"}))
+            .await
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&reference.stdout), "GET /v1");
     }
 
     #[tokio::test]
