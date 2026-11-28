@@ -20,6 +20,8 @@ fn entry(seq: u64) -> MergeEntry {
         detail: Some("x".repeat(700)),
         merged: None,
         files: Vec::new(),
+        pr: None,
+        failure: None,
     }
 }
 

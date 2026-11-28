@@ -12,6 +12,7 @@
 //!   which starts a turn for it to fix and ship again; every change goes
 //!   to the QUEUE tab of each channel on the repo.
 
+use super::notes::{failure_prompt, held_line, outcome_line, queued_note};
 use super::observe::{self, ObservedPush};
 use super::pages::{self, Windows};
 use crate::event_loop::agent_events::AgentUi;
@@ -19,9 +20,10 @@ use crate::event_loop::handlers::system_message;
 use crate::event_loop::notices::Notice;
 use crate::event_loop::subagents::{lock, AgentHub};
 use aura_core_types::AgentId;
+use aura_exec_merge_queue::forge::{Forge, GhForge, RepoSlug};
 use aura_exec_merge_queue::{
-    Enqueued, GitIntegrator, Limits, MergeEntry, MergeQueue, MergeRequest, MergeStatus, Origin,
-    QueueConfig, QueueEvent, RepoPaths,
+    Enqueued, GitIntegrator, Hold, Limits, MergeEntry, MergeQueue, MergeRequest, MergeStatus,
+    Origin, QueueConfig, QueueEvent, RepoPaths,
 };
 use aura_ui::UiCommand;
 use std::collections::HashMap;
@@ -216,7 +218,11 @@ impl QueueService {
         // checks come from each entry's target commit, not this folder.
         let target = aura_exec_merge_queue::resolve_target(&repo.top).await;
         let config = QueueConfig::unchecked(&target);
-        let integrator = Arc::new(GitIntegrator::new(repo.clone(), config.clone()));
+        let mut integrator = GitIntegrator::new(repo.clone(), config.clone());
+        if let Some(forge) = forge_of(&repo.top).await {
+            integrator = integrator.with_forge(forge);
+        }
+        let integrator = Arc::new(integrator);
         let queue = MergeQueue::open(repo.clone(), integrator, Limits::default())
             .await
             .map_err(|e| e.to_string())?;
@@ -257,6 +263,7 @@ impl QueueService {
                 Ok(QueueEvent::Finished(entry)) => {
                     self.send_back(&entry, &repo_queue.target).await;
                 }
+                Ok(QueueEvent::Held { entry, hold }) => self.tell_held(&entry, &hold).await,
                 Ok(QueueEvent::Changed) | Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => return,
             }
@@ -293,6 +300,18 @@ impl QueueService {
         }
     }
 
+    /// Tell the agent whose entry ran into `hold` that it waits, through
+    /// no fault of its own.
+    async fn tell_held(&self, entry: &MergeEntry, hold: &Hold) {
+        let agent = entry.origin.agent.as_deref();
+        let Some(agent) = agent.and_then(|hex| AgentId::from_hex(hex).ok()) else {
+            return;
+        };
+        AgentUi::new(self.commands.clone(), agent)
+            .send(system_message(held_line(entry, hold)))
+            .await;
+    }
+
     /// Send `repo_queue` to the QUEUE tab of every channel on its repo,
     /// each as much of its history as the tab shows.
     async fn publish(&self, repo_queue: &RepoQueue) {
@@ -310,6 +329,28 @@ impl QueueService {
             }
         }
     }
+}
+
+/// The forge the PRs of the repo at `top` live on: GitHub through `gh`
+/// (its own sign-in, or `GH_TOKEN`/`GITHUB_TOKEN`) when `origin` is on
+/// github.com; `None` lands entries by push.
+async fn forge_of(top: &Path) -> Option<Arc<dyn Forge>> {
+    let mut command = tokio::process::Command::new("git");
+    command
+        .args(["remote", "get-url", "origin"])
+        .current_dir(top)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let timeout = std::time::Duration::from_secs(15);
+    let output = tokio::time::timeout(timeout, command.output())
+        .await
+        .ok()?
+        .ok()?;
+    let url = String::from_utf8_lossy(&output.stdout);
+    let slug = RepoSlug::from_remote_url(&url)?;
+    info!(repo = %slug, "The merge queue lands this repo through its pull requests");
+    Some(Arc::new(GhForge::new(slug)))
 }
 
 /// Whether `repo` has a queue file.
@@ -372,95 +413,5 @@ fn origin_of(hub: &AgentHub, agent: AgentId) -> Origin {
         agent: Some(agent.to_hex()),
         agent_name,
         channel,
-    }
-}
-
-/// The chat line for a push that was queued as `enqueued`; none for a
-/// push seen again (a cloud turn's pushes are read twice).
-fn queued_note(branch: &str, target: &str, enqueued: &Enqueued) -> Option<String> {
-    match enqueued {
-        Enqueued::Added(id) => Some(format!(
-            "Merge queue: {branch} is queued to merge into {target} ({id})."
-        )),
-        Enqueued::Updated(id) => Some(format!(
-            "Merge queue: {branch} was queued already; it merges the new push ({id})."
-        )),
-        Enqueued::Duplicate(_) => None,
-    }
-}
-
-/// The chat line for an entry that ended.
-fn outcome_line(entry: &MergeEntry) -> String {
-    let detail = entry.detail.as_deref().unwrap_or_default();
-    match entry.status {
-        MergeStatus::Merged => format!("Merge queue: {} merged ({detail}).", entry.branch),
-        _ => format!("Merge queue: {} was not merged: {detail}", entry.branch),
-    }
-}
-
-/// What the agent whose merge into `target` failed is told to do.
-fn failure_prompt(entry: &MergeEntry, target: &str) -> String {
-    format!(
-        "The merge queue could not merge your push of `{}` ({}) into {target}: {}\n\n\
-         Fix it in your workspace: pull {target} into your branch, resolve any conflicts, make \
-         the build and tests pass, then call git_ship again. It goes back into the merge queue.",
-        entry.branch,
-        entry.short_head(),
-        entry.detail.as_deref().unwrap_or("no reason given")
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use aura_exec_merge_queue::{EntryId, QueueState, QueuedPush, RunOutcome};
-
-    fn failed_entry() -> MergeEntry {
-        let mut state = QueueState::default();
-        let id = state
-            .enqueue(
-                MergeRequest {
-                    push: QueuedPush {
-                        branch: "aura/x".to_string(),
-                        head: "0123456789".to_string(),
-                        remote: None,
-                    },
-                    origin: Origin::default(),
-                },
-                chrono::Utc::now(),
-            )
-            .id()
-            .clone();
-        state.claim_next(chrono::Utc::now());
-        state
-            .finish(
-                &id,
-                RunOutcome::Failed("test `cargo test` ended with exit 101".into()),
-                chrono::Utc::now(),
-            )
-            .unwrap_or_else(|| panic!("{id} finished"))
-    }
-
-    #[test]
-    fn a_failure_tells_the_agent_why_and_how_to_ship_again() {
-        let prompt = failure_prompt(&failed_entry(), "trunk");
-        assert!(prompt.contains("aura/x"), "{prompt}");
-        assert!(prompt.contains("exit 101"), "{prompt}");
-        assert!(prompt.contains("git_ship"), "{prompt}");
-        assert!(prompt.contains("pull trunk into your branch"), "{prompt}");
-        assert!(!prompt.contains("main"), "{prompt}");
-        assert!(outcome_line(&failed_entry()).contains("was not merged"));
-    }
-
-    #[test]
-    fn the_queued_note_says_where_the_push_is() {
-        let id = EntryId::from_seq(4);
-        let note = |enqueued| queued_note("aura/x", "main", &enqueued).unwrap_or_default();
-        assert!(note(Enqueued::Added(id.clone())).contains("q4"));
-        assert!(note(Enqueued::Updated(id.clone())).contains("new push"));
-        assert_eq!(
-            queued_note("aura/x", "main", &Enqueued::Duplicate(id)),
-            None
-        );
     }
 }

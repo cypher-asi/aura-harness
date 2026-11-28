@@ -19,11 +19,12 @@ impl Integrator for Recorder {
             .map(|mut seen| seen.push(entry.branch.clone()))
             .ok();
         if entry.branch.starts_with("bad") {
-            RunOutcome::Failed("tests failed".to_string())
+            RunOutcome::Failed("tests failed".into())
         } else {
             RunOutcome::Merged {
                 merged: format!("m-{}", entry.branch),
                 note: "fast-forward".to_string(),
+                pr: None,
             }
         }
     }

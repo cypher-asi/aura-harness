@@ -120,16 +120,19 @@ timeout. The steps are:
 
 1. **Commit** every change (`add -A`, `commit`). If nothing changed, this
    step does nothing.
-2. **Pull main:**
+2. **Pull its own branch:** `fetch origin refs/heads/<branch>` and merge
+   it, so a merge the queue put on the PR's branch comes in first and the
+   push stays a fast-forward. A branch origin doesn't have yet is skipped.
+3. **Pull main:**
    - `fetch origin refs/heads/<target>`, then `merge --no-edit FETCH_HEAD`.
    - A conflict runs `merge --abort`, names the conflicted files and stops
      without pushing.
    - If origin has no `<target>` branch, the pull is skipped.
-3. **Push** the current branch with `git_push_impl`. That respects the
+4. **Push** the current branch with `git_push_impl`. That respects the
    cloud node's branch pin.
-4. **Return** the merge queue marker
+5. **Return** the merge queue marker
    (`"merge_queue": {branch, head, remote}`).
-5. A repo without `origin` skips steps 2 and 3, and its local branch is
+6. A repo without `origin` skips steps 2 to 4, and its local branch is
    queued with `remote: null`.
 
 How shipping is started:
@@ -153,7 +156,8 @@ never land at all. There are two layers (`fs_tools/cmd/push_guard.rs`):
 
 - **Typed pushes are refused.** A command whose words run `git push`,
   however it's typed (after git's global options, in a script, through
-  `sh -c`, `env`, `xargs` or `eval`), or `gh pr merge`, is refused
+  `sh -c`, `env`, `xargs` or `eval`), `gh pr merge`, or `gh api` on a
+  PR's merge (`pulls/<n>/merge`), is refused
   before it runs, pointing the agent at `git_ship`. A command that only
   names a push (`git commit -m "git push later"`) is refused too, which
   is the safe side to err on.
@@ -271,7 +275,8 @@ Crate: `crates/exec/aura-exec-merge-queue`.
      process group of its own, which a timeout kills whole; its output
      goes to `<git-common-dir>/aura/check.log`, and the failure reason
      keeps the end of it.
-  5. Move the target:
+  5. Move the target. A pushed entry of a repo on github.com lands
+     through its PR (see "Landing through the PR" below). Otherwise:
      - With a remote: a non-forced `push <sha>:refs/heads/<target>`. If
        the target moved in the meantime, the push is rejected and the
        entry is retried from step 1, up to 3 times. A push cut off by its
@@ -279,10 +284,50 @@ Crate: `crates/exec/aura-exec-merge-queue`.
      - A local target: a compare-and-swap `update-ref`. If the target is
        checked out, it is moved with `merge --ff-only`, but only in a clean
        checkout; a dirty checkout fails the entry.
+- **Landing through the PR** (`integrate/pull_request.rs`, the default
+  for a pushed entry when the hub's queue has a GitHub repo for it;
+  `land = "push"` in the config file turns it off, `land =
+  "pull_request"` makes it required):
+  1. The branch's tip as fetched is the head that is tested: a push made
+     since the entry was queued is tested too. A tip that no longer holds
+     the queued commit (a force-push) fails the entry.
+  2. The queue finds the branch's open PR, or opens one titled by the
+     branch's first commit, and sets the `aura/merge-queue` commit status
+     to pending.
+  3. It merges the latest target in its worktree and runs the checks, as
+     above, generated files resolved the same way.
+  4. A merge commit it made is pushed onto the PR's branch as a
+     fast-forward, so the PR's head is exactly the tested commit. A
+     rejected push means the branch moved: the entry is tried again from
+     the fetch.
+  5. With the remote target unchanged (`ls-remote`), it sets the status
+     to success and runs `gh pr merge <n> --merge --match-head-commit
+     <tested sha>`: a normal merge commit, only at that head. A head that
+     moved is tested again, up to 3 times.
+  6. After a confirmed merge, the branch is deleted on origin with
+     `--force-with-lease` on the merged commit, so newer work on it stays.
+  - On a conflict, a failed check or a refusal nothing merges: the PR
+    stays open, the queue comments on it with the reason, the conflicting
+    files or the output, and sets the status to failure. The entry fails
+    with the same details (`MergeEntry::failure`, `MergeEntry::pr`).
+  - A PR closed by hand while it is tested is abandoned: the entry fails
+    and the branch is deleted.
+  - GitHub unreachable, or `gh` not signed in, holds the queue
+    (`QueueState::hold`): the entry goes back to its place without an
+    attempt counted, nothing starts for 5 minutes, and its agent is told
+    it waits through no fault of its own.
+  - The forge is `GhForge` (`forge/gh.rs`): `gh` with `--repo
+    owner/name`, a 60-second limit per call, and its own sign-in (or
+    `GH_TOKEN`). Tests use a fake GitHub over a bare repo
+    (`tests/support/forge.rs`).
+  - **Branch protection.** A status alone doesn't stop someone merging
+    by hand. Protect the target and require the `aura/merge-queue`
+    status; see `docs/software-factory-review.md` for the command.
 - **Results:**
   - A failed entry goes back to the agent that pushed it as a notice. The
-    notice starts a turn that tells the agent to pull main, fix the
-    problem and ship again.
+    notice starts a turn that names the PR, the conflicting files or the
+    failing output, and tells the agent to fix it on the same branch and
+    ship again (`factory/notes.rs`).
   - A merged entry adds a line to the agent's chat.
   - Every change is sent to the QUEUE tab of each channel whose project is
     in that repo (`UiCommand::SetMergeQueue`).

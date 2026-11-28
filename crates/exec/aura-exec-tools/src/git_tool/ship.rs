@@ -134,10 +134,16 @@ pub async fn git_ship_impl(
         });
     }
 
-    let pulled = pull_target(workspace, &request).await?;
+    let own = pull_branch(workspace, &branch, &request).await?;
+    let pulled = pull_branch(workspace, request.target, &request).await?;
     if !pulled.starts_with(SKIPPED) {
         super::fragments::check_changelog(workspace, &branch, request.timeout).await?;
     }
+    let pulled = if own.starts_with("merged") {
+        format!("{own}; {pulled}")
+    } else {
+        pulled
+    };
     let pushed = git_push_impl(workspace, request.push, request.push_policy).await?;
     info!(branch = %pushed.branch, head = %pushed.head, %pulled, "shipped");
     Ok(Shipped {
@@ -173,9 +179,16 @@ fn check_target_name(target: &str) -> Result<(), GitToolError> {
 }
 
 /// Fetch `origin/<target>` and merge it into the current branch. An
-/// `origin` without the target skips the pull.
-async fn pull_target(workspace: &Path, request: &ShipRequest<'_>) -> Result<String, GitToolError> {
-    let target = request.target;
+/// `origin` without that branch skips the pull.
+///
+/// The ship pulls its own branch this way first: the merge queue puts
+/// the merge it tested on a PR's branch, so a fix after a failed or
+/// moved run would otherwise be refused as not a fast-forward.
+async fn pull_branch(
+    workspace: &Path,
+    target: &str,
+    request: &ShipRequest<'_>,
+) -> Result<String, GitToolError> {
     let refspec = format!("refs/heads/{target}");
     let fetched = spawn_git(
         workspace,

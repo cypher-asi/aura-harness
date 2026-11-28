@@ -7,7 +7,10 @@
 //! 1. [`refuse_raw_push`] refuses, before anything runs, a command whose
 //!    words run `git push` (after any of git's global options, anywhere
 //!    in a shell script, through `env`, `xargs`, `sh -c` or `eval`) or
-//!    `gh pr merge`. The error points the agent at `git_ship`.
+//!    `gh pr merge`, or a `gh api` call on a PR's merge
+//!    (`repos/<o>/<r>/pulls/<n>/merge`). Only the merge queue merges
+//!    PRs, at the head it tested. The error points the agent at
+//!    `git_ship`.
 //! 2. [`PUSH_BLOCK_ENV`], set on every command it starts, rewrites each
 //!    network remote's push URL to one git can't push to
 //!    (`url.<blocked>.pushInsteadOf`). So a push that a script or a tool
@@ -95,11 +98,26 @@ fn pushes(words: &[String]) -> bool {
                     .iter()
                     .map(String::as_str)
                     .filter(|w| !w.starts_with('-'));
-                sub.next() == Some("pr") && sub.next() == Some("merge")
+                match sub.next() {
+                    Some("pr") => sub.next() == Some("merge"),
+                    Some("api") => sub.any(merges_a_pr),
+                    _ => false,
+                }
             }
             _ => false,
         }
     })
+}
+
+/// Whether an API path merges a PR: `.../pulls/<n>/merge`.
+fn merges_a_pr(path: &str) -> bool {
+    let path = path.split('?').next().unwrap_or(path).trim_end_matches('/');
+    let mut parts = path.rsplit('/');
+    parts.next() == Some("merge")
+        && parts
+            .next()
+            .is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit()))
+        && parts.next() == Some("pulls")
 }
 
 /// The name of the program `word` runs: its last path part, without
@@ -180,6 +198,8 @@ mod tests {
             "ls | xargs git push",
             "$(git push)",
             "gh pr merge 12 --merge",
+            "gh api -X PUT repos/o/r/pulls/12/merge -f merge_method=merge",
+            "gh api --method PUT /repos/o/r/pulls/7/merge",
         ] {
             let refused = script(text).expect_err(text);
             assert!(
@@ -203,6 +223,8 @@ mod tests {
             "git commit -m 'push the button'",
             "git stash push -m wip",
             "gh pr view 12",
+            "gh api repos/o/r/pulls/12",
+            "gh api repos/o/r/pulls/12/merge-queue-notes",
             "cargo test -p push-utils",
             "echo pushing",
         ] {

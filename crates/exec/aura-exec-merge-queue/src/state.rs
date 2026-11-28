@@ -14,11 +14,15 @@
 //! - An entry's wait counts from its last change ([`MergeEntry::updated_at`]):
 //!   its last push, or recovery putting it back after a crash
 //!   ([`QueueState::expire`]).
+//! - While the queue is held ([`QueueState::hold`]) no entry starts
+//!   before the hold's retry time; the entry that ran into it went back
+//!   to its place without being charged an attempt.
 //! - Finished entries past the newest few leave the state for the
 //!   history file ([`QueueState::take_archivable`]); [`QueueState::history`]
 //!   says how much of that file is committed.
 
 use crate::entry::{EntryId, MergeEntry, MergeRequest, MergeStatus};
+use crate::report::{Failure, Hold, PrRef};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -39,6 +43,9 @@ pub struct QueueState {
     /// history
     #[serde(default)]
     pub history: HistoryMark,
+    /// Why no entry starts for now, when the queue is held
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold: Option<Hold>,
 }
 
 /// How far the history file is committed: entries and bytes.
@@ -57,6 +64,7 @@ impl Default for QueueState {
             next_seq: 1,
             entries: Vec::new(),
             history: HistoryMark::default(),
+            hold: None,
         }
     }
 }
@@ -91,9 +99,14 @@ pub enum RunOutcome {
         merged: String,
         /// How it merged, for the Queue tab
         note: String,
+        /// The PR it merged through, if any
+        pr: Option<PrRef>,
     },
     /// Not merged, and why.
-    Failed(String),
+    Failed(Failure),
+    /// Not the entry's fault: it goes back to its place, uncharged, and
+    /// the queue waits as the hold says.
+    Held(Hold),
 }
 
 impl QueueState {
@@ -140,6 +153,8 @@ impl QueueState {
             detail: None,
             merged: None,
             files: Vec::new(),
+            pr: None,
+            failure: None,
         });
         Enqueued::Added(id)
     }
@@ -157,6 +172,12 @@ impl QueueState {
     pub fn claim_next(&mut self, now: DateTime<Utc>) -> Option<MergeEntry> {
         if self.running().is_some() {
             return None;
+        }
+        if let Some(hold) = &self.hold {
+            if now < hold.retry_at || !self.has_queued() {
+                return None;
+            }
+            self.hold = None;
         }
         let entry = self
             .entries
@@ -185,14 +206,26 @@ impl QueueState {
         entry.finished_at = Some(now);
         entry.updated_at = Some(now);
         match outcome {
-            RunOutcome::Merged { merged, note } => {
+            RunOutcome::Merged { merged, note, pr } => {
                 entry.status = MergeStatus::Merged;
                 entry.merged = Some(merged);
                 entry.detail = Some(note);
+                entry.pr = pr.or(entry.pr.take());
             }
-            RunOutcome::Failed(reason) => {
+            RunOutcome::Failed(failure) => {
                 entry.status = MergeStatus::Failed;
-                entry.detail = Some(reason);
+                entry.detail = Some(failure.reason.clone());
+                entry.pr = failure.pr.clone().or(entry.pr.take());
+                entry.failure = Some(failure);
+            }
+            RunOutcome::Held(hold) => {
+                entry.status = MergeStatus::Queued;
+                entry.finished_at = None;
+                entry.attempts = entry.attempts.saturating_sub(1);
+                entry.detail = Some(format!("waiting: {}", hold.reason));
+                let entry = entry.clone();
+                self.hold = Some(hold);
+                return Some(entry);
             }
         }
         Some(entry.clone())
@@ -275,6 +308,20 @@ impl QueueState {
             .iter()
             .filter(|entry| entry.status.is_finished())
             .count()
+    }
+
+    /// End the hold when the target's tip is now `tip` and the hold
+    /// waits for the target to move; returns whether it ended.
+    pub fn release_hold(&mut self, tip: &str) -> bool {
+        let moved = self
+            .hold
+            .as_ref()
+            .and_then(|hold| hold.target_tip.as_deref())
+            .is_some_and(|held_at| held_at != tip);
+        if moved {
+            self.hold = None;
+        }
+        moved
     }
 
     /// Whether an entry waits to run.

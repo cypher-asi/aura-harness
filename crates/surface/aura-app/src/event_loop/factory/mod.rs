@@ -7,12 +7,14 @@
 //! - [`observe`]: every push any agent makes, from its tool results.
 //! - [`turn`]: what one turn did: the plan it wrote, the pushes it made.
 //! - [`service`]: the repos' merge queues and their processors.
+//! - [`notes`]: what the queue tells the agents.
 //! - [`overlap`]: warning agents whose work changes the same files.
 //! - [`view`]: a queue as the QUEUE tab shows it.
 //! - [`pages`]: how much of its history each QUEUE tab shows.
 
 pub(crate) mod flow;
 pub(crate) mod hooks;
+pub(crate) mod notes;
 pub(crate) mod observe;
 pub(crate) mod overlap;
 pub(crate) mod pages;

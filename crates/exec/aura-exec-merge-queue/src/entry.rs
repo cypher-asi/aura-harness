@@ -202,6 +202,12 @@ pub struct MergeEntry {
     /// queued ([`crate::overlap`]); empty until then
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<String>,
+    /// The PR it lands through, once the queue found or opened it
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr: Option<crate::report::PrRef>,
+    /// Why it failed, in detail: the files or tests and their output
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<crate::report::Failure>,
 }
 
 impl MergeEntry {
@@ -299,6 +305,17 @@ mod tests {
             detail: Some("tests failed".to_string()),
             merged: None,
             files: vec!["src/a.rs".to_string()],
+            pr: Some(crate::report::PrRef {
+                number: 12,
+                url: "https://github.com/o/r/pull/12".to_string(),
+            }),
+            failure: Some(crate::report::Failure {
+                kind: crate::report::FailureKind::Check,
+                reason: "tests failed".to_string(),
+                tests: vec!["cli_golden_top_level_help".to_string()],
+                excerpt: Some("-old\n+new".to_string()),
+                ..crate::report::Failure::default()
+            }),
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert_eq!(serde_json::from_str::<MergeEntry>(&json).unwrap(), entry);

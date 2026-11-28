@@ -278,3 +278,38 @@ async fn the_committed_queue_target_is_protected_without_a_working_config() {
         "{err:?}"
     );
 }
+
+#[tokio::test]
+async fn ship_takes_the_merge_the_queue_put_on_its_branch_before_pushing() {
+    if !git_available() {
+        return;
+    }
+    let (parent, repo, origin) = origin_with_main_ahead("m.txt", "main\n").await;
+    std::fs::write(repo.join("a.txt"), b"a").unwrap();
+    git_ship_impl(&repo, request("first try")).await.unwrap();
+    // The queue tested a merge and put it on the PR's branch.
+    let queue = parent.path().join("queue");
+    let url = origin.to_string_lossy().to_string();
+    git(parent.path(), &["clone", "-q", "-b", "work", &url, "queue"]).await;
+    for (k, v) in [("user.email", "q@example.com"), ("user.name", "Queue")] {
+        git(&queue, &["config", k, v]).await;
+    }
+    std::fs::write(queue.join("q.txt"), "queue\n").unwrap();
+    git(&queue, &["add", "-A"]).await;
+    git(&queue, &["commit", "-qm", "merge through the queue"]).await;
+    git(&queue, &["push", "-q", "origin", "work"]).await;
+
+    std::fs::write(repo.join("fix.txt"), b"fix").unwrap();
+    let shipped = git_ship_impl(&repo, request("the fix")).await.unwrap();
+
+    assert!(
+        shipped.pulled.starts_with("merged origin/work"),
+        "{}",
+        shipped.pulled
+    );
+    let files = git(&origin, &["ls-tree", "--name-only", "refs/heads/work"]).await;
+    assert!(
+        files.contains("q.txt") && files.contains("fix.txt"),
+        "{files}"
+    );
+}
