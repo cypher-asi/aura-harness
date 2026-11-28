@@ -24,6 +24,10 @@ impl Project {
         }
     }
 
+    fn key_file(&self) -> std::path::PathBuf {
+        self.data.path().join("store.key")
+    }
+
     fn aura(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_aura"))
             .args(["--provider", "mock"])
@@ -31,6 +35,8 @@ impl Project {
             .current_dir(self.workspace.path())
             .env("AURA_DATA_DIR", self.data.path())
             .env("AURA_HOME", self.home.path())
+            // The store's key in a file, never the developer's keychain.
+            .env("AURA_STATE_KEY_FILE", self.key_file())
             .env_remove("RUST_LOG")
             .output()
             .expect("run aura")
@@ -125,6 +131,7 @@ fn print_reads_the_prompt_from_stdin_and_honours_cwd() {
         .current_dir(elsewhere.path())
         .env("AURA_DATA_DIR", project.data.path())
         .env("AURA_HOME", project.home.path())
+        .env("AURA_STATE_KEY_FILE", project.key_file())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

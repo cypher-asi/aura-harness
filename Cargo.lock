@@ -485,6 +485,7 @@ dependencies = [
  "uuid",
  "walkdir",
  "which",
+ "zeroize",
 ]
 
 [[package]]
