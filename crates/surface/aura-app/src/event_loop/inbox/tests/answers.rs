@@ -331,3 +331,24 @@ async fn a_turn_the_user_stopped_leaves_its_answer_to_the_next_one() {
         report.prompt
     );
 }
+
+#[tokio::test]
+async fn a_long_reason_keeps_the_compiler_error_after_the_command() {
+    let mut fixture = fixture("unused");
+    let mut notices = fixture.hub.take_notices();
+    let (_, member, _) = member_owing_two(&mut fixture, &mut notices).await;
+    let command = format!(
+        "`set -e; {}` on aura-proj-575d-build exited with 101: ",
+        "x".repeat(300)
+    );
+    let why = format!("{command}error[E0425]: cannot find value `seed` in this scope");
+    give_up_seen(&fixture.hub, member, None, &why);
+    let [stopped] = take_all(&mut notices).try_into().unwrap();
+    assert!(
+        stopped
+            .prompt
+            .contains("error[E0425]: cannot find value `seed`"),
+        "{}",
+        stopped.prompt
+    );
+}
