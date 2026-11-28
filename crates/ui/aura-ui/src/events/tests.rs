@@ -235,3 +235,26 @@ fn channel_views_round_trip_through_json() {
         );
     }
 }
+
+#[test]
+fn prompt_keys_are_stable_trimmed_and_never_a_post_seq() {
+    use super::{prompt_key, PROMPT_KEY_BIT};
+    assert_eq!(
+        prompt_key("fix the parser"),
+        prompt_key("  fix the parser\n")
+    );
+    assert_ne!(prompt_key("fix the parser"), prompt_key("fix the lexer"));
+    assert_ne!(prompt_key("a") & PROMPT_KEY_BIT, 0);
+    // Pinned: the session and the UI must agree on it.
+    assert_eq!(prompt_key(""), 0xcbf2_9ce4_8422_2325 | PROMPT_KEY_BIT);
+}
+
+#[test]
+fn typed_prompts_leave_out_empty_text_and_inbox_mail() {
+    use super::is_typed_prompt;
+    assert!(is_typed_prompt("ship it"));
+    assert!(!is_typed_prompt("   "));
+    assert!(!is_typed_prompt(
+        "RE36: Parser done\n(inbox reply 7 from RE36, Parser)\nAll green."
+    ));
+}

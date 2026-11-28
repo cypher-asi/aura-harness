@@ -6,6 +6,12 @@
 //! starts a row below the top, as far back as it is, and lights its rows
 //! for [`FLASH`] ([`App::land_chat_jump`]). A jump whose block isn't in
 //! the chat (still loading) waits up to [`JUMP_WAIT`], then is dropped.
+//!
+//! A message the user typed to a channel's coordinator is asked for by
+//! its text's key and when it was sent ([`App::request_chat_jump_to_typed`]):
+//! its block's key is its message's id, known only once the channel's
+//! chat is on screen with it, which going back from a member's chat may
+//! take a moment to load.
 
 use super::{App, ChatTab};
 use std::time::{Duration, Instant};
@@ -22,6 +28,9 @@ pub(crate) struct ChatJump {
     pending: Option<(u64, Instant)>,
     /// The block jumped to, and when it was reached
     flash: Option<(u64, Instant)>,
+    /// A typed message to jump to once its block is known: its key, when
+    /// it was sent, and when the jump was asked
+    typed: Option<(u64, u64, Instant)>,
 }
 
 impl App {
@@ -31,12 +40,40 @@ impl App {
         if self.chat_tab() != ChatTab::Chat {
             self.show_chat_tab(ChatTab::Chat);
         }
+        self.chat.jump.typed = None;
         self.chat.jump.pending = Some((key, Instant::now()));
         self.request_redraw();
     }
 
+    /// Jump the chat to the message the user typed to the channel's
+    /// coordinator keyed `key`, sent at `at_ms`, once the channel's chat
+    /// shows it, putting the chat tab on screen.
+    pub(crate) fn request_chat_jump_to_typed(&mut self, key: u64, at_ms: u64) {
+        if self.chat_tab() != ChatTab::Chat {
+            self.show_chat_tab(ChatTab::Chat);
+        }
+        self.chat.jump.pending = None;
+        self.chat.jump.typed = Some((key, at_ms, Instant::now()));
+        self.request_redraw();
+    }
+
+    /// Turn a jump to a typed message into one to its block once the
+    /// chat holds it, dropping one that waited too long.
+    fn resolve_typed_jump(&mut self) {
+        let Some((key, at_ms, asked)) = self.chat.jump.typed else {
+            return;
+        };
+        if asked.elapsed() > JUMP_WAIT {
+            self.chat.jump.typed = None;
+        } else if let Some(block) = self.typed_message_block(key, at_ms) {
+            self.chat.jump.typed = None;
+            self.chat.jump.pending = Some((block, asked));
+        }
+    }
+
     /// The block a jump waits for, dropping one that waited too long.
     pub(crate) fn pending_chat_jump(&mut self) -> Option<u64> {
+        self.resolve_typed_jump();
         let (key, asked) = self.chat.jump.pending?;
         if asked.elapsed() > JUMP_WAIT {
             self.chat.jump.pending = None;
@@ -75,7 +112,9 @@ impl App {
     /// Whether a jump waits or a block is lit: the chat redraws each tick.
     #[must_use]
     pub(crate) fn chat_jumping(&self) -> bool {
-        self.chat.jump.pending.is_some() || self.chat_flash().is_some()
+        self.chat.jump.pending.is_some()
+            || self.chat.jump.typed.is_some()
+            || self.chat_flash().is_some()
     }
 }
 
