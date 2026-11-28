@@ -31,7 +31,7 @@ fn git(dir: &Path, args: &[&str]) {
 
 /// Make `workspace` a repo on `aura/footer` with an origin that has
 /// `main`, so `git_ship` can commit, pull main and push.
-fn ship_ready(workspace: &Path, origin: &Path) {
+pub(super) fn ship_ready(workspace: &Path, origin: &Path) {
     git(origin, &["init", "-q", "--bare", "-b", "main"]);
     git(workspace, &["init", "-q", "-b", "main"]);
     for (key, value) in [("user.name", "t"), ("user.email", "t@t")] {
