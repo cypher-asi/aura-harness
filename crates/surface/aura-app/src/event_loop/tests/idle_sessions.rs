@@ -110,3 +110,21 @@ async fn a_session_let_go_of_reopens_with_its_conversation_and_todos() {
     assert_eq!(texts(&reopened.messages), messages);
     assert_eq!(reopened.todos, todos);
 }
+
+#[tokio::test]
+async fn an_agent_that_owes_a_report_keeps_its_session() {
+    use super::inbox::{assign_footer, channel_with_member, code};
+    let (fixture, _commands) = fixture();
+    let coordinator = channel_with_member(&fixture).await;
+    let member = fixture.second;
+    let mut b = borrowed(&fixture);
+    let mut state = loop_state(&fixture, &mut b);
+    assign_footer(&fixture, coordinator, &code(&fixture, member)).await;
+    assert_eq!(state.hub.inbox.owed_by(member), 1);
+    // The member is left idle first, so it is the oldest of the lot.
+    let mut agents = vec![member];
+    agents.extend(register(&fixture, IDLE_SESSIONS_KEPT + 2));
+    leave_idle(&fixture, &mut state, &agents).await;
+    assert!(state.idle.contains_key(&member), "its report is owed");
+    assert!(!state.idle.contains_key(&agents[1]));
+}

@@ -1,7 +1,8 @@
 //! The responsiveness the load harness holds the app to: a time budget
 //! at 200 agents (ignored; release builds), and counts that every test
 //! run checks: a burst of asks builds the agent lists and saves the
-//! inbox once per interval, not once per ask.
+//! inbox once per interval, not once per ask; and seeding 200 agents
+//! leaves at most the idle-session cap held.
 
 use super::*;
 use crate::event_loop::inbox as owed;
@@ -125,4 +126,41 @@ async fn the_loop_saves_the_inbox_once_per_interval_however_many_events() {
         "one save, the rest due"
     );
     assert!(!state.hub.loop_work.saves.take_due());
+}
+
+#[tokio::test]
+async fn opening_200_agents_holds_at_most_the_idle_session_cap() {
+    use crate::event_loop::idle_sessions::{self, IDLE_SESSIONS_KEPT};
+    let (fixture, _commands) = fixture();
+    let agents: Vec<AgentId> = {
+        let mut registry = subagents::lock(&fixture.hub.registry);
+        (0..200)
+            .map(|at| {
+                registry
+                    .create(Some(format!("Seeded {at}")))
+                    .unwrap()
+                    .agent_id()
+            })
+            .collect()
+    };
+    let mut b = borrowed(&fixture);
+    let mut state = loop_state(&fixture, &mut b);
+    for &agent in &agents {
+        let registered = lock_registry_agent(&fixture, agent);
+        let session = fixture
+            .hub
+            .factory
+            .open(&registered, Vec::new(), None)
+            .unwrap();
+        state.idle.insert(agent, session);
+        idle_sessions::left_idle(&mut state, agent).await;
+    }
+    // The cap, or one over it while the agent on screen is among the
+    // oldest and can't be let go of.
+    assert!(
+        state.idle.len() <= IDLE_SESSIONS_KEPT + 1,
+        "{}",
+        state.idle.len()
+    );
+    assert!(state.idle.contains_key(&state.active));
 }

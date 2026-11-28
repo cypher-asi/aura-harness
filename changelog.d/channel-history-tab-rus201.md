@@ -24,3 +24,6 @@
   go of older ones that have nothing under way, and lets go of an
   archived agent's at once. They reopen from their checkpoint when the
   agent works or is shown again, with the same conversation and to-dos.
+- An idle session is now kept while its agent owes reports through its
+  inbox or is in a factory flow, which read its messages: before, one
+  let go of then could give up the wrong owed report.
