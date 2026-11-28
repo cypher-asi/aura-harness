@@ -89,6 +89,7 @@ fn tokens(access_token: &str) -> OAuthTokens {
         id_token: None,
         scope: String::new(),
         expires_at: Utc::now(),
+        issued_at: None,
     }
 }
 

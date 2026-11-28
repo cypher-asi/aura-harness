@@ -21,6 +21,10 @@ pub struct OAuthTokens {
     pub scope: String,
     /// When the access token expires.
     pub expires_at: DateTime<Utc>,
+    /// When the access token was issued; `None` for tokens kept before
+    /// it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issued_at: Option<DateTime<Utc>>,
 }
 
 impl OAuthTokens {
@@ -28,6 +32,14 @@ impl OAuthTokens {
     #[must_use]
     pub fn expires_within(&self, now: DateTime<Utc>, seconds: i64) -> bool {
         self.expires_at <= now + Duration::seconds(seconds)
+    }
+
+    /// Whether half the access token's lifetime is over at `now`; `false`
+    /// when its issue time is not known.
+    #[must_use]
+    pub fn half_used(&self, now: DateTime<Utc>) -> bool {
+        self.issued_at
+            .is_some_and(|issued| now >= issued + (self.expires_at - issued) / 2)
     }
 
     /// Whether `scope` was granted.
@@ -48,6 +60,7 @@ impl fmt::Debug for OAuthTokens {
             .field("id_token", &self.id_token.as_ref().map(|_| "<redacted>"))
             .field("scope", &self.scope)
             .field("expires_at", &self.expires_at)
+            .field("issued_at", &self.issued_at)
             .finish()
     }
 }
@@ -238,6 +251,7 @@ mod tests {
             id_token: None,
             scope: "openid chatgpt.tokens.use.direct".into(),
             expires_at: Utc::now() + Duration::seconds(expires_in),
+            issued_at: None,
         }
     }
 
@@ -261,5 +275,29 @@ mod tests {
         assert!(!tokens(600).expires_within(now, 60));
         assert!(tokens(600).has_scope("chatgpt.tokens.use.direct"));
         assert!(!tokens(600).has_scope("chatgpt.tokens"));
+    }
+
+    #[test]
+    fn a_token_is_half_used_halfway_from_its_issue_to_its_expiry() {
+        let now = Utc::now();
+        let issued = |ago: i64| OAuthTokens {
+            issued_at: Some(now - Duration::seconds(ago)),
+            ..tokens(3 * 3600)
+        };
+        assert!(issued(5 * 3600).half_used(now), "5h of 8h used");
+        assert!(!issued(3600).half_used(now), "1h of 4h used");
+        assert!(
+            !tokens(60).half_used(now),
+            "without an issue time, only the expiry counts"
+        );
+    }
+
+    #[test]
+    fn tokens_kept_before_their_issue_time_was_still_read() {
+        let kept = r#"{"access_token":"a","expires_at":"2030-01-01T00:00:00Z"}"#;
+        let tokens: OAuthTokens = serde_json::from_str(kept).unwrap();
+        assert_eq!(tokens.issued_at, None);
+        let written = serde_json::to_string(&tokens).unwrap();
+        assert!(!written.contains("issued_at"), "{written}");
     }
 }

@@ -43,8 +43,6 @@ pub(super) struct TurnControls<'a> {
     pub limits: LongRunSettings,
     /// Traces the turn's events into its conversation's run
     pub recorder: Option<std::sync::Arc<aura_agent_trace::RunRecorder>>,
-    /// The software factory builds the plan this turn writes on its own
-    pub auto_build: bool,
 }
 
 /// Run one turn of `session` on `agent_loop` with `tools`, under
@@ -64,7 +62,6 @@ pub(super) async fn run_agent_turn(
         steering,
         limits,
         recorder,
-        auto_build,
     } = controls;
     let (agent_event_tx, agent_event_rx) = tokio::sync::mpsc::channel::<AgentLoopEvent>(1024);
     // A timeout or cost stop ends the turn without it counting as
@@ -79,7 +76,7 @@ pub(super) async fn run_agent_turn(
         ui.clone(),
         cost_cap,
         agent_loop.config().max_context_tokens,
-        turn_plan(session, auto_build),
+        turn_plan(session),
         recorder,
     ));
 
@@ -100,9 +97,8 @@ pub(super) async fn run_agent_turn(
 }
 
 /// What the event forwarder needs to follow `session`'s plan and tasks.
-fn turn_plan(session: &AgentSession, auto_build: bool) -> TurnPlan {
+fn turn_plan(session: &AgentSession) -> TurnPlan {
     TurnPlan {
-        auto_build,
         agent: session.agent_id(),
         tasks: std::sync::Arc::clone(&session.tasks),
         workspace: session.kernel.agent_workspace(),
@@ -110,6 +106,7 @@ fn turn_plan(session: &AgentSession, auto_build: bool) -> TurnPlan {
             .building_plan
             .then(|| session.active_plan.clone())
             .flatten(),
+        build: session.plan_build,
     }
 }
 

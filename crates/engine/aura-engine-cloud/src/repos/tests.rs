@@ -51,12 +51,12 @@ async fn tokens_are_reminted_only_inside_the_margin() {
     sync.tick(&[repo("app")]).await;
     assert_eq!(tokens.mints(&repo("app")), 1, "an hour left: no mint");
 
-    // Ten minutes left: inside the 15-minute margin.
+    // Twenty minutes left: inside the 30-minute margin.
     sync.repos
         .lock()
         .get_mut(&repo("app"))
         .expect("state")
-        .expires_at_ms = Some(in_minutes(10));
+        .expires_at_ms = Some(in_minutes(20));
     tokens.install(&repo("app"), "ghs_two", in_minutes(60));
     sync.tick(&[repo("app")]).await;
     assert_eq!(tokens.mints(&repo("app")), 2);

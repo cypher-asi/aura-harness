@@ -205,6 +205,11 @@ pub struct NodeClaim {
     /// hubs before git claims.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git: Option<GitClaim>,
+    /// The machine's public base URL. The node calls it to keep its
+    /// machine awake while it works with no hub connected; `None` from
+    /// hubs before that.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_url: Option<String>,
 }
 
 impl std::fmt::Display for NodeClaim {
@@ -283,6 +288,7 @@ mod tests {
                 author_name: Some("aura-agents[bot]".into()),
                 author_email: Some("1+aura-agents[bot]@users.noreply.github.com".into()),
             }),
+            public_url: Some("https://aura-re36-3f9c.boxd.sh".into()),
         };
         let text = claim.to_string();
         assert!(!text.contains("secret"), "{text}");

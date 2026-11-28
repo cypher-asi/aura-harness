@@ -54,8 +54,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   them 100 at a time as you scroll to "N older merges".
 - A queued entry expires 24 hours after its last change, so one put
   back after a crash doesn't expire at once.
-- A channel member the software factory builds on its own is no longer
-  told to say "implement" or run `/build`.
 
 ### Channel post summaries are kept in the channel store
 
@@ -297,11 +295,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   coordinator, which can't read the code, in plan mode: a new
   `engineer` member of the channel, in plan mode, whose chat opens over
   the channel's with your request (and any pasted images) as its first
-  message. It writes the plan there and builds it when you say
-  "implement" or run `/build` in its chat; Esc goes back to the
-  channel's chat. Bare `/plan`, or `/mode plan`, opens a planner that
-  waits for the request. In a channel whose agents run in the cloud,
-  the planner works on this computer, where plan mode holds.
+  message. It writes the plan there, then builds it and ships it to the
+  merge queue on its own; Esc goes back to the channel's chat. Bare
+  `/plan`, or `/mode plan`, opens a planner that waits for the request.
+  In a channel whose agents run in the cloud, the planner works on this
+  computer, where plan mode holds.
 
 ### Channel members show a cloud for cloud agents
 

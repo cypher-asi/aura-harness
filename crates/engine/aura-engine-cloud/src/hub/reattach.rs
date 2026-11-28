@@ -32,7 +32,7 @@ pub const RUN_GONE: &str = "its machine no longer has the turn's run";
 
 /// How a reattach went, before the copies.
 enum Attached {
-    /// The stream ran: how the turn ended, as [`TurnStream::relay`] says
+    /// The stream ran: how the turn ended, as [`TurnStream::relay_mut`] says
     Relayed(CloudResult<()>),
     /// The node has no such run
     Gone,

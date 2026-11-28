@@ -19,7 +19,8 @@
 //!   ([`promote_members`]).
 //! * The coordinator never enters plan mode. `/plan` in its chat, or a
 //!   switch of it to plan mode, starts a new member that plans in its own
-//!   chat instead ([`start_planner`]).
+//!   chat instead ([`start_planner`]), then builds and ships the plan on
+//!   its own, as any member's task.
 //! * A channel with a project has its coordinator at the top of that
 //!   project (no folder of its own), so the coordinator and every agent
 //!   under it are listed in the Projects tree. A channel without one has
@@ -73,8 +74,8 @@ pub(crate) mod summaries;
 mod update;
 
 pub(crate) use chat::{
-    drop_unanswered, drop_unanswered_from, post_plan_request, post_replies, post_replies_from,
-    route_user_message, send_posts_of, take_digest, ChannelChat,
+    drop_unanswered, drop_unanswered_from, is_relayed, post_plan_request, post_replies,
+    post_replies_from, route_user_message, send_posts_of, take_digest, ChannelChat,
 };
 pub(crate) use create::create_channel;
 pub(super) use handlers::{
@@ -96,7 +97,7 @@ pub(crate) use load::{load_channels, ChannelSets};
 use load::{move_placements, stage_rows};
 pub(crate) use plan::{is_coordinator_agent, start_planner};
 #[cfg(test)]
-pub(crate) use plan::{PLANNER_DEFINITION, PLANS_HERE};
+pub(crate) use plan::{PLANNER_DEFINITION, PLANNER_WAITS, PLANS_HERE};
 pub(crate) use prompt::{channel_prompt, is_channel_agent, is_coordinator};
 pub(crate) use update::{archive_channel, update_channel, ChannelEdit, CoordinatorBusy};
 

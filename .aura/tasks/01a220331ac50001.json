@@ -1,0 +1,26 @@
+{
+  "id": "01a220331ac50001",
+  "title": "it's showing tasks as complete, when they are not actually complete [image 1] in channels app todos. It should only sho…",
+  "state": "open",
+  "agent_id": "49991d2b19ee2a9bdfc3d614920a410240d6510d5002b60b924af7b80f351226",
+  "agent_name": "coordinator",
+  "items": [
+    {
+      "content": "Mouse scroll must not change selection in any panel; only keys do (FEN6)",
+      "state": "pending",
+      "assignee": "FEN6"
+    },
+    {
+      "content": "Merge #63 subagent titles into main (RUS198)",
+      "state": "pending"
+    },
+    {
+      "content": "Channel to-dos panel: show only active tasks with agent info; completed ones in collapsible task history (RUS197)",
+      "state": "pending",
+      "assignee": "RUS197"
+    }
+  ],
+  "summary": "I've given the to-dos panel to RUS197. Those two tasks aren't actually done: both are still in progress, but the filled square makes them look checked off. The panel will show only active tasks, with markers that make it clear what's waiting and what's running. Each task will also show the agent doing it, plus its status and how long it's been running. Finished tasks will go into a \"Task history\"…",
+  "updated_ms": 1795836567727,
+  "created_ms": 1795836549829
+}

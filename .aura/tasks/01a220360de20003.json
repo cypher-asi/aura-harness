@@ -1,0 +1,36 @@
+{
+  "id": "01a220360de20003",
+  "title": "In channels: There should be a history tab to the right of tasks in the right panel. That should show a history of ever…",
+  "state": "open",
+  "agent_id": "49991d2b19ee2a9bdfc3d614920a410240d6510d5002b60b924af7b80f351226",
+  "agent_name": "coordinator",
+  "items": [
+    {
+      "content": "Mouse scroll must not change selection in any panel; only keys do (FEN6)",
+      "state": "pending",
+      "assignee": "FEN6"
+    },
+    {
+      "content": "Merge #63 subagent titles into main (RUS198)",
+      "state": "completed"
+    },
+    {
+      "content": "Channel to-dos panel: show only active tasks with agent info; completed ones in collapsible task history (RUS197)",
+      "state": "pending",
+      "assignee": "RUS197"
+    },
+    {
+      "content": "Empty channel: ASCII-art channel name plus coordinator welcome message (new agent)",
+      "state": "pending",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Channels right panel: History tab after Tasks listing user messages, Haiku summaries, click jumps to message (new agent)",
+      "state": "pending",
+      "assignee": "rust-engineer"
+    }
+  ],
+  "summary": "Descriptive subagent titles are on main: RUS198 merged PR #63 as 89039ffd. All tests pass except 3 sandbox tests, which fail the same way on plain main because RUS198's machine doesn't support them. Those 3 tests haven't been checked anywhere that can run them, and GitHub's automated checks still don't run. Someone needs to run them on a machine with Landlock (a Linux kernel security feature), or…",
+  "updated_ms": 1795836820351,
+  "created_ms": 1795836743138
+}

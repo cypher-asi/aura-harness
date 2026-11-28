@@ -379,19 +379,26 @@ impl CloudHub {
     /// if the machine is lost: the records, the session checkpoint, the
     /// trace runs and a patch of its changes. A part that fails is only
     /// logged and the rest still runs: the machine's disk keeps it all,
-    /// and HOST shows the agent as behind.
-    pub(super) async fn persist(&self, node: &NodeClient, agent: AgentId) {
+    /// and HOST shows the agent as behind. Returns whether every part
+    /// was copied.
+    pub(super) async fn persist(&self, node: &NodeClient, agent: AgentId) -> bool {
+        let mut whole = true;
         if let Err(err) = self.mirror_from(node, agent).await {
             tracing::warn!(%agent, error = %err, "could not copy the record");
+            whole = false;
         }
         if let Err(err) = self.copy_session(node, agent).await {
             tracing::warn!(%agent, error = %err, "could not copy the session checkpoint");
+            whole = false;
         }
         if let Err(err) = self.copy_traces(node, agent).await {
             tracing::warn!(%agent, error = %err, "could not copy the trace runs");
+            whole = false;
         }
         if let Err(err) = self.save_patch(node, agent).await {
             tracing::warn!(%agent, error = %err, "could not save the machine's changes");
+            whole = false;
         }
+        whole
     }
 }

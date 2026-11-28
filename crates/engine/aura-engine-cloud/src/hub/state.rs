@@ -356,10 +356,16 @@ impl CloudHub {
     /// Update `agent`'s node when it lacks `git_ship` and the hub has a
     /// cloud build to give it. Returns whether the node was restarted.
     /// A failure is logged and shown, and the old node keeps working.
+    ///
+    /// A node with a turn marked under way is left as it is until a later
+    /// turn: that turn may run on with no work counted here yet (one an
+    /// earlier hub asked for, about to be followed), and a restart would
+    /// cut it off.
     async fn update_outdated_node(&self, agent: &str, boot: &BootReporter) -> bool {
         if self
             .fleet
             .node_offers(agent, aura_core_protocol::cloud::SHIP_TOOL)
+            || self.turn_marked(agent)
         {
             return false;
         }

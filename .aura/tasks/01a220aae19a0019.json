@@ -1,0 +1,11 @@
+{
+  "id": "01a220aae19a0019",
+  "title": "what's using so much memory on this machine right now and how do we kill stale processes or ones we don't need",
+  "state": "completed",
+  "agent_id": "1d51c9a2dc3cc5d8e134f4ce4ca217025e3d86d8faaad9b607a7835841890c8d",
+  "agent_name": "Agent 1737",
+  "items": [],
+  "summary": "The biggest memory user isn't a process. About 13 GB of your RAM is files sitting in `/tmp`. Your `/tmp` is a tmpfs, which means everything stored there lives in RAM, and you have no swap. That explains why `free` shows 12 Gi \"shared\" and only about 3.5 Gi available out of 30 Gi.",
+  "updated_ms": 1795844576010,
+  "created_ms": 1795844399514
+}

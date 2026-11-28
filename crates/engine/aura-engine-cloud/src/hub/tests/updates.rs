@@ -23,8 +23,16 @@ fn answer(stdin: Option<&[u8]>, tools: &[&str]) -> crate::ExecOutput {
     }
 }
 
-#[tokio::test]
-async fn starting_work_on_an_old_node_puts_the_hubs_aura_on_it() {
+/// A hub with a cloud build to give, and an agent on a machine whose node
+/// is from before the merge queue until that build is installed; with
+/// whether it was.
+async fn old_node_and_a_build() -> (
+    Arc<CloudHub>,
+    FakeProvider,
+    tempfile::TempDir,
+    AgentId,
+    Arc<AtomicBool>,
+) {
     let dir = tempfile::tempdir().expect("tempdir");
     let binary = dir.path().join("aura-linux");
     std::fs::write(&binary, b"new aura build").expect("write");
@@ -61,6 +69,12 @@ async fn starting_work_on_an_old_node_puts_the_hubs_aura_on_it() {
     let project = dir.path().join("project");
     std::fs::create_dir_all(&project).expect("mkdir");
     adopt_machine(&hub, &fake, agent, &project, None).await;
+    (hub, fake, dir, agent, installed)
+}
+
+#[tokio::test]
+async fn starting_work_on_an_old_node_puts_the_hubs_aura_on_it() {
+    let (hub, fake, _dir, agent, installed) = old_node_and_a_build().await;
     let hex = agent.to_hex();
 
     hub.current_node(&hex, &BootReporter::none())
@@ -72,6 +86,37 @@ async fn starting_work_on_an_old_node_puts_the_hubs_aura_on_it() {
         fake.file("aura-sc01-0101", "/tmp/aura.update").as_deref(),
         Some(&b"new aura build"[..])
     );
+}
+
+#[tokio::test]
+async fn an_old_node_with_a_turn_no_hub_saw_end_is_updated_only_after_it() {
+    let (hub, _fake, _dir, agent, installed) = old_node_and_a_build().await;
+    let hex = agent.to_hex();
+    let mark = TurnMark {
+        run_id: "run-1".into(),
+        started_ms: now_ms(),
+        head: 0,
+        label: "Fix the build".into(),
+        model: None,
+        titled: false,
+    };
+    hub.mark_turn(agent, mark);
+
+    hub.current_node(&hex, &BootReporter::none())
+        .await
+        .expect("the node the turn runs on");
+    assert!(
+        !installed.load(Ordering::SeqCst),
+        "a restart would cut the turn off"
+    );
+    assert!(!hub.node_offers(&hex, "git_ship"));
+
+    hub.end_turn_mark(agent, "run-1");
+    hub.current_node(&hex, &BootReporter::none())
+        .await
+        .expect("a node for the next turn");
+    assert!(installed.load(Ordering::SeqCst), "the next turn updates it");
+    assert!(hub.node_offers(&hex, "git_ship"));
 }
 
 #[tokio::test]

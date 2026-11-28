@@ -312,17 +312,18 @@ fn fallback_reply(request: &ModelRequest, last: Option<&str>, auxiliary: bool) -
 }
 
 /// The one tool call a turn whose last message is `last` makes, for the
-/// delegation tests: "write a note" writes `notes/<model>.txt`, "touch a
-/// file" runs `touch touched.txt`, "read the big file" reads `big.txt`,
-/// "close every todo" marks todos `a` and `b` completed, "start new
-/// todos" replaces the todo list with one item `x`,
-/// and "change files by shell" appends the model to `tracked.txt` and
-/// `target/out` and writes `shell-<model>.txt` with a shell command, which
-/// on a first attempt also deletes `gone.txt`.
+/// delegation tests: a [`planning`] one, or "write a note" writes
+/// `notes/<model>.txt`, "touch a file" runs `touch touched.txt`, "read
+/// the big file" reads `big.txt`, and "change files by shell" appends the
+/// model to `tracked.txt` and `target/out` and writes `shell-<model>.txt`
+/// with a shell command, which on a first attempt also deletes `gone.txt`.
 fn scripted(last: &str, request: &ModelRequest) -> Option<MockResponse> {
     let call = |name: &str, input: serde_json::Value| {
         Some(MockResponse::tool_use(format!("toolu_{name}"), name, input))
     };
+    if let Some((name, input)) = planning(last) {
+        return call(name, input);
+    }
     if last.contains("write a note") {
         let path = format!("notes/{}.txt", request.model.as_str());
         return call(
@@ -339,21 +340,6 @@ fn scripted(last: &str, request: &ModelRequest) -> Option<MockResponse> {
     if last.contains("read the big file") {
         return call("read_file", serde_json::json!({ "path": "big.txt" }));
     }
-    if last.contains("close every todo") {
-        return call(
-            "todo_write",
-            serde_json::json!({
-                "merge": true,
-                "todos": [{ "id": "a", "status": "completed" }, { "id": "b", "status": "completed" }],
-            }),
-        );
-    }
-    if last.contains("start new todos") {
-        return call(
-            "todo_write",
-            serde_json::json!({ "todos": [{ "id": "x", "content": "Fresh work" }] }),
-        );
-    }
     if last.contains("change files by shell") {
         let model = request.model.as_str();
         let mut script = format!(
@@ -367,6 +353,33 @@ fn scripted(last: &str, request: &ModelRequest) -> Option<MockResponse> {
             "run_command",
             serde_json::json!({ "program": "sh", "args": ["-c", script] }),
         );
+    }
+    None
+}
+
+/// The tool and input of the todos or plan a turn whose last message is
+/// `last` writes: "close every todo" marks todos `a` and `b` completed,
+/// "start new todos" replaces the todo list with one item `x`, and "write
+/// a plan" writes the plan "Login form" with `create_plan`.
+fn planning(last: &str) -> Option<(&'static str, serde_json::Value)> {
+    if last.contains("close every todo") {
+        let input = serde_json::json!({
+            "merge": true,
+            "todos": [{ "id": "a", "status": "completed" }, { "id": "b", "status": "completed" }],
+        });
+        return Some(("todo_write", input));
+    }
+    if last.contains("start new todos") {
+        let input = serde_json::json!({ "todos": [{ "id": "x", "content": "Fresh work" }] });
+        return Some(("todo_write", input));
+    }
+    if last.contains("write a plan") {
+        let input = serde_json::json!({
+            "name": "Login form",
+            "plan": "## The change\n\nA login form on the home page.",
+            "todos": [{ "id": "form", "content": "Add the login form" }],
+        });
+        return Some((aura_exec_tools::plan_tools::CREATE_PLAN_TOOL_NAME, input));
     }
     None
 }

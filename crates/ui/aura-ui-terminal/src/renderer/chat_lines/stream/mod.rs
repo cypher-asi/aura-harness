@@ -152,10 +152,10 @@ struct Ending {
 ///
 /// The line has to be whole because until then it may yet turn out to
 /// open a code block. Text has to be parted from text by an empty line
-/// because a table's rows and the gap before a heading depend on the line
-/// before them. Fields depend on the list items above them, across empty
-/// lines. Empty lines after a code block are not drawn, so none go
-/// between the parts there.
+/// because a table's rows, the gap before a heading and the gap between
+/// two lines of text depend on the line before them. Fields depend on the
+/// list items above them, across empty lines. Empty lines after a code
+/// block are not drawn, so none go between the parts there.
 fn last_break(text: &str) -> Option<Break> {
     let mut found = None;
     let mut ending: Option<Ending> = None;

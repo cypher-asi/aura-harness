@@ -5,7 +5,7 @@ use crate::mesh::Holder;
 use crate::{names, workspace, BootReporter, FakeProvider};
 
 use aura_core_protocol::cloud::{MeshMail, MeshMailKind};
-use aura_core_protocol::{ErrorMsg, OutboundMessage, TextDelta, ToolUseStart};
+use aura_core_protocol::{ErrorMsg, OutboundMessage, TextDelta, ToolOutputMsg, ToolUseStart};
 use aura_core_types::time::now_ms;
 use aura_engine::{MessageKind, RemoteMail, RemoteRouter, ThreadId};
 
@@ -154,6 +154,7 @@ async fn adopt_machine(
         source: None,
         created_ms: 0,
         boot_ms: 0,
+        last_connected_ms: 0,
     });
     hub.fleet
         .adopt(&agent.to_hex(), "0://scout", "p1", name, Vec::new(), None)
@@ -171,6 +172,8 @@ async fn adopt_machine(
         repo: None,
         fetched_tip: None,
         children: Vec::new(),
+        turn: None,
+        slept_ms: None,
     };
     hub.placements
         .lock()

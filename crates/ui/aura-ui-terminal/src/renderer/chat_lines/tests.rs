@@ -257,6 +257,31 @@ fn a_running_tool_drawn_from_its_kept_parts_matches_one_laid_out_afresh() {
 }
 
 #[test]
+fn a_replys_lines_of_text_are_paragraphs_and_a_prompts_stay_rows() {
+    let theme = Theme::cyber();
+    let texts = |role| -> Vec<String> {
+        content_lines(
+            "Both are fixed.\nShould I merge?",
+            role,
+            (60, Measure::GRID),
+            &theme,
+        )
+        .lines
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+    };
+    assert_eq!(
+        texts(MessageRole::Assistant),
+        ["Both are fixed.", "", "Should I merge?"]
+    );
+    assert_eq!(
+        texts(MessageRole::User),
+        ["→ Both are fixed.", "  Should I merge?"]
+    );
+}
+
+#[test]
 fn a_message_from_another_agents_inbox_folds_to_one_line_until_opened() {
     let theme = Theme::cyber();
     let open = HashMap::new();

@@ -8,10 +8,32 @@ use aura_agent_kernel::{Kernel, KernelConfig, PolicyConfig};
 use aura_core_types::{is_effectively_full_access, AgentToolPermissions, UserToolDefaults};
 use aura_engine::{executor, AgentEnv, AgentHooks, RootAgent};
 use aura_exec_tools::domain_tools::DomainToolExecutor;
-use aura_exec_tools::ToolResolver;
+use aura_exec_tools::{CommandOutputHook, ToolResolver};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+
+/// Sends what a foreground command prints onto the turn's stream.
+/// Called from the threads reading the command, so a full stream drops
+/// the piece rather than stalling the command.
+struct WireCommandOutput {
+    outbound: mpsc::Sender<OutboundMessage>,
+}
+
+impl CommandOutputHook for WireCommandOutput {
+    fn output(&self, tool_use_id: &str, chunk: &[u8]) {
+        let chunk = String::from_utf8_lossy(chunk);
+        if chunk.is_empty() {
+            return;
+        }
+        let _ = self.outbound.try_send(OutboundMessage::ToolOutput(
+            crate::protocol::ToolOutputMsg {
+                id: tool_use_id.to_string(),
+                chunk: chunk.into_owned(),
+            },
+        ));
+    }
+}
 
 pub(super) fn resolve_session_workspace(session: &Session) -> (std::path::PathBuf, bool) {
     if let Some(ref project_path) = session.project_path {
@@ -84,6 +106,15 @@ pub(in crate::gateway::session) async fn build_kernel_with_config(
     // live WS thread.
     let hooks = register_session_agent(session, ctx)?;
     let resolver = attach_agent_hooks(resolver, &hooks, ctx, parent_outbound, parent_cancellation);
+    // Foreground commands print on the turn's stream while they run.
+    // The session bootstrap has no stream, and the call's result still
+    // carries everything a frame could not take.
+    let resolver = match parent_outbound {
+        Some(outbound) => resolver.with_command_output_hook(Arc::new(WireCommandOutput {
+            outbound: outbound.clone(),
+        })),
+        None => resolver,
+    };
     let resolver = resolver
         .with_caller_permissions(session.agent_permissions.clone())
         .with_tool_permission_context(user_default, session.tool_permissions.clone())
@@ -332,5 +363,26 @@ fn attach_aura_os_hooks(env: &mut AgentEnv, session: &Session, ctx: &WsContext) 
         ));
         env.remote_control = Some(remote.clone());
         env.remote_read = Some(remote);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_output_is_a_tool_output_frame() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let hook = WireCommandOutput { outbound: tx };
+        hook.output("toolu_1", b"building\n");
+        hook.output("toolu_1", b"more\n");
+        match rx.try_recv() {
+            Ok(OutboundMessage::ToolOutput(msg)) => {
+                assert_eq!(msg.id, "toolu_1");
+                assert_eq!(msg.chunk, "building\n");
+            }
+            other => panic!("expected tool output, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "a full stream drops the rest");
     }
 }

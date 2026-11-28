@@ -87,6 +87,10 @@ pub struct AgentSession {
     /// enforced (see [`aura_gate::lead`]); set where the turn's tools are put
     /// together.
     pub lead: bool,
+    /// How a plan its current turn writes gets built
+    /// ([`AgentHub::plan_build`]); set where the turn's tools are put
+    /// together.
+    pub plan_build: plan_mode::Build,
     /// Where its work is kept as tasks
     pub tasks: Arc<TaskBoard>,
 }

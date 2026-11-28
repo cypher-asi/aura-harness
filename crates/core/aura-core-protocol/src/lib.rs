@@ -89,7 +89,7 @@ pub use server::{
     GenerationProgressMsg, GenerationStart, IterationComplete, OutboundMessage, PolicyCheckWire,
     PolicyRuleWire, ProgressMsg, SessionReady, SessionUsage, SkillInfo, SubagentSpawned,
     SubagentStatus, TextDelta, ThinkingDelta, ToolApprovalPrompt, ToolCallSnapshot, ToolInfo,
-    ToolPolicyDecision, ToolResultMsg, ToolUseStart,
+    ToolOutputMsg, ToolPolicyDecision, ToolResultMsg, ToolUseStart,
 };
 pub use version::{ProtocolVersion, PROTOCOL_VERSION};
 

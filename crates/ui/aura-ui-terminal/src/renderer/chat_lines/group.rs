@@ -100,7 +100,7 @@ pub(super) fn group_lines(
         push_steps(
             (&mut lines, &mut toggles),
             (&steps, &mut drawn),
-            (place, keeping),
+            (place, keeping, live),
             look,
         );
     }
@@ -128,7 +128,7 @@ fn keep_steps(steps: &[(&Message, &Activity)], drawn: Vec<StepLines>, keeping: b
 fn push_steps(
     (lines, toggles): (&mut Vec<Line<'static>>, &mut Vec<ToggleRow>),
     (steps, drawn): (&[(&Message, &Activity)], &mut [StepLines]),
-    (place, keeping): (&TurnPlace<'_>, bool),
+    (place, keeping, preview): (&TurnPlace<'_>, bool, bool),
     (width, theme, spinner): (usize, &Theme, &str),
 ) {
     let mut number = place.first_step;
@@ -145,6 +145,7 @@ fn push_steps(
             Some(step_number),
             keeping,
             (width, theme, spinner),
+            preview,
         );
         toggles.extend(more_toggles(member, more, lines.len()));
         lines.extend(step_lines);
@@ -220,7 +221,7 @@ pub(super) fn single_lines(
     let (mut lines, more) = match kept {
         Some(kept) => {
             let mut drawn = StepLines::take(Some(kept), message, step);
-            let lines = drawn.draw((message, step), None, true, (width, theme, spinner));
+            let lines = drawn.draw((message, step), None, true, (width, theme, spinner), false);
             kept.insert(message.version().0, drawn);
             lines
         }

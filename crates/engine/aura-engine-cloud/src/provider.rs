@@ -105,6 +105,9 @@ pub struct MachineInfo {
     pub created_ms: u64,
     /// How long it took to come up, milliseconds.
     pub boot_ms: u64,
+    /// When a client last connected to it, Unix milliseconds; 0 for
+    /// never.
+    pub last_connected_ms: u64,
 }
 
 impl MachineInfo {
@@ -331,6 +334,11 @@ pub trait VmProvider: Send + Sync {
     async fn standby(&self, machine: &str) -> CloudResult<()>;
     /// Set boxd's own idle hibernation backstop; `0` turns it off.
     async fn set_auto_hibernate(&self, machine: &str, secs: u32) -> CloudResult<()>;
+    /// Set boxd's idle auto-suspend; `0` turns it off.
+    async fn set_auto_suspend(&self, machine: &str, secs: u32) -> CloudResult<()>;
+    /// Whether the idle clock behind auto-suspend and auto-hibernate
+    /// ignores connections the machine opened itself.
+    async fn set_idle_ignore_outbound(&self, machine: &str, enabled: bool) -> CloudResult<()>;
     /// Turn boxd's bot protection on or off for the machine's domain.
     async fn set_bot_protection(&self, machine: &str, enabled: bool) -> CloudResult<()>;
     /// Run `command` in the machine's shell with optional stdin.
@@ -434,6 +442,7 @@ mod tests {
             source: None,
             created_ms: 0,
             boot_ms: 0,
+            last_connected_ms: 0,
         };
         assert_eq!(info.url(), "https://m.boxd.sh");
         assert_eq!(info.size(), Some(MachineSize::S4x16));

@@ -1,6 +1,6 @@
 use super::inline::{parse_inline, parse_linked};
-use super::render_markdown;
 use super::wrap::wrap_spans;
+use super::{render_markdown, Breaks};
 use crate::renderer::text::Measure;
 use crate::Theme;
 use ratatui::{

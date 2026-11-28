@@ -18,7 +18,7 @@ async fn chat_commands(events: Vec<AgentLoopEvent>) -> Vec<UiCommand> {
         tasks: Arc::new(TaskBoard::default()),
         workspace: PathBuf::new(),
         building: None,
-        auto_build: false,
+        build: Build::WhenAsked,
     };
     let ui = AgentUi::new(commands, agent);
     forward_agent_events(events_rx, ui, None, None, plan, None).await;
@@ -74,12 +74,12 @@ async fn each_model_call_writes_a_reply_of_its_own() {
 
 #[test]
 fn a_factory_plan_is_built_next_and_asks_for_no_implement() {
-    let factory = super::sink::plan_ready_note("Fix it", ".aura/plans/a.plan.md", true);
-    assert!(factory.contains("builds it next"), "{factory}");
+    let factory = super::sink::plan_ready_note("Fix it", ".aura/plans/a.plan.md", Build::RightAway);
+    assert!(factory.contains("built next"), "{factory}");
     assert!(
         !factory.contains("implement") && !factory.contains("/build"),
         "{factory}"
     );
-    let by_hand = super::sink::plan_ready_note("Fix it", ".aura/plans/a.plan.md", false);
+    let by_hand = super::sink::plan_ready_note("Fix it", ".aura/plans/a.plan.md", Build::WhenAsked);
     assert!(by_hand.contains("say \"implement\""), "{by_hand}");
 }

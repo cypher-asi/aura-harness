@@ -128,6 +128,7 @@ fn credential_carries_beta_and_preamble() {
         id_token: None,
         scope: SCOPE.into(),
         expires_at: Utc::now(),
+        issued_at: None,
     });
     assert_eq!(credential.bearer, "tok");
     assert!(credential

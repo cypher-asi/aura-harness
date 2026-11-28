@@ -142,6 +142,7 @@ fn each_page_moves_the_cut_of_a_result_until_it_is_all_shown() {
             expanded: true,
             result,
             diff: 0,
+            preview: false,
         };
         super::super::activity_lines(&step, shown, None, "⠋", 80, &theme)
     };

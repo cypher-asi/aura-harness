@@ -59,6 +59,9 @@ mod boot;
 mod ended;
 #[cfg(test)]
 mod ended_tests;
+mod follow;
+#[cfg(test)]
+mod follow_tests;
 pub(in crate::event_loop) mod forward;
 mod machine;
 mod member_start;
@@ -288,12 +291,6 @@ fn cloud_home() -> PathBuf {
         .join("cloud")
 }
 
-fn env_file() -> PathBuf {
-    aura_config::AuraHome::resolve()
-        .map_or_else(|_| PathBuf::from("aura_data"), |home| home.path)
-        .join(".env")
-}
-
 async fn system(state: &LoopState<'_>, agent: AgentId, text: impl Into<String>) {
     AgentUi::new(state.commands.clone(), agent)
         .send(UiCommand::ShowMessage(MessageData::new(
@@ -346,6 +343,7 @@ async fn ensure_hub(
     state
         .processes
         .set_remote(Arc::new(MachineRows(Arc::downgrade(&hub))));
+    follow::follow_unfinished(state, &hub).await;
     start_publisher(state);
     Ok(hub)
 }

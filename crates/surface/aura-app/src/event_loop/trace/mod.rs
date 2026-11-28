@@ -413,7 +413,7 @@ impl TurnObserver for Traces {
                 ..AgentLoopResult::default()
             }),
         }
-        rec.finish();
+        refresh(&rec);
         let removed = lock(&self.live).get_mut(&agent_id).is_some_and(|run| {
             run.in_turn = false;
             run.removed
@@ -472,7 +472,7 @@ fn latest_bundle_of(home: &Path, agent: &str) -> Option<RunBundle> {
 
 /// Record how a turn ended and refresh the run's scorecard.
 pub(super) fn end_turn(
-    rec: &RunRecorder,
+    rec: &Arc<RunRecorder>,
     result: &Result<AgentLoopResult, AgentError>,
     cancelled: bool,
 ) {
@@ -486,7 +486,21 @@ pub(super) fn end_turn(
             ..AgentLoopResult::default()
         }),
     }
-    rec.finish();
+    refresh(rec);
+}
+
+/// Write `rec`'s scorecard and log off the caller's thread, so the
+/// agent's next turn doesn't wait on them.
+fn refresh(rec: &Arc<RunRecorder>) {
+    if !rec.finish_later() {
+        return;
+    }
+    let rec = Arc::clone(rec);
+    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+        runtime.spawn_blocking(move || rec.finish_due());
+    } else {
+        rec.finish_due();
+    }
 }
 
 #[cfg(test)]

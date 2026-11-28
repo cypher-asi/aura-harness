@@ -140,6 +140,7 @@ async fn an_agent_with_a_machine_this_hub_lost_track_of_gets_no_second_one() {
         source: None,
         created_ms: 0,
         boot_ms: 0,
+        last_connected_ms: 0,
     });
     assert!(
         !hub.is_placed(request.agent),

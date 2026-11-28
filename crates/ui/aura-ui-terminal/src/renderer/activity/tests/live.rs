@@ -123,6 +123,63 @@ fn a_finished_command_shows_no_live_output() {
 }
 
 #[test]
+fn a_live_group_keeps_a_tail_of_a_finished_thought_and_command() {
+    let thought = Activity::Thinking(ThinkingStep {
+        text: (1..=6)
+            .map(|n| format!("thought {n}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        started: None,
+        duration_ms: Some(11_000),
+        running: false,
+    });
+    let output = (1..=6)
+        .map(|n| format!("line {n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let command = tool_step(
+        "run_command",
+        r#"{"shell_script":"rg claim"}"#,
+        ToolStatus::Success,
+        Some(&output),
+    );
+    let read = tool_step(
+        "read_file",
+        r#"{"path":"src/main.rs"}"#,
+        ToolStatus::Success,
+        Some("fn main() {}"),
+    );
+    let preview = Shown {
+        preview: true,
+        ..Shown::default()
+    };
+    let thought_lines =
+        texts(&super::super::activity_lines(&thought, preview, None, "⠋", 80, &Theme::default()).0);
+    assert_eq!(
+        thought_lines,
+        [
+            "  ▸ Thought 11s",
+            "    │ thought 4",
+            "    │ thought 5",
+            "    │ thought 6",
+        ]
+    );
+    let command_lines =
+        texts(&super::super::activity_lines(&command, preview, None, "⠋", 80, &Theme::default()).0);
+    assert!(
+        command_lines[0].contains("Ran rg claim"),
+        "{command_lines:?}"
+    );
+    assert_eq!(
+        command_lines[1..],
+        ["    │ line 4", "    │ line 5", "    │ line 6"]
+    );
+    let read_lines =
+        texts(&super::super::activity_lines(&read, preview, None, "⠋", 80, &Theme::default()).0);
+    assert_eq!(read_lines.len(), 1, "a read stays a title: {read_lines:?}");
+}
+
+#[test]
 fn a_long_quiet_command_says_how_long_it_printed_nothing() {
     let ago = |secs| std::time::Instant::now().checked_sub(std::time::Duration::from_secs(secs));
     let mut activity = running_command("");

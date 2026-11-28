@@ -126,7 +126,6 @@ impl TaskTurn<'_> {
                 steering: &steering,
                 limits: self.limits,
                 recorder: self.recorder.clone(),
-                auto_build: false,
             },
         )
         .await;

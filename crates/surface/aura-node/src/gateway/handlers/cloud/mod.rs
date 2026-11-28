@@ -17,10 +17,10 @@
 //! ([`crate::cloud_node::CloudNode::authorize`]) and answers `404` on a
 //! node that is not a cloud node.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use aura_agent::checkpoint::{SessionCheckpoint, CHECKPOINT_VERSION};
 use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
@@ -46,6 +46,7 @@ use tokio::sync::mpsc;
 use crate::cloud_node::CloudNode;
 use crate::gateway::RouterState;
 
+mod keepalive;
 mod mesh;
 mod patch;
 mod sync;
@@ -53,6 +54,7 @@ mod sync;
 mod tests;
 mod watch;
 
+pub(in crate::gateway) use keepalive::keep_awake;
 pub(in crate::gateway) use mesh::{mesh_mail_handler, mesh_ws_handler};
 pub(in crate::gateway) use patch::workspace_patch_handler;
 pub(in crate::gateway) use sync::{
@@ -147,6 +149,12 @@ pub struct MeshNode {
     directory: RwLock<HashMap<AgentId, MeshPeer>>,
     uplink: Mutex<Option<mpsc::UnboundedSender<MeshFrame>>>,
     pending: Mutex<Vec<MeshFrame>>,
+    /// Mail for the hub, by id, until the hub acks it: a socket can close
+    /// with mail on its way (its hub quit or crashed), so each hub socket
+    /// is sent all of it, and the hub drops a copy it took already.
+    unacked: Mutex<BTreeMap<u64, MeshMail>>,
+    /// When a hub socket opened or closed last, or the node started.
+    hub_seen: Mutex<Instant>,
     next_id: AtomicU64,
     seen: MailBook,
     http: reqwest::Client,
@@ -167,6 +175,8 @@ impl MeshNode {
             directory: RwLock::new(HashMap::new()),
             uplink: Mutex::new(None),
             pending: Mutex::new(Vec::new()),
+            unacked: Mutex::new(BTreeMap::new()),
+            hub_seen: Mutex::new(Instant::now()),
             next_id: AtomicU64::new(aura_engine_cloud::mesh::first_mail_id()),
             seen: MailBook::new(),
             http: reqwest::Client::builder()
@@ -182,19 +192,62 @@ impl MeshNode {
             .unwrap_or_else(|| "unclaimed".to_string())
     }
 
-    /// Send `frame` to the hub, or keep it until the hub reconnects.
+    /// Send `frame` to the hub, or keep it until the hub reconnects. Mail
+    /// is kept until the hub acks it ([`Self::unacked_mail`]).
     pub fn to_hub(&self, frame: MeshFrame) {
+        if let MeshFrame::Mail(mail) = &frame {
+            let mut unacked = self.unacked.lock();
+            unacked.insert(mail.id, mail.clone());
+            while unacked.len() > MAX_PENDING {
+                unacked.pop_first();
+            }
+        }
         let sender = self.uplink.lock().clone();
         if let Some(sender) = sender {
             if sender.send(frame.clone()).is_ok() {
                 return;
             }
         }
+        if matches!(frame, MeshFrame::Mail(_)) {
+            return;
+        }
         let mut pending = self.pending.lock();
         if pending.len() >= MAX_PENDING {
             pending.remove(0);
         }
         pending.push(frame);
+    }
+
+    /// How long no hub socket has been open: zero while one is.
+    pub(super) fn hub_away(&self) -> Duration {
+        if self.uplink.lock().is_some() {
+            return Duration::ZERO;
+        }
+        self.hub_seen.lock().elapsed()
+    }
+
+    /// Note a hub socket opening or closing.
+    fn saw_hub(&self) {
+        *self.hub_seen.lock() = Instant::now();
+    }
+
+    /// The mail the hub has not acked, oldest first.
+    pub(super) fn unacked_mail(&self) -> Vec<MeshMail> {
+        self.unacked.lock().values().cloned().collect()
+    }
+
+    /// The hub took mail `id` that `from_node` sent, delivered or not.
+    pub(super) fn acked(&self, from_node: &str, id: u64, error: Option<&str>) {
+        if from_node != self.node_id() || self.unacked.lock().remove(&id).is_none() {
+            return;
+        }
+        if let Some(error) = error {
+            tracing::info!(
+                mail = id,
+                error,
+                "the hub could not deliver mail from this node"
+            );
+        }
     }
 
     fn mail_frame(&self, mail: &RemoteMail) -> MeshMail {

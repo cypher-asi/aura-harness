@@ -74,6 +74,7 @@ struct Claim {
     node_id: String,
     node_token: Zeroizing<String>,
     mesh_token: Zeroizing<String>,
+    public_url: Option<String>,
 }
 
 /// Cloud-node state shared by the router.
@@ -243,6 +244,16 @@ impl CloudNode {
             .map(|claim| claim.mesh_token.clone())
     }
 
+    /// The machine's public base URL, from a hub that sends it.
+    #[must_use]
+    pub fn public_url(&self) -> Option<String> {
+        self.claim
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .and_then(|claim| claim.public_url.clone())
+    }
+
     /// The project directory, when configured.
     #[must_use]
     pub fn workspace(&self) -> Option<&Path> {
@@ -285,6 +296,7 @@ impl CloudNode {
             node_id: claim.node_id,
             node_token: Zeroizing::new(claim.node_token),
             mesh_token: Zeroizing::new(claim.mesh_token),
+            public_url: claim.public_url,
         });
         tracing::info!(node = %node_id, sealed, "cloud node claimed");
         NodeClaimed {

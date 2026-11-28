@@ -355,3 +355,9 @@ pub(in crate::event_loop) async fn handle_setup(state: &mut LoopState<'_>) {
         .await;
     });
 }
+
+fn env_file() -> PathBuf {
+    aura_config::AuraHome::resolve()
+        .map_or_else(|_| PathBuf::from("aura_data"), |home| home.path)
+        .join(".env")
+}

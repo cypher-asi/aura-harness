@@ -1,8 +1,10 @@
 //! `/plan` in a channel's chat. A coordinator can't read the code or write
-//! a plan, so a new member of its channel plans instead: it starts in plan
-//! mode with its own chat on screen, gets the request there, and builds
-//! the plan from that chat once told to. The request is also kept as a
-//! plan post of the channel, for its HISTORY ([`post_plan_request`]).
+//! a plan, so a new member of its channel plans instead, with its own chat
+//! on screen. Its request is a task like any member's (see
+//! [`crate::event_loop::factory`]): it plans it in plan mode, then builds
+//! the plan and ships it to the merge queue on its own. Nobody has to say
+//! "implement". The request is also kept as a plan post of the channel,
+//! for its HISTORY ([`post_plan_request`]).
 
 use super::*;
 use crate::event_loop::agent_events::AgentUi;
@@ -10,7 +12,6 @@ use crate::event_loop::handlers::system_message;
 use crate::event_loop::steering::SteerSource;
 use crate::event_loop::{agents, deliver_with_images, modes};
 use aura_ui::events::ImageAttachment;
-use aura_ui::PermissionMode;
 
 /// The permanent agent a planner is an instance of: the default agent,
 /// which can build the plan it writes.
@@ -21,6 +22,10 @@ pub(crate) const PLANNER_DEFINITION: &str = "engineer";
 pub(crate) const PLANS_HERE: &str = "Plan mode holds only on this computer, so this planner \
      works here instead of on a cloud machine, and builds its plan here too.";
 
+/// What the chat of a planner started without a request says.
+pub(crate) const PLANNER_WAITS: &str = "Tell this planner what to plan. It writes the plan, \
+     then builds it and ships it to the merge queue without waiting for approval.";
+
 /// Whether `agent_id` is a channel's coordinator, which never plans
 /// itself.
 pub(crate) fn is_coordinator_agent(hub: &AgentHub, agent_id: AgentId) -> bool {
@@ -30,8 +35,9 @@ pub(crate) fn is_coordinator_agent(hub: &AgentHub, agent_id: AgentId) -> bool {
 }
 
 /// Plan `text` in a new member of the channel `coordinator` runs: add the
-/// member, put its chat on screen, switch it to plan mode and give it
-/// `text` with `images`. An empty `text` leaves it waiting in plan mode
+/// member, put its chat on screen, and give it `text` with `images` as
+/// its task, which plans first in plan mode, then is built and shipped
+/// without anyone asking. An empty `text` leaves it waiting in plan mode
 /// for the request. Plan mode holds only on this computer, so in a
 /// channel whose agents run in the cloud the planner stays here, and its
 /// chat says so.
@@ -64,9 +70,6 @@ pub(crate) async fn start_planner(
     let Some(kernel) = state.kernel_for(planner) else {
         return;
     };
-    if !modes::switch_mode(state, planner, &kernel, PermissionMode::Plan).await {
-        return;
-    }
     // A planner plans here, in plan mode, in any channel.
     lock(&state.hub.cloud_members).remove(&planner);
     if lock(&state.hub.cloud_starts).remove(&planner) {
@@ -74,8 +77,12 @@ pub(crate) async fn start_planner(
             .send(system_message(PLANS_HERE.to_string()))
             .await;
     }
-    if !text.trim().is_empty() {
+    state.hub.factory_flows.assign(planner);
+    if text.trim().is_empty() {
+        modes::enter_plan_mode(state, planner, &kernel, PLANNER_WAITS).await;
+    } else {
         // Kept for the channel's HISTORY, which the planner's chat is not.
+        // Its work switches it to plan mode as it starts.
         post_plan_request(state, coordinator, planner, &text).await;
         deliver_with_images(state, planner, SteerSource::User, text, images, false).await;
     }

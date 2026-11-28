@@ -8,7 +8,8 @@
 //! egress proxy puts the real token into requests to that host.
 //!
 //! [`PlanSync`] keeps the values fresh: it reads each owner's credential
-//! through [`PlanCredentials`] (refreshed well before expiry), and
+//! through [`PlanCredentials`] (refreshed once half its lifetime is over,
+//! so machines left working while no hub runs have hours of it), and
 //! rotates the secret only when the token changed. Rotation keeps the
 //! placeholder, so running machines use the new token on their next
 //! request.
@@ -60,8 +61,10 @@ pub const fn plan_host(kind: ProviderKind) -> Option<&'static str> {
 /// it over its credential vault; a web service over its users' store.
 #[async_trait]
 pub trait PlanCredentials: Send + Sync {
-    /// `owner`'s `kind` credential, refreshed if it expires within
-    /// `margin_secs`; `Ok(None)` when `owner` has not linked it.
+    /// `owner`'s `kind` credential, refreshed once half its lifetime is
+    /// over (a machine keeps its token while no hub runs) and always when
+    /// it expires within `margin_secs`; `Ok(None)` when `owner` has not
+    /// linked it.
     ///
     /// # Errors
     ///

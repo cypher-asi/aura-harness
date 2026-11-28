@@ -114,10 +114,10 @@ async fn plan_work(
 ) -> Option<Work> {
     // A new task of a channel member plans first, rather than building
     // or carrying on an old plan.
-    if matches!(work, Work::Prompt { .. })
-        && super::factory::hooks::plan_first(state, session).await
-    {
-        return Some(work);
+    if let Work::Prompt { prompt, .. } = &work {
+        if super::factory::hooks::plan_first(state, session, prompt).await {
+            return Some(work);
+        }
     }
     match work {
         Work::Prompt { prompt, shown }
@@ -186,8 +186,6 @@ async fn turn_task(
     let task = Task::Turn {
         prompt,
         planning: state.hub.mode_of(agent_id) == PermissionMode::Plan,
-        auto_build: state.hub.factory_flows.stage(agent_id)
-            == Some(super::factory::flow::Stage::Planning),
         agent_loop: Box::new(agent_loop),
         tools,
         steering: turn_steering,

@@ -29,6 +29,7 @@ pub fn directory(hub: &CloudHub) -> &Directory {
 /// Record `agent` (hex `hex`) as placed, as a finished placement does.
 pub fn insert_placement(hub: &CloudHub, hex: String, agent: PlacedAgent) {
     hub.placements.lock().agents.insert(hex, agent);
+    hub.save_placements();
 }
 
 /// Hand the machine's node the local record, as a placement does.
@@ -96,4 +97,9 @@ pub fn note_processes(hub: &CloudHub, hex: &str, rows: Vec<MeshProcess>) {
 /// Forget what `hex`'s machine reported, as a closed socket does.
 pub fn forget_processes(hub: &CloudHub, hex: &str) {
     hub.forget_processes(hex);
+}
+
+/// The placed agents whose machines a starting hub copies, hex.
+pub fn catch_up_due(hub: &CloudHub) -> Vec<String> {
+    hub.catch_up_due()
 }

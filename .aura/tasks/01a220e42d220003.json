@@ -1,0 +1,138 @@
+{
+  "id": "01a220e42d220003",
+  "title": "can leave in",
+  "state": "open",
+  "agent_id": "49991d2b19ee2a9bdfc3d614920a410240d6510d5002b60b924af7b80f351226",
+  "agent_name": "coordinator",
+  "items": [
+    {
+      "content": "Mouse scroll must not change selection in any panel; only keys do (FEN6)",
+      "state": "completed",
+      "assignee": "FEN6"
+    },
+    {
+      "content": "Merge #63 subagent titles into main (RUS198)",
+      "state": "completed"
+    },
+    {
+      "content": "Channel to-dos panel: show only active tasks with agent info; completed ones in collapsible task history (RUS197)",
+      "state": "completed",
+      "assignee": "RUS197"
+    },
+    {
+      "content": "Empty channel: ASCII-art channel name plus coordinator welcome message (new agent)",
+      "state": "completed",
+      "assignee": "RUS198"
+    },
+    {
+      "content": "Channel History tab (RUS201 never started; needs a cloud-backed agent)",
+      "state": "completed",
+      "assignee": "RUS197"
+    },
+    {
+      "content": "Root-cause and fix: members created without a cloud machine never start; duplicate sessions; lost messages; red error state. Needs a cloud-backed agent (RUS202 never started)",
+      "state": "completed",
+      "assignee": "RUS198"
+    },
+    {
+      "content": "Older cloud machines: redeploy/update, hub checks tools before ship prompt, hub queues their branches (RUS197)",
+      "state": "completed",
+      "assignee": "RUS197"
+    },
+    {
+      "content": "Plan view header: created when, by whom, for which agent, assignee, machine (RUS199)",
+      "state": "completed",
+      "assignee": "RUS199"
+    },
+    {
+      "content": "Harness bugs: no local fallback when cloud hub is down (duplicate sessions); undeliverable agent messages fail loudly (RUS198)",
+      "state": "completed",
+      "assignee": "RUS198"
+    },
+    {
+      "content": "Wheel in pop-up pickers scrolls without moving the highlight (FEN6)",
+      "state": "completed",
+      "assignee": "FEN6"
+    },
+    {
+      "content": "Merge queue leftovers: target branch config, cloud machines pull target, worktree outside .git, Queue tab lists all, late-opened channel, stale plan hint, pub(crate), let _ (RUS199)",
+      "state": "completed",
+      "assignee": "RUS199"
+    },
+    {
+      "content": "Raw git push bypasses queue; per-member worktrees for local members (RUS197, after ship gap)",
+      "state": "completed",
+      "assignee": "RUS197"
+    },
+    {
+      "content": "History lists /plan text typed in a channel (RUS200, after current)",
+      "state": "completed",
+      "assignee": "RUS200"
+    },
+    {
+      "content": "Diagnose why GitHub Actions runs no jobs (EXP71)",
+      "state": "completed",
+      "assignee": "EXP71"
+    },
+    {
+      "content": "Red errors in chat, stall notices, shared Stop-button red (RUS202 follow-up to #74)",
+      "state": "completed"
+    },
+    {
+      "content": "PR #74 review fixes (FEN6, taken from RUS202)",
+      "state": "completed",
+      "assignee": "FEN6"
+    },
+    {
+      "content": "Queue tab full history, late-open state, stale hint (RUS200, split from RUS199)",
+      "state": "cancelled"
+    },
+    {
+      "content": "Owed reports survive restart (RUS203)",
+      "state": "completed",
+      "assignee": "RUS203"
+    },
+    {
+      "content": "Fewer merge conflicts: changelog fragments, queue auto-resolves trivial conflicts, overlap warnings (RUS204)",
+      "state": "completed",
+      "assignee": "RUS204"
+    },
+    {
+      "content": "Incoming inbox message cuts off the coordinator's streaming reply in the channel chat (RUS202)",
+      "state": "completed",
+      "assignee": "RUS202"
+    },
+    {
+      "content": "Encrypt local database: merged as #93, user chose to keep it",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Channel members can list and message each other by code (RUS199)",
+      "state": "completed",
+      "assignee": "RUS199"
+    },
+    {
+      "content": "Restart resilience: running and cloud turns resume on reopen, reports never lost, end-to-end restart test (RUS203)",
+      "state": "completed",
+      "assignee": "RUS203"
+    },
+    {
+      "content": "Restart resilience: software-factory stage persists and resumes on reopen (RUS197)",
+      "state": "completed",
+      "assignee": "RUS197"
+    },
+    {
+      "content": "Fix failing overlap test on main from #84 (RUS204, queued)",
+      "state": "completed"
+    },
+    {
+      "content": "Main cleanup: cargo fmt pass, fix flaky os_processes test (RUS202)",
+      "state": "pending",
+      "assignee": "RUS202"
+    }
+  ],
+  "summary": "RUS203 added the last test, PR #97. It restarts the app while one agent is in the middle of a software-factory build and another is mid-turn on its own task. After the reopen, each one finishes exactly once and both reports reach me. The test fails if the double-run guard is removed, so the restart work and the factory work fit together correctly.",
+  "updated_ms": 1795849447467,
+  "created_ms": 1795848154402
+}

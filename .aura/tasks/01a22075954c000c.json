@@ -1,0 +1,56 @@
+{
+  "id": "01a22075954c000c",
+  "title": "yes fix",
+  "state": "open",
+  "agent_id": "49991d2b19ee2a9bdfc3d614920a410240d6510d5002b60b924af7b80f351226",
+  "agent_name": "coordinator",
+  "items": [
+    {
+      "content": "Mouse scroll must not change selection in any panel; only keys do (FEN6)",
+      "state": "completed",
+      "assignee": "FEN6"
+    },
+    {
+      "content": "Merge #63 subagent titles into main (RUS198)",
+      "state": "completed"
+    },
+    {
+      "content": "Channel to-dos panel: show only active tasks with agent info; completed ones in collapsible task history (RUS197)",
+      "state": "completed",
+      "assignee": "RUS197"
+    },
+    {
+      "content": "Empty channel: ASCII-art channel name plus coordinator welcome message (new agent)",
+      "state": "completed",
+      "assignee": "RUS198"
+    },
+    {
+      "content": "Channel History tab (RUS201 never started; needs a cloud-backed agent)",
+      "state": "completed",
+      "assignee": "RUS197"
+    },
+    {
+      "content": "Root-cause and fix: members created without a cloud machine never start; duplicate sessions; lost messages; red error state. Needs a cloud-backed agent (RUS202 never started)",
+      "state": "completed",
+      "assignee": "RUS198"
+    },
+    {
+      "content": "Older cloud machines: redeploy/update, hub checks tools before ship prompt, hub queues their branches (RUS197)",
+      "state": "pending",
+      "assignee": "RUS197"
+    },
+    {
+      "content": "Plan view header: created when, by whom, for which agent, assignee, machine (RUS199)",
+      "state": "completed",
+      "assignee": "RUS199"
+    },
+    {
+      "content": "Harness bugs: no local fallback when cloud hub is down (duplicate sessions); undeliverable agent messages fail loudly (RUS198)",
+      "state": "pending",
+      "assignee": "RUS198"
+    }
+  ],
+  "summary": "I split the work across two agents.",
+  "updated_ms": 1795840931368,
+  "created_ms": 1795840906572
+}

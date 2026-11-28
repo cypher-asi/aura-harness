@@ -71,6 +71,11 @@ pub struct RunRecorder {
     records_in_flight: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     sinks: Sinks,
     dropped: AtomicU64,
+    /// Held while the scorecard and the log are written.
+    writing: Mutex<()>,
+    /// End time noted by [`Self::finish_later`] for the next write; 0
+    /// when none is due.
+    due_ms: AtomicU64,
 }
 
 impl std::fmt::Debug for RunRecorder {
@@ -129,6 +134,8 @@ impl RunRecorder {
             records_in_flight: Mutex::new(None),
             sinks,
             dropped: AtomicU64::new(0),
+            writing: Mutex::new(()),
+            due_ms: AtomicU64::new(0),
         })))
     }
 
@@ -395,8 +402,36 @@ impl RunRecorder {
 
     /// Flush, stamp the end time, and write the scorecard and the log.
     pub fn finish(&self) -> Option<RunScorecard> {
+        let _writing = lock(&self.writing);
+        self.due_ms.store(0, Ordering::Release);
+        self.write_up(now_ms())
+    }
+
+    /// Note that the run may end here, for [`Self::finish_due`] to do
+    /// what [`Self::finish`] does off the caller's thread: the log is
+    /// rebuilt from the whole run and the runs it spawned, which takes
+    /// seconds for a long one. Returns whether that call is still to be
+    /// made; not while an earlier one waits to start, as it covers this
+    /// one too.
+    #[must_use]
+    pub fn finish_later(&self) -> bool {
+        self.due_ms.swap(now_ms(), Ordering::AcqRel) == 0
+    }
+
+    /// What [`Self::finish`] does, stamped with the end time the latest
+    /// [`Self::finish_later`] noted, when one was noted since the last
+    /// write.
+    pub fn finish_due(&self) {
+        let _writing = lock(&self.writing);
+        let ended_ms = self.due_ms.swap(0, Ordering::AcqRel);
+        if ended_ms != 0 {
+            self.write_up(ended_ms);
+        }
+    }
+
+    fn write_up(&self, ended_ms: u64) -> Option<RunScorecard> {
         self.flush();
-        self.update_meta(|m| m.ended_at_ms = Some(now_ms()));
+        self.update_meta(|m| m.ended_at_ms = Some(ended_ms));
         let trace = RunTrace::load(&self.bundle).ok();
         let card = trace.as_ref().map(RunTrace::scorecard);
         if let Some(trace) = &trace {

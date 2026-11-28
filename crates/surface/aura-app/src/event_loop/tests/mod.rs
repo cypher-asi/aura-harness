@@ -38,6 +38,7 @@ mod compare_runs;
 mod delegation;
 mod escalation;
 mod factory_restart;
+mod factory_restart_together;
 mod fixture;
 mod flow;
 mod gate_learning;
@@ -60,6 +61,7 @@ mod stall_fixes;
 mod stalls;
 mod subtasks;
 pub(in crate::event_loop) mod support;
+mod typed_tasks;
 mod withdrawn_work;
 
 use fixture::{

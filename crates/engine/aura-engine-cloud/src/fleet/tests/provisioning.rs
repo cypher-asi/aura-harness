@@ -24,6 +24,15 @@ async fn provisioning_labels_claims_and_records() {
         .iter()
         .any(|c| c == "SetBotProtection(aura-re36-aa, false)"));
     assert_eq!(
+        fake.calls_matching("SetAutoSuspend("),
+        ["SetAutoSuspend(aura-re36-aa, 0)"],
+        "set once, when configured, not again on its claim"
+    );
+    assert_eq!(
+        fake.calls_matching("SetIdleIgnoreOutbound("),
+        ["SetIdleIgnoreOutbound(aura-re36-aa, false)"]
+    );
+    assert_eq!(
         ledger.events("0://cloud/vm/terminal/aa"),
         vec![VmEvent::Created, VmEvent::Claimed]
     );

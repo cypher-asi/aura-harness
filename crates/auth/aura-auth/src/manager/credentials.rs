@@ -3,12 +3,16 @@
 use super::{AuthManager, REFRESH_MARGIN_SECS};
 use async_trait::async_trait;
 use aura_core_auth::{
-    AuthError as ProviderError, CredentialResolver, InferenceCredential, LinkStatus, LinkedAccount,
-    OAuthTokens, Owner, ProviderKind, SubscriptionProvider,
+    AuthError as ProviderError, CredentialResolver, InferenceCredential, LinkGrant, LinkStatus,
+    LinkedAccount, OAuthTokens, Owner, ProviderKind, SubscriptionProvider,
 };
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tracing::warn;
+
+/// How long after an early refresh failed the next early one waits.
+const EARLY_RETRY: Duration = Duration::from_secs(30 * 60);
 
 impl AuthManager {
     pub(super) fn refresh_lock(&self, link_id: &str) -> Arc<tokio::sync::Mutex<()>> {
@@ -60,6 +64,7 @@ impl AuthManager {
             id_token: None,
             scope: String::new(),
             expires_at: Utc::now(),
+            issued_at: None,
         };
         Some(adapter.credential(&tokens))
     }
@@ -94,30 +99,96 @@ impl AuthManager {
         provider: ProviderKind,
         margin_secs: i64,
     ) -> Result<InferenceCredential, ProviderError> {
+        self.credential_when(owner, provider, margin_secs, false)
+            .await
+    }
+
+    /// [`Self::inference_credential_for`], also refreshed once half its
+    /// token's lifetime is over: for tokens a cloud machine keeps using
+    /// while no hub is up to refresh them. An early refresh that fails
+    /// keeps the current token, and the next early one waits half an
+    /// hour.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::inference_credential_for`].
+    pub async fn inference_credential_ahead(
+        &self,
+        owner: &Owner,
+        provider: ProviderKind,
+        margin_secs: i64,
+    ) -> Result<InferenceCredential, ProviderError> {
+        self.credential_when(owner, provider, margin_secs, true)
+            .await
+    }
+
+    async fn credential_when(
+        &self,
+        owner: &Owner,
+        provider: ProviderKind,
+        margin_secs: i64,
+        early: bool,
+    ) -> Result<InferenceCredential, ProviderError> {
         let adapter = self.subscription(provider)?;
-        let owner = owner.clone();
         let link = self
             .vault
-            .link(&owner, provider)
+            .link(owner, provider)
             .ok_or(ProviderError::NotLinked(provider))?;
         let lock = self.refresh_lock(&link.id);
         let _guard = lock.lock().await;
 
         // Re-read under the lock: another task may have just refreshed.
-        let link = self.usable_link(&owner, provider)?;
+        let link = self.usable_link(owner, provider)?;
         let mut tokens = self.stored_tokens(&link)?;
         let now = Utc::now();
-        if tokens.expires_within(now, margin_secs) {
+        let early = early && self.may_refresh_early(&link.id);
+        let due = |tokens: &OAuthTokens| {
+            tokens.expires_within(now, margin_secs) || (early && tokens.half_used(now))
+        };
+        if due(&tokens) {
             // Another process may have refreshed them since they were
             // kept, spending the refresh token held here.
             self.vault.forget_tokens(&link);
             tokens = self.stored_tokens(&link)?;
         }
-        if !tokens.expires_within(now, margin_secs) {
+        if !due(&tokens) {
             return Ok(adapter.credential(&tokens));
         }
-        self.refresh_credential(adapter.as_ref(), link, &tokens, now)
-            .await
+        if tokens.expires_within(now, margin_secs) {
+            return self
+                .refresh_credential(adapter.as_ref(), link, &tokens, now)
+                .await;
+        }
+        self.refresh_early(adapter.as_ref(), link, &tokens).await
+    }
+
+    fn may_refresh_early(&self, link_id: &str) -> bool {
+        self.early_failed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(link_id)
+            .is_none_or(|at| at.elapsed() >= EARLY_RETRY)
+    }
+
+    /// Refresh `link`'s `tokens` before they need it. Any failure keeps
+    /// them: they work for a while yet.
+    async fn refresh_early(
+        &self,
+        adapter: &dyn SubscriptionProvider,
+        link: LinkedAccount,
+        tokens: &OAuthTokens,
+    ) -> Result<InferenceCredential, ProviderError> {
+        match adapter.refresh(&link, tokens).await {
+            Ok(grant) => self.keep_grant(adapter, link, &grant),
+            Err(e) => {
+                warn!(provider = %link.provider, error = %e, "Early refresh failed; keeping the current token");
+                self.early_failed
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(link.id, Instant::now());
+                Ok(adapter.credential(tokens))
+            }
+        }
     }
 
     /// `owner`'s link to `provider`, unless it needs a new sign-in or its
@@ -155,22 +226,7 @@ impl AuthManager {
     ) -> Result<InferenceCredential, ProviderError> {
         let provider = link.provider;
         match adapter.refresh(&link, tokens).await {
-            Ok(grant) => {
-                // Persist the rotated refresh token before anything can use it.
-                self.vault
-                    .save_tokens(&link, &grant.tokens)
-                    .map_err(ProviderError::from)?;
-                link.expires_at = grant.tokens.expires_at;
-                link.plan_enabled = grant.plan_enabled;
-                self.vault.update_link(&link).map_err(ProviderError::from)?;
-                if !grant.plan_enabled {
-                    return Err(ProviderError::ReauthRequired(format!(
-                        "{} plan usage is no longer enabled",
-                        provider.label()
-                    )));
-                }
-                Ok(adapter.credential(&grant.tokens))
-            }
+            Ok(grant) => self.keep_grant(adapter, link, &grant),
             Err(ProviderError::ReauthRequired(reason)) => {
                 link.status = LinkStatus::ReauthRequired {
                     reason: reason.clone(),
@@ -185,6 +241,29 @@ impl AuthManager {
             }
             Err(e) => Err(e),
         }
+    }
+
+    /// Keep a refresh's `grant` for `link` and return its credential.
+    fn keep_grant(
+        &self,
+        adapter: &dyn SubscriptionProvider,
+        mut link: LinkedAccount,
+        grant: &LinkGrant,
+    ) -> Result<InferenceCredential, ProviderError> {
+        // Persist the rotated refresh token before anything can use it.
+        self.vault
+            .save_tokens(&link, &grant.tokens)
+            .map_err(ProviderError::from)?;
+        link.expires_at = grant.tokens.expires_at;
+        link.plan_enabled = grant.plan_enabled;
+        self.vault.update_link(&link).map_err(ProviderError::from)?;
+        if !grant.plan_enabled {
+            return Err(ProviderError::ReauthRequired(format!(
+                "{} plan usage is no longer enabled",
+                link.provider.label()
+            )));
+        }
+        Ok(adapter.credential(&grant.tokens))
     }
 }
 

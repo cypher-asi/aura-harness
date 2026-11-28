@@ -164,6 +164,38 @@ impl VmProvider for BoxdProvider {
         .map(|_| ())
     }
 
+    async fn set_auto_suspend(&self, machine: &str, secs: u32) -> CloudResult<()> {
+        let request = proto::SetAutoSuspendTimeoutRequest {
+            vm_id: machine.to_string(),
+            timeout_secs: secs,
+        };
+        self.unary(
+            "SetAutoSuspendTimeout",
+            &self.endpoint_of(machine),
+            request,
+            CALL_TIMEOUT,
+            |mut c, r| async move { c.set_auto_suspend_timeout(r).await },
+        )
+        .await
+        .map(|_| ())
+    }
+
+    async fn set_idle_ignore_outbound(&self, machine: &str, enabled: bool) -> CloudResult<()> {
+        let request = proto::SetIdleIgnoreOutboundRequest {
+            vm_id: machine.to_string(),
+            enabled,
+        };
+        self.unary(
+            "SetIdleIgnoreOutbound",
+            &self.endpoint_of(machine),
+            request,
+            CALL_TIMEOUT,
+            |mut c, r| async move { c.set_idle_ignore_outbound(r).await },
+        )
+        .await
+        .map(|_| ())
+    }
+
     async fn set_bot_protection(&self, machine: &str, enabled: bool) -> CloudResult<()> {
         let request = proto::SetBotProtectionRequest {
             vm_id: machine.to_string(),

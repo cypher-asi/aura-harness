@@ -117,6 +117,12 @@ mod forward_tests {
         })
         .await
         .unwrap();
+        tx.send(RemoteEvent::ToolOutput {
+            id: "t1".into(),
+            chunk: "building\n".into(),
+        })
+        .await
+        .unwrap();
         tx.send(RemoteEvent::ToolResult {
             id: "t1".into(),
             result: "ok".into(),
@@ -140,6 +146,11 @@ mod forward_tests {
         assert!(sent
             .iter()
             .any(|command| matches!(command, UiCommand::FinishStreaming)));
+        assert!(sent.iter().any(|command| matches!(
+            command,
+            UiCommand::ToolOutput { id, chunk }
+                if id == "t1" && chunk == "building\n"
+        )));
         assert!(sent
             .iter()
             .any(|command| matches!(command, UiCommand::CompleteTool { success: true, .. })));

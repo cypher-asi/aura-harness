@@ -126,7 +126,7 @@ impl VmFleet {
         let machine = self.create_machine(&spec, &request.origin, boot).await?;
         self.created_row(&request.origin, &machine, &ledger);
         self.keep_claiming(&request, &machine, &ledger);
-        self.configure(&machine, boot).await?;
+        self.configure(&request.agent, &machine, boot).await?;
         if let Err(err) = self
             .claim_reported(
                 &request.agent,
@@ -314,20 +314,56 @@ impl VmFleet {
                 node_tools: Vec::new(),
                 usage: None,
                 seen_ms: now_ms(),
+                idle_set: false,
             },
         );
     }
 
-    /// Set a new machine up as the [`BootStage::Configure`] stage: bot
-    /// protection off and boxd's hibernation backstop on, each shown and
-    /// never fatal.
-    async fn configure(&self, machine: &MachineInfo, boot: &BootReporter) -> CloudResult<()> {
+    /// Set `agent`'s new machine up as the [`BootStage::Configure`]
+    /// stage: bot protection off, boxd's hibernation backstop on and the
+    /// idle settings of [`Self::run_alone`], each shown and never fatal.
+    async fn configure(
+        &self,
+        agent: &str,
+        machine: &MachineInfo,
+        boot: &BootReporter,
+    ) -> CloudResult<()> {
         boot.run(BootStage::Configure, async {
             self.bot_protection_off(machine, boot).await;
             self.hibernation_backstop(machine, boot).await;
+            self.keep_working_alone(agent, machine, boot).await;
             Ok::<_, CloudError>(())
         })
         .await
+    }
+
+    async fn keep_working_alone(&self, agent: &str, machine: &MachineInfo, boot: &BootReporter) {
+        let set = boot
+            .wait(
+                BootStage::Configure,
+                "boxd is setting it to keep working while this computer is away",
+                Some(CALL_TIMEOUT),
+                self.run_alone(&machine.name),
+            )
+            .await;
+        match set {
+            Ok(()) => {
+                self.note_run_alone(agent);
+                boot.log(
+                    BootStage::Configure,
+                    false,
+                    "it keeps working while this computer is away",
+                );
+            }
+            Err(err) => {
+                tracing::warn!(machine = %machine.name, error = %err, "could not set the machine to keep working while the hub is away");
+                boot.log(
+                    BootStage::Configure,
+                    true,
+                    format!("it may pause while this computer is away: {err}"),
+                );
+            }
+        }
     }
 
     async fn bot_protection_off(&self, machine: &MachineInfo, boot: &BootReporter) {

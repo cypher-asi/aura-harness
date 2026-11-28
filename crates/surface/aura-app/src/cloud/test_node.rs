@@ -33,7 +33,13 @@ impl TestNode {
     /// An unclaimed cloud node over a store in `dir`, its model always
     /// answering `reply`.
     pub(crate) async fn serve(dir: &Path, reply: &str) -> Self {
-        Self::serve_with(dir, Arc::new(MockProvider::simple_response(reply))).await
+        Self::serve_slow(dir, reply, 0).await
+    }
+
+    /// [`Self::serve`], its model taking `latency_ms` over each answer.
+    pub(crate) async fn serve_slow(dir: &Path, reply: &str, latency_ms: u64) -> Self {
+        let model = MockProvider::simple_response(reply).with_latency(latency_ms);
+        Self::serve_with(dir, Arc::new(model)).await
     }
 
     /// An unclaimed cloud node over a store in `dir`, its model being
@@ -98,6 +104,7 @@ impl TestNode {
                 owner: None,
                 plans: Vec::new(),
                 git: None,
+                public_url: None,
             },
             0,
         )

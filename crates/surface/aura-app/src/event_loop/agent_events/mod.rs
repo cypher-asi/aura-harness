@@ -7,7 +7,7 @@
 //! [`AgentUi`] that feeds the chat of the agent whose turn it is.
 
 use super::hud::{call_session_usage, call_stats, todo_views};
-use super::plan_mode::{plan_view, plan_views};
+use super::plan_mode::{plan_view, plan_views, Build};
 use super::record_ui::RecordPanelAgent;
 use crate::session_checkpoint::SessionUsage;
 use async_trait::async_trait;
@@ -144,9 +144,9 @@ pub(crate) struct TurnPlan {
     /// Workspace-relative plan the agent is building, whose todos follow
     /// its todo list
     pub building: Option<String>,
-    /// Whether the software factory builds a plan the turn writes on its
-    /// own, so the plan-ready note asks nobody to say "implement"
-    pub auto_build: bool,
+    /// How a plan the turn writes gets built, which its plan-ready note
+    /// says
+    pub build: Build,
 }
 
 /// Tokens and estimated cost of one model call, for the reply footer:

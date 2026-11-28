@@ -1,0 +1,17 @@
+{
+  "id": "01a2200324230000",
+  "title": "title for subagents doesn't seem that desriptive, see here [image 1] in software factory agent",
+  "state": "completed",
+  "agent_id": "49991d2b19ee2a9bdfc3d614920a410240d6510d5002b60b924af7b80f351226",
+  "agent_name": "coordinator",
+  "items": [
+    {
+      "content": "Make subagent titles descriptive instead of the first words of their brief (RUS198)",
+      "state": "completed",
+      "assignee": "RUS198"
+    }
+  ],
+  "summary": "Subagent titles are fixed in PR #63 (https://github.com/cypher-asi/aura-harness/pull/63), which isn't merged yet. New subagents get a title saying what they're working on, like \"EXL1: Merge queue store tests\". If the agent gives no title, it's taken from the first real sentence of the instructions. Existing rows keep their old titles. Three tests fail. They're in sandbox code this PR didn't touch…",
+  "updated_ms": 1795835005005,
+  "created_ms": 1795833406499
+}

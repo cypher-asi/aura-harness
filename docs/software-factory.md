@@ -8,7 +8,7 @@ major inconsistencies.
 
 ```mermaid
 flowchart LR
-    A[assignment] --> P[plan mode: create_plan]
+    A[assignment or typed task] --> P[plan mode: create_plan]
     P -- plan written --> B[build the plan]
     P -- asked a question --> P
     B --> S[git_ship: commit, pull main, push]
@@ -30,22 +30,48 @@ them).
   moves to `Planning` when the assignment's work starts, not when the
   message arrives, so a turn still running for an earlier task is not
   taken for the new one.
+- **`/plan`'s planner** enters the flow at `Assigned` as it joins the
+  channel (`channels::start_planner`). The request it is given, with
+  `/plan` or typed into its chat after a bare `/plan`, is its task.
+- A **task typed** straight into a member's chat enters the flow too, as
+  its turn starts (`hooks::typed_task`). These messages are not tasks and
+  run as before:
+  - "implement" or `/build`, which build the plan;
+  - anything sent to a member the user put in plan mode, which waits for
+    "implement" or `/build`;
+  - an @mention from the coordinator's chat, which is conversation;
+  - a message to a local member with a plan still open, which carries on
+    with that plan (`continue_open_plan`).
 - A turn at `Planning` runs in **plan mode**. For a local agent the kernel
   switches its policy, as `/plan` does. For a cloud agent the hub sets the
-  mode, so the machine gets the plan-mode prompt.
+  mode, so the machine gets the plan-mode prompt. Either way the chat
+  shows plan mode, and says "Planning first: …" (`hooks::PLANNING_FIRST`)
+  instead of `/plan`'s note about "implement". The channel's MEMBERS
+  shows `(P)` after the member's name, as PROJECTS does.
+- Nobody is asked to start the build. While the agent is at `Planning`,
+  its `<plan_mode>` section is the one for a plan built right after the
+  turn (`plan_mode::Build::RightAway`, from `AgentHub::plan_build`). It
+  tells the model to ask only when a wrong guess is harmful, and to end
+  its turn once the plan is written instead of telling the user to say
+  "implement". A local agent's "Plan ready" note says the plan is built
+  next, without waiting for approval.
 - When the turn ends having run `create_plan` itself, the hub queues the
   build at the front of the agent's work. The plan is read from the turn's
   own tool calls (`factory::turn`), so an older plan is never taken for
   the new one, and rewriting the same plan file counts:
-  - a local agent gets `Work::Build`, the same path as `/build`;
-  - a cloud agent gets the build-plan prompt after leaving plan mode.
+  - a local agent gets `Work::Build`, the same path as `/build`, and its
+    chat says "Building <plan>";
+  - a cloud agent gets the build-plan prompt after leaving plan mode, and
+    its chat says "Plan written: building it now."
+    (`hooks::BUILDING_PLAN`).
 
   The inbox answer to the coordinator waits for the build turn, so the
   report says what was built rather than "plan written".
 - When the turn ends **without** a plan, the agent asked a question. The
   question goes back as its answer, and the agent stays at `Planning`. The
   reply comes back to a turn that still plans, and once that turn writes a
-  plan, the build starts.
+  plan, the build starts. Switching the agent out of plan mode first takes
+  the task over: it leaves the flow, and the next turn runs as asked.
 - A turn that fails or is stopped leaves the flow. Its work is given up,
   as before. One that was planning also takes the agent out of plan mode,
   where it couldn't edit or ship.

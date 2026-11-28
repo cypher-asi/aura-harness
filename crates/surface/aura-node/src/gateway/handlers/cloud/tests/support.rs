@@ -68,6 +68,7 @@ pub(super) fn claim(state: &RouterState) {
             owner: None,
             plans: Vec::new(),
             git: None,
+            public_url: None,
         },
         8080,
     );

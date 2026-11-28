@@ -132,6 +132,7 @@ fn tokens(refresh: &str) -> OAuthTokens {
         id_token: None,
         scope: SCOPE.into(),
         expires_at: Utc::now(),
+        issued_at: None,
     }
 }
 

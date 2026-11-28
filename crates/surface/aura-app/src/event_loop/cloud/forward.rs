@@ -1,5 +1,7 @@
 //! A cloud turn's stream in its agent's chat, and the chat title the turn
-//! gives it.
+//! gives it. A stream that shows only how the turn ends (one attached to
+//! again, or a turn followed after Aura restarted) has the chat rebuilt
+//! from the record as the hub copies it.
 
 use super::*;
 
@@ -48,6 +50,24 @@ impl Titles {
     }
 }
 
+/// Shows a cloud chat as its copied record has it now.
+pub(super) type ChatReload = Box<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>;
+
+/// Shows `agent`'s chat in `ui` as its record has it, when the record
+/// grew past the chat last shown.
+pub(super) fn chat_reload(agents: Arc<AgentHub>, ui: AgentUi, agent: AgentId) -> ChatReload {
+    Box::new(move || {
+        let agents = Arc::clone(&agents);
+        let ui = ui.clone();
+        Box::pin(async move {
+            let read = move || crate::event_loop::agents::newer_chat(&agents, agent);
+            if let Some(chat) = tokio::task::spawn_blocking(read).await.ok().flatten() {
+                ui.send(UiCommand::LoadConversation(chat)).await;
+            }
+        })
+    })
+}
+
 /// What a cloud turn shows outside its chat's stream.
 #[derive(Default)]
 pub(super) struct TurnExtras {
@@ -55,12 +75,28 @@ pub(super) struct TurnExtras {
     pub(super) titles: Option<Titles>,
     /// The context window of the model the turn asked for.
     pub(super) context_limit: Option<u64>,
+    /// Shows the chat from the record, once the turn's stream shows only
+    /// how it ends ([`RemoteEvent::Copied`]).
+    pub(super) reload: Option<ChatReload>,
+    /// Whether the chat shows the turn from its record: a turn attached
+    /// to again, or followed after Aura restarted, streams no reply.
+    pub(super) from_record: bool,
     /// Where the turn notes, for the agent's rows and its peers, that it
     /// waits for the one already under way on its machine
     pub(super) waiting: Option<WaitingMark>,
     /// Woken once the machine took the turn, so the loop saves the run
     /// it runs in, to follow it again after a restart
     pub(super) run_started: Option<Arc<tokio::sync::Notify>>,
+}
+
+impl TurnExtras {
+    /// Show the chat from the record from now on, as it has it now.
+    pub(super) async fn show_record(&mut self) {
+        self.from_record = true;
+        if let Some(reload) = &self.reload {
+            reload().await;
+        }
+    }
 }
 
 /// The note that a cloud turn of `agent` waits for the one already under
@@ -169,6 +205,10 @@ pub(super) async fn forward(
         }
         chat.end_wake(&event).await;
         chat.close_open(&event).await;
+        if matches!(event, RemoteEvent::Copied) {
+            extras.show_record().await;
+            continue;
+        }
         if let Some(ended) = chat.show(event, extras.context_limit).await {
             end = ended;
             break;
@@ -241,14 +281,19 @@ impl TurnChat<'_> {
         let ui = self.ui;
         match event {
             RemoteEvent::Status(status) => ui.send(UiCommand::SetStatus(status)).await,
-            RemoteEvent::Boot(_) | RemoteEvent::Title(_) => {}
+            RemoteEvent::Boot(_) | RemoteEvent::Title(_) | RemoteEvent::Copied => {}
             // `close_open` ended the reply the call wrote.
             RemoteEvent::ModelCallEnd => {}
             RemoteEvent::Text(text) => self.append_text(text).await,
             RemoteEvent::Thinking(text) => self.append_thinking(text).await,
             event @ (RemoteEvent::ToolStart { .. }
             | RemoteEvent::ToolInput { .. }
+            | RemoteEvent::ToolOutput { .. }
             | RemoteEvent::ToolResult { .. }) => show_tool(ui, event).await,
+            // One that ended while no app watched comes without usage.
+            RemoteEvent::Done(usage) if *usage == aura_core_protocol::SessionUsage::default() => {
+                return Some(TurnEnd::Done);
+            }
             RemoteEvent::Done(usage) => {
                 let limit = context_limit.or_else(|| {
                     (!usage.model.is_empty())
@@ -331,6 +376,9 @@ async fn show_tool(ui: &AgentUi, event: RemoteEvent) {
         }
         RemoteEvent::ToolInput { id, input } => {
             ui.send(UiCommand::UpdateToolArgs { id, args: input }).await;
+        }
+        RemoteEvent::ToolOutput { id, chunk } => {
+            ui.send(UiCommand::ToolOutput { id, chunk }).await;
         }
         RemoteEvent::ToolResult {
             id,

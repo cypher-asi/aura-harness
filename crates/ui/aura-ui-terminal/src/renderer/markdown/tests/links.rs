@@ -87,8 +87,13 @@ fn snake_case_in_a_url_is_not_emphasis() {
 }
 
 fn hits(text: &str, width: usize) -> (Vec<String>, Vec<LinkHit>) {
-    let (rendered, _) =
-        super::super::render_markdown_linked(text, width, (base(), &theme()), Measure::GRID);
+    let (rendered, _) = super::super::render_markdown_linked(
+        text,
+        width,
+        (base(), &theme()),
+        Measure::GRID,
+        Breaks::Lines,
+    );
     (texts(&rendered.lines), rendered.links)
 }
 

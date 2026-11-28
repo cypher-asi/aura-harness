@@ -48,6 +48,10 @@ pub enum OutboundMessage {
     ToolCallSnapshot(ToolCallSnapshot),
     /// Result of a tool execution.
     ToolResult(ToolResultMsg),
+    /// A piece of a running tool's output. Strictly additive: a client
+    /// that does not know the variant skips the frame, and the call's
+    /// [`ToolResult`](Self::ToolResult) still carries the full output.
+    ToolOutput(ToolOutputMsg),
     /// Ask the client to approve or deny a live tool call.
     ToolApprovalPrompt(ToolApprovalPrompt),
     /// The kernel recorded its policy decision for a tool call. Sent
@@ -193,6 +197,16 @@ pub struct ToolCallSnapshot {
     pub id: String,
     pub name: String,
     pub input: serde_json::Value,
+}
+
+/// Payload for `tool_output`: the next piece of a running tool's
+/// output, stdout and stderr as they arrived. `id` is the tool use id
+/// from [`ToolUseStart`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct ToolOutputMsg {
+    pub id: String,
+    pub chunk: String,
 }
 
 /// Payload for `tool_result`.
