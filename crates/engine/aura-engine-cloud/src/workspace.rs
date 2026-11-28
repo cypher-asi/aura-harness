@@ -305,6 +305,32 @@ pub fn bundle_branch(name: &str, fetched: Option<&str>) -> CloudResult<String> {
     ))
 }
 
+/// Prefix of each line [`list_branches`] prints.
+pub const BRANCH_LINE: &str = "aura-branch: ";
+
+/// Shell that lists the machine's `aura/*` branches, one
+/// [`BRANCH_LINE`] each: the agent's pinned branch and the task branches
+/// `git_start_task` made beside it. The hub keeps those the pin allows.
+#[must_use]
+pub fn list_branches() -> String {
+    format!(
+        "set -e; cd \"$AURA_WORKSPACE\"; \
+         git for-each-ref --format='{BRANCH_LINE}%(refname:short)' 'refs/heads/aura/'"
+    )
+}
+
+/// The branch names in [`list_branches`]'s output.
+#[must_use]
+pub fn parse_branches(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .filter_map(|line| line.strip_prefix(BRANCH_LINE))
+        .map(str::trim)
+        .filter(|name| is_branch_name(name))
+        .map(str::to_string)
+        .collect()
+}
+
 /// What [`bundle_branch`] found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Bundled {

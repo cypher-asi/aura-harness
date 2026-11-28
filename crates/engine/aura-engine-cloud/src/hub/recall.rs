@@ -10,7 +10,7 @@ use aura_core_types::{AgentId, Placement, PlacementPayload};
 use super::node_client::NodeClient;
 use super::store::record_placement;
 
-use super::{CloudHub, CommitsOutcome, PatchOutcome, PlacedAgent, PullOutcome};
+use super::{CloudHub, PatchOutcome, PlacedAgent, PullOutcome};
 
 impl CloudHub {
     /// Bring `agent`'s single writer back here: seal it on its node,
@@ -171,7 +171,7 @@ impl CloudHub {
         boot.fact("changes", patch.describe());
         let commits = self.fetch_commits(hex, placed).await;
         if let Some(report) = commits.describe() {
-            let kept = matches!(commits, CommitsOutcome::Kept { .. });
+            let kept = commits.kept_any();
             boot.log(BootStage::PullChanges, kept, report.clone());
             boot.fact("commits", report);
         }
