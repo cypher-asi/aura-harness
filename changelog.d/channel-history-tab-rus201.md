@@ -27,3 +27,14 @@
 - An idle session is now kept while its agent owes reports through its
   inbox or is in a factory flow, which read its messages: before, one
   let go of then could give up the wrong owed report.
+
+### Permanent agents are no longer parsed again on every turn
+
+##### Changed
+
+- Each turn re-read and parsed every permanent agent's file on the event
+  loop. Now a file is parsed again only when its size or change time
+  differs, so an edit on disk is still picked up at the next turn. With
+  200 agents the event loop is busy 19% of the time instead of 26%.
+- The load harness reports what RocksDB holds natively next to resident
+  memory, and can run on mimalloc (`--features load-mimalloc`).

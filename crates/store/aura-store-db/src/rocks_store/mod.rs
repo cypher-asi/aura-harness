@@ -56,11 +56,13 @@ use std::sync::{Arc, Mutex};
 mod append;
 #[cfg(any(test, feature = "test-support"))]
 mod fault;
+mod memory;
 mod open;
 mod read_store;
 
 #[cfg(any(test, feature = "test-support"))]
 pub use fault::FaultAt;
+pub use memory::NativeMemory;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use fault::{write_batch_with_fault, FaultWriteError};
 

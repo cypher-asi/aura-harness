@@ -104,6 +104,46 @@ caps on Rust collections. The largest live sites at the peak, from
 `a_long_session_grows_with_the_chats_kept_not_with_the_agents` run with
 the tests and fail if an idle agent off screen holds more than 64 KiB.
 
+### Where the app's resident memory goes
+
+The load harness now also prints what RocksDB holds natively, from its
+own properties (`RocksStore::native_memory`: block cache, memtables,
+index and filter readers), and `--features load-mimalloc` runs it on
+mimalloc, the allocator the `aura` binary ships with. At 200 members
+over 10 s, on mimalloc:
+
+| Part                                              | MiB |
+|---------------------------------------------------|----:|
+| Resident at the end                               | 380 |
+| Rust heap live (dhat, peak 24-28)                 | 23  |
+| RocksDB native: memtables 15, block cache 0, readers 0 | 15  |
+| Left: memory mimalloc keeps after it is freed, thread stacks, mapped code | ~340 |
+
+What is left is freed memory mimalloc has not yet given back. Its
+`purge_delay` option keeps freed pages committed for 1 s (v3's default),
+and the app frees fast: 815 MiB is allocated over the 10 s for 23 MiB
+live. Run with `MIMALLOC_PURGE_DELAY=0 MIMALLOC_ARENA_EAGER_COMMIT=0`,
+the same harness ends at 63, 78 and 161 MiB for 10, 50 and 200 members,
+against 116-129, 175-181 and 378-386 MiB with the defaults. The system
+allocator does the same (309 MiB at 200, 161 with `MALLOC_ARENA_MAX=2`).
+Setting the option in the binary takes one `unsafe` call to
+`mi_option_set`, which the workspace forbids without approval, so it is
+not set yet.
+
+The biggest sources of that churn, by bytes allocated over the span:
+
+| MiB | Site |
+|----:|------|
+| 290 | the agent registry encoding every agent on each change (`persist_with`, `AgentRecord`, hex ids): O(agents) per create, archive or join |
+| 70  | parsing every permanent agent's file at the start of every turn (`AgentDefinitions::reload`) |
+| 67  | RocksDB reads |
+| 42  | `AgentUi::for_agent` wrapping each command |
+
+The definitions are now parsed again only when a file changed (its size
+or time). That takes the event loop from 26% to 19% busy at 200 members;
+resident memory stays within noise (378-382 MiB), as it is the purge
+delay that holds it. The registry's re-encoding is left to its owner.
+
 ## Responsiveness
 
 How the app holds up with many agents at once, how to measure it, and

@@ -223,3 +223,26 @@ fn system_prompt_includes_rules() {
     assert!(prompt.contains("Your role: Does A."));
     assert!(prompt.contains("Rule one."));
 }
+
+#[test]
+fn a_reload_of_unchanged_files_keeps_what_it_read_and_an_edit_is_picked_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut defs = AgentDefinitions::load_or_seed(dir.path()).unwrap();
+    let defs_dir = dir.path().join(DEFINITIONS_DIR);
+    fs::write(defs_dir.join("broken.md"), "not a definition").unwrap();
+    assert_eq!(defs.reload().len(), 1);
+    assert_eq!(defs.reload().len(), 1, "unchanged: the same problem");
+    fs::write(defs_dir.join("zz-extra.md"), "---\nname: extra\n---\n").unwrap();
+    defs.reload();
+    assert!(defs.get("extra").is_some(), "a new file is read");
+    fs::write(
+        defs_dir.join("zz-extra.md"),
+        "---\nname: extra\ndescription: Edited, and longer\n---\n",
+    )
+    .unwrap();
+    defs.reload();
+    let extra = defs.get("extra").unwrap();
+    assert_eq!(extra.description, "Edited, and longer", "an edit is read");
+    fs::remove_file(defs_dir.join("broken.md")).unwrap();
+    assert!(defs.reload().is_empty(), "a removed file's problem goes");
+}
