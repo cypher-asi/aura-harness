@@ -53,6 +53,7 @@ fn machine_view(state: VmState) -> MachineView {
             }),
             created_ms: 0,
             boot_ms: 6,
+            last_connected_ms: 0,
         },
         state,
         busy: 0,

@@ -23,6 +23,12 @@
 //!   checkpoint, the trace runs and, before each sleep, a patch of the
 //!   machine's changes are copied here too; [`CloudHub::sync_status`]
 //!   says how current each copy is.
+//! - **A turn outlives the hub.** It is marked on its placement
+//!   ([`TurnMark`]) once its prompt is sent and unmarked only when its
+//!   end is seen, so a hub that quits or crashes leaves it running and
+//!   the next one follows it ([`CloudHub::follow_turn`]). At startup the
+//!   next hub also copies whatever its other machines did meanwhile,
+//!   waking only sleeping ones that may have changed.
 //! - **The boxd key never leaves the hub.** Machines get the env
 //!   allowlist of [`crate::machine_env`] and their tokens over
 //!   boxd's authenticated `Exec`.
@@ -36,6 +42,12 @@
 //!   `AURA_HOME/cloud/<agent>/` and reported, never dropped.
 //! - A machine deleted outside aura: Bring back applies the patch saved
 //!   at its last sleep; work done since that sleep is lost.
+//! - A followed turn whose run is gone (it ended and was reaped, or the
+//!   node restarted) is settled from the record: a reply after its head
+//!   is a finished turn, none a failed one.
+//! - Mail a node sent that no hub acked is sent again to the next hub;
+//!   one hub run drops repeats it already delivered, so mail delivered
+//!   just before a crash can arrive twice.
 //!
 //! ## Submodules
 //!
@@ -47,11 +59,14 @@
 //! - [`setup`]: `aura cloud setup`, which puts a boxd API key in
 //!   `AURA_HOME/.env`.
 
+mod catch_up;
+mod follow;
 mod lifecycle;
 mod links;
 mod machine_files;
 mod machine_work;
 mod machines;
+mod marks;
 mod mirror;
 pub mod node_client;
 mod outcomes;
@@ -71,6 +86,7 @@ pub mod store;
 pub mod test_support;
 mod turn;
 
+pub use self::marks::TurnMark;
 pub use self::outcomes::{CommitsOutcome, PatchOutcome, PullOutcome};
 pub use self::persist::SyncStatus;
 pub use self::reach::{MailDesk, Reach};
@@ -223,6 +239,13 @@ pub struct PlacedAgent {
     /// or a spawned agent's; their records are copied with its own.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<String>,
+    /// The turn its machine was asked for that no hub has seen end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<TurnMark>,
+    /// When a hub put its machine to sleep with everything on it copied
+    /// here, Unix milliseconds; `None` once it may have woken since.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slept_ms: Option<u64>,
 }
 
 impl PlacedAgent {

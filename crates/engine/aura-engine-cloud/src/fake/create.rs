@@ -156,6 +156,7 @@ impl State {
             source: Some(basis.source),
             created_ms: 1,
             boot_ms: 6,
+            last_connected_ms: 0,
         };
         self.machines.insert(info.name.clone(), info.clone());
         self.machine_secrets

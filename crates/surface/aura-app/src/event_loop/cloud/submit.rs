@@ -1,6 +1,6 @@
 //! Prompts, commands and `/new` for cloud agents.
 
-use super::forward::{forward, title_sink, Titles, TurnEnd, TurnExtras};
+use super::forward::{chat_reload, forward, title_sink, Titles, TurnEnd, TurnExtras};
 use super::*;
 use crate::cloud::hub::TurnAsk;
 use crate::event_loop::turns::Prompt;
@@ -117,6 +117,8 @@ async fn run_prompt(
     let extras = TurnExtras {
         titles,
         context_limit: model.as_deref().map(aura_engine::context_window_for_model),
+        reload: Some(chat_reload(Arc::clone(&state.hub), ui.clone(), agent)),
+        from_record: false,
     };
     crate::event_loop::factory::hooks::plan_first_in_cloud(state, agent, &prompt).await;
     state.hub.factory_flows.note_prompt(agent, &prompt.text);
@@ -140,10 +142,29 @@ async fn start_turn(
     agent: AgentId,
     ui: AgentUi,
     ask: TurnAsk,
-    mut extras: TurnExtras,
+    extras: TurnExtras,
 ) {
     // Stopped from the chat or its PROCESSES row alike.
     let cancel = CancellationToken::new();
+    let mut row = crate::event_loop::handlers::turn_summary(
+        agent,
+        &ask.prompt,
+        ask.model.as_deref().unwrap_or_default(),
+    );
+    row.model.clone_from(&ask.model);
+    note_turn(state, agent, row, &cancel).await;
+    let rx = hub.run_turn(agent, ask, cancel.clone());
+    watch_turn(state, agent, ui, rx, extras, cancel);
+}
+
+/// Count `agent` as working on a cloud turn that `cancel` stops, shown
+/// in PROCESSES as `row`.
+pub(super) async fn note_turn(
+    state: &LoopState<'_>,
+    agent: AgentId,
+    row: ProcessSummary,
+    cancel: &CancellationToken,
+) {
     state
         .cloud
         .shared
@@ -152,18 +173,27 @@ async fn start_turn(
         .insert(agent, cancel.clone());
     lock(&state.hub.cloud_turns).insert(agent);
     crate::event_loop::agents::send_agent_list(state).await;
-    let mut row = crate::event_loop::handlers::turn_summary(
-        agent,
-        &ask.prompt,
-        ask.model.as_deref().unwrap_or_default(),
-    );
-    row.model.clone_from(&ask.model);
     state.processes.start(row, Some(cancel.clone()));
-    let mut rx = hub.run_turn(agent, ask, cancel.clone());
+}
+
+/// Show `agent`'s cloud turn in `ui`'s chat as `rx` streams it, with
+/// `extras`, until the hub is done with it; then tell the loop how it
+/// went.
+pub(super) fn watch_turn(
+    state: &LoopState<'_>,
+    agent: AgentId,
+    ui: AgentUi,
+    mut rx: mpsc::Receiver<RemoteEvent>,
+    mut extras: TurnExtras,
+    cancel: CancellationToken,
+) {
     let shared = Arc::clone(&state.cloud.shared);
     let processes = Arc::clone(&state.processes);
     let sessions = state.hub.factory.checkpoints.clone();
     tokio::spawn(async move {
+        if extras.from_record {
+            extras.show_record().await;
+        }
         let end = forward(&ui, &mut rx, &mut extras, &cancel).await;
         let stopped = cancel.is_cancelled();
         processes.finish(
@@ -171,6 +201,9 @@ async fn start_turn(
             end.status(stopped),
         );
         let copied = copied_session(&ui, &mut rx, sessions, agent).await;
+        if extras.from_record {
+            extras.show_record().await;
+        }
         let failure = match end {
             _ if stopped => Some("it was stopped".to_string()),
             TurnEnd::Done => None,

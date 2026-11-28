@@ -153,6 +153,7 @@ async fn adopt_machine(
         source: None,
         created_ms: 0,
         boot_ms: 0,
+        last_connected_ms: 0,
     });
     hub.fleet
         .adopt(&agent.to_hex(), "0://scout", "p1", name, Vec::new(), None)
@@ -170,6 +171,8 @@ async fn adopt_machine(
         repo: None,
         fetched_tip: None,
         children: Vec::new(),
+        turn: None,
+        slept_ms: None,
     };
     hub.placements
         .lock()

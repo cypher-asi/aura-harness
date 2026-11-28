@@ -167,12 +167,14 @@ fn into_tokens(response: TokenResponse, require_refresh: bool) -> Result<OAuthTo
             "ChatGPT returned incomplete credentials".into(),
         ));
     }
+    let now = Utc::now();
     Ok(OAuthTokens {
         access_token: response.access_token,
         refresh_token: Some(response.refresh_token).filter(|t| !t.is_empty()),
         id_token: Some(response.id_token).filter(|t| !t.is_empty()),
         scope: response.scope,
-        expires_at: Utc::now() + Duration::seconds(response.expires_in),
+        expires_at: now + Duration::seconds(response.expires_in),
+        issued_at: Some(now),
     })
 }
 

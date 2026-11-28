@@ -46,18 +46,22 @@ struct FakeSub {
     loopback: bool,
     refreshes: AtomicUsize,
     expires_in: i64,
+    /// How long before sign-in its tokens were issued.
+    issued_ago: i64,
     refresh_outcome: Mutex<Option<ProviderError>>,
     tier: Mutex<Option<String>>,
 }
 
-fn grant(access: &str, expires_in: i64) -> LinkGrant {
+fn grant(access: &str, expires_in: i64, issued_ago: i64) -> LinkGrant {
+    let now = Utc::now();
     LinkGrant {
         tokens: OAuthTokens {
             access_token: access.into(),
             refresh_token: Some(format!("refresh-for-{access}")),
             id_token: None,
             scope: "user:inference".into(),
-            expires_at: Utc::now() + Duration::seconds(expires_in),
+            expires_at: now + Duration::seconds(expires_in),
+            issued_at: Some(now - Duration::seconds(issued_ago)),
         },
         subject: Some("subject-1".into()),
         label: Some("me@example.com".into()),
@@ -99,7 +103,7 @@ impl SubscriptionProvider for FakeSub {
         callback: &CallbackParams,
     ) -> Result<LinkGrant, ProviderError> {
         match callback.code.as_deref() {
-            Some("good") => Ok(grant("access-0", self.expires_in)),
+            Some("good") => Ok(grant("access-0", self.expires_in, self.issued_ago)),
             _ => Err(ProviderError::Rejected {
                 status: 400,
                 code: "bad".into(),
@@ -118,7 +122,7 @@ impl SubscriptionProvider for FakeSub {
         if let Some(e) = self.refresh_outcome.lock().unwrap().take() {
             return Err(e);
         }
-        Ok(grant(&format!("access-{n}"), 3600))
+        Ok(grant(&format!("access-{n}"), 3600, 0))
     }
 
     async fn plan_tier(&self, _tokens: &OAuthTokens) -> Option<String> {

@@ -11,7 +11,10 @@ use aura_core_types::time::now_ms;
 use aura_core_types::{VmEvent, VmPayload};
 use std::time::Instant;
 
-use super::{random_token, Entry, MachineView, VmFleet, VmState, CLAIM_COMMAND, CLAIM_TIMEOUT};
+use super::{
+    random_token, Entry, MachineView, VmFleet, VmState, AUTO_SUSPEND_SECS, CLAIM_COMMAND,
+    CLAIM_TIMEOUT,
+};
 
 /// Which nodes a claim takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,9 +88,11 @@ impl VmFleet {
             owner: (!target.owner.is_empty()).then(|| target.owner.clone()),
             plans: target.plans,
             git: target.git,
+            public_url: Some(target.machine.url()),
         };
         let claimed = self.send_claim(&target.machine, &claim).await?;
         self.mark_claimed(agent, node_token, claimed.protocol);
+        self.ensure_run_alone(agent, &target.machine.name).await;
         self.row(
             &target.ledger,
             &VmPayload {
@@ -198,6 +203,47 @@ impl VmFleet {
         )
     }
 
+    /// Give `machine` the idle settings it keeps working by while no hub
+    /// talks to it: no auto-suspend ([`AUTO_SUSPEND_SECS`]), and the
+    /// connections it opens itself (model calls, git) keep it awake.
+    ///
+    /// # Errors
+    ///
+    /// When boxd refuses either setting.
+    pub(super) async fn run_alone(&self, machine: &str) -> CloudResult<()> {
+        self.provider
+            .set_auto_suspend(machine, AUTO_SUSPEND_SECS)
+            .await?;
+        self.provider.set_idle_ignore_outbound(machine, false).await
+    }
+
+    /// `agent`'s machine has the settings of [`Self::run_alone`].
+    pub(super) fn note_run_alone(&self, agent: &str) {
+        if let Some(entry) = self.machines.lock().get_mut(agent) {
+            entry.idle_set = true;
+        }
+    }
+
+    /// [`Self::run_alone`] for `agent`'s machine, unless it has the
+    /// settings already (a machine made before them, taken back after a
+    /// restart). A failure is only logged: its next claim tries again.
+    async fn ensure_run_alone(&self, agent: &str, machine: &str) {
+        let set = self
+            .machines
+            .lock()
+            .get(agent)
+            .is_none_or(|entry| entry.idle_set);
+        if set {
+            return;
+        }
+        match self.run_alone(machine).await {
+            Ok(()) => self.note_run_alone(agent),
+            Err(err) => {
+                tracing::warn!(machine, error = %err, "could not set the machine to keep working while the hub is away");
+            }
+        }
+    }
+
     /// `agent`'s node holds `node_token` now and speaks `protocol`: its
     /// machine is up and ready for work.
     fn mark_claimed(&self, agent: &str, node_token: BoxdToken, protocol: u32) {
@@ -258,6 +304,7 @@ impl VmFleet {
                 node_protocol: 0,
                 usage: None,
                 seen_ms: now_ms(),
+                idle_set: false,
             },
         );
         self.view(agent).ok_or(CloudError::NotFound {

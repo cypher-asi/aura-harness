@@ -54,6 +54,11 @@ pub const CLAIM_COMMAND: &str = "aura node claim --stdin";
 pub const CLAIM_TIMEOUT: Duration = Duration::from_secs(60);
 /// boxd's own hibernation backstop for agent machines, seconds.
 pub const AUTO_HIBERNATE_BACKSTOP_SECS: u32 = 1800;
+/// boxd's idle auto-suspend for agent machines: off. Nothing talks to a
+/// machine while its hub is away, and boxd's default (30 s) would freeze
+/// it during the first quiet tool run; the hub's idle timer and the
+/// hibernation backstop still put idle machines to sleep.
+pub const AUTO_SUSPEND_SECS: u32 = 0;
 
 /// Writes machine rows to ledger agents. Implemented by the hub over its
 /// store; a failure to write is logged by the implementation, never
@@ -224,6 +229,9 @@ struct Entry {
     node_protocol: u32,
     usage: Option<UsageReading>,
     seen_ms: u64,
+    /// Whether boxd has the idle settings the machine keeps working by
+    /// while no hub talks to it ([`VmFleet::run_alone`]).
+    idle_set: bool,
 }
 
 /// Key of a mesh token: one per owner and project.
@@ -268,6 +276,9 @@ pub struct VmFleet {
     machines: Mutex<HashMap<String, Entry>>,
     mesh_tokens: Mutex<HashMap<String, BoxdToken>>,
     usage_denied: Mutex<bool>,
+    /// One wake and claim per agent at a time: two claims at once would
+    /// leave the node holding a token other than the one kept here.
+    wakes: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 fn random_token() -> BoxdToken {
@@ -292,6 +303,7 @@ impl VmFleet {
             machines: Mutex::new(HashMap::new()),
             mesh_tokens: Mutex::new(HashMap::new()),
             usage_denied: Mutex::new(false),
+            wakes: Mutex::new(HashMap::new()),
         }
     }
 

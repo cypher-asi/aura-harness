@@ -188,6 +188,12 @@ impl RouterState {
     pub(crate) fn cloud_node(&self) -> Arc<crate::cloud_node::CloudNode> {
         Arc::clone(&self.cloud)
     }
+
+    /// Keep this cloud machine awake while it works with no hub
+    /// connected, until the process ends.
+    pub(crate) fn start_keepalive(&self) {
+        tokio::spawn(super::handlers::cloud::keep_awake(self.clone()));
+    }
 }
 
 impl Clone for RouterState {

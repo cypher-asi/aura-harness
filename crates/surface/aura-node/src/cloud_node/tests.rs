@@ -26,6 +26,7 @@ fn claim(seal: Vec<String>) -> NodeClaim {
         owner: None,
         plans: Vec::new(),
         git: None,
+        public_url: Some("https://aura-re36-3f9c.boxd.sh".into()),
     }
 }
 
@@ -45,6 +46,10 @@ fn a_claimed_node_takes_its_tokens_only() {
     let answer = node.apply_claim(claim(vec![agent.to_hex(), "zz".into()]), 8080);
     assert_eq!(answer.sealed, 1);
     assert_eq!(node.node_id().as_deref(), Some("aura-re36-3f9c"));
+    assert_eq!(
+        node.public_url().as_deref(),
+        Some("https://aura-re36-3f9c.boxd.sh")
+    );
     assert!(node.is_sealed(&agent));
     assert_eq!(
         node.authorize(&bearer("node-token-0123456789"), "/v1/host"),
@@ -122,6 +127,7 @@ fn claim_with(owner: &str, env: &str) -> NodeClaim {
             placeholder: None,
         }],
         git: None,
+        public_url: None,
     }
 }
 

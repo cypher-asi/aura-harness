@@ -169,12 +169,14 @@ fn into_tokens(response: TokenResponse, previous_scope: &str) -> Result<OAuthTok
     } else {
         response.scope
     };
+    let now = Utc::now();
     Ok(OAuthTokens {
         access_token: response.access_token,
         refresh_token: Some(response.refresh_token).filter(|t| !t.is_empty()),
         id_token: None,
         scope,
-        expires_at: Utc::now() + Duration::seconds(response.expires_in),
+        expires_at: now + Duration::seconds(response.expires_in),
+        issued_at: Some(now),
     })
 }
 

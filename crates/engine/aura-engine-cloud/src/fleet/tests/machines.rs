@@ -277,6 +277,17 @@ async fn an_adopted_machine_is_claimed_again_on_first_use() {
     restarted.ensure_awake("aa").await.expect("claim");
     assert!(restarted.node_token("aa").is_some());
     restarted.check_node_protocol("aa").expect("current");
+    assert_eq!(
+        fake.calls_matching("SetAutoSuspend(").len(),
+        2,
+        "a machine taken back gets its idle settings again on its first claim"
+    );
+    restarted.claim("aa", &[]).await.expect("claimed again");
+    assert_eq!(
+        fake.calls_matching("SetIdleIgnoreOutbound(").len(),
+        2,
+        "once per hub run"
+    );
 }
 
 #[tokio::test]

@@ -22,7 +22,7 @@ impl PlanCredentials for VaultPlans {
     ) -> Result<Option<InferenceCredential>, String> {
         match self
             .0
-            .inference_credential_for(owner, kind, margin_secs)
+            .inference_credential_ahead(owner, kind, margin_secs)
             .await
         {
             Ok(credential) => Ok(Some(credential)),

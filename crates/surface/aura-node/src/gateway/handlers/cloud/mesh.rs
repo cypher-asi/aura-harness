@@ -92,24 +92,40 @@ fn on_frame(
         MeshFrame::Ping { ms } => {
             let _ = tx.send(MeshFrame::Pong { ms });
         }
+        MeshFrame::MailAck {
+            from_node,
+            id,
+            error,
+            ..
+        } => mesh.acked(&from_node, id, error.as_deref()),
         _ => {}
+    }
+}
+
+/// Make `tx` `mesh`'s uplink and queue what a hub socket starts with:
+/// hello, the mail no hub acked yet, then the frames kept while none was
+/// open.
+fn open_uplink(mesh: &MeshNode, tx: &mpsc::UnboundedSender<MeshFrame>) {
+    let pending: Vec<MeshFrame> = std::mem::take(&mut *mesh.pending.lock());
+    *mesh.uplink.lock() = Some(tx.clone());
+    mesh.saw_hub();
+    let _ = tx.send(MeshFrame::Hello {
+        node_id: mesh.node_id(),
+        protocol: MESH_PROTOCOL,
+    });
+    for mail in mesh.unacked_mail() {
+        let _ = tx.send(MeshFrame::Mail(mail));
+    }
+    for frame in pending {
+        let _ = tx.send(frame);
     }
 }
 
 async fn run_mesh_socket(state: RouterState, socket: WebSocket) {
     let mesh = Arc::clone(&state.mesh);
     let (tx, mut rx) = mpsc::unbounded_channel::<MeshFrame>();
-    let pending: Vec<MeshFrame> = std::mem::take(&mut *mesh.pending.lock());
-    *mesh.uplink.lock() = Some(tx.clone());
+    open_uplink(&mesh, &tx);
     let (mut sink, mut stream) = socket.split();
-
-    let _ = tx.send(MeshFrame::Hello {
-        node_id: mesh.node_id(),
-        protocol: MESH_PROTOCOL,
-    });
-    for frame in pending {
-        let _ = tx.send(frame);
-    }
 
     let writer = tokio::spawn(async move {
         while let Some(frame) = rx.recv().await {
@@ -139,6 +155,7 @@ async fn run_mesh_socket(state: RouterState, socket: WebSocket) {
     heads.abort();
     stats.abort();
     writer.abort();
+    mesh.saw_hub();
     let mut uplink = mesh.uplink.lock();
     if uplink
         .as_ref()

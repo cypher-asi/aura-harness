@@ -1,0 +1,106 @@
+{
+  "id": "01a220a60d220016",
+  "title": "issue here where message came in and cut off what the coordinaotr was saying I think [image 1]",
+  "state": "open",
+  "agent_id": "49991d2b19ee2a9bdfc3d614920a410240d6510d5002b60b924af7b80f351226",
+  "agent_name": "coordinator",
+  "items": [
+    {
+      "content": "Mouse scroll must not change selection in any panel; only keys do (FEN6)",
+      "state": "completed",
+      "assignee": "FEN6"
+    },
+    {
+      "content": "Merge #63 subagent titles into main (RUS198)",
+      "state": "completed"
+    },
+    {
+      "content": "Channel to-dos panel: show only active tasks with agent info; completed ones in collapsible task history (RUS197)",
+      "state": "completed",
+      "assignee": "RUS197"
+    },
+    {
+      "content": "Empty channel: ASCII-art channel name plus coordinator welcome message (new agent)",
+      "state": "completed",
+      "assignee": "RUS198"
+    },
+    {
+      "content": "Channel History tab (RUS201 never started; needs a cloud-backed agent)",
+      "state": "completed",
+      "assignee": "RUS197"
+    },
+    {
+      "content": "Root-cause and fix: members created without a cloud machine never start; duplicate sessions; lost messages; red error state. Needs a cloud-backed agent (RUS202 never started)",
+      "state": "completed",
+      "assignee": "RUS198"
+    },
+    {
+      "content": "Older cloud machines: redeploy/update, hub checks tools before ship prompt, hub queues their branches (RUS197)",
+      "state": "completed",
+      "assignee": "RUS197"
+    },
+    {
+      "content": "Plan view header: created when, by whom, for which agent, assignee, machine (RUS199)",
+      "state": "completed",
+      "assignee": "RUS199"
+    },
+    {
+      "content": "Harness bugs: no local fallback when cloud hub is down (duplicate sessions); undeliverable agent messages fail loudly (RUS198)",
+      "state": "pending",
+      "assignee": "RUS198"
+    },
+    {
+      "content": "Wheel in pop-up pickers scrolls without moving the highlight (FEN6)",
+      "state": "completed",
+      "assignee": "FEN6"
+    },
+    {
+      "content": "Merge queue leftovers: target branch config, cloud machines pull target, worktree outside .git, Queue tab lists all, late-opened channel, stale plan hint, pub(crate), let _ (RUS199)",
+      "state": "completed",
+      "assignee": "RUS199"
+    },
+    {
+      "content": "Raw git push bypasses queue; per-member worktrees for local members (RUS197, after ship gap)",
+      "state": "completed",
+      "assignee": "RUS197"
+    },
+    {
+      "content": "History lists /plan text typed in a channel (RUS200, after current)",
+      "state": "completed",
+      "assignee": "RUS200"
+    },
+    {
+      "content": "Diagnose why GitHub Actions runs no jobs (EXP71)",
+      "state": "completed",
+      "assignee": "EXP71"
+    },
+    {
+      "content": "Red errors in chat, stall notices, shared Stop-button red (RUS202 follow-up to #74)",
+      "state": "completed"
+    },
+    {
+      "content": "PR #74 review fixes (FEN6, taken from RUS202)",
+      "state": "pending"
+    },
+    {
+      "content": "Queue tab full history, late-open state, stale hint (RUS200, split from RUS199)",
+      "state": "cancelled"
+    },
+    {
+      "content": "Owed reports survive restart (RUS203)",
+      "state": "pending"
+    },
+    {
+      "content": "Fewer merge conflicts: changelog fragments, queue auto-resolves trivial conflicts, overlap warnings (RUS204)",
+      "state": "pending"
+    },
+    {
+      "content": "Incoming inbox message cuts off the coordinator's streaming reply in the channel chat (RUS202)",
+      "state": "pending",
+      "assignee": "RUS202"
+    }
+  ],
+  "summary": "I think you're right. RUS202's message arrived while I was still writing, and my reply stopped mid-word. Either the incoming message cut my turn short, or the chat drew it in the middle of my text and lost the rest. I've given it to RUS202, which is free. Whichever it is, an arriving message will wait until the current reply finishes and then show up below it. That will hold for every agent, not …",
+  "updated_ms": 1795844111197,
+  "created_ms": 1795844082978
+}

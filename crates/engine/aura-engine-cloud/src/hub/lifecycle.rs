@@ -106,7 +106,10 @@ impl CloudHub {
 
     /// Take back the machines placed agents had before this hub started,
     /// destroy machines no kept agent owns, and start the fleet's
-    /// timers. `keep` are the agents that still exist (hex).
+    /// timers. `keep` are the agents that still exist (hex). What the
+    /// machines made while no hub watched is copied in the background;
+    /// the turns they were asked for are followed with
+    /// [`Self::follow_turn`] ([`Self::unfinished_turns`]).
     pub async fn start(self: &Arc<Self>, keep: &HashSet<String>) {
         self.start_reported(keep, &BootReporter::none()).await;
     }
@@ -146,6 +149,8 @@ impl CloudHub {
         for (hex, _) in self.placed() {
             self.open_link(&hex);
         }
+        let hub = Arc::clone(self);
+        tokio::spawn(async move { hub.catch_up().await });
         let hub = Arc::downgrade(self);
         let stop = self.stop.clone();
         tokio::spawn(async move { maintain(hub, stop).await });
@@ -238,8 +243,10 @@ impl CloudHub {
         }
     }
 
-    /// Stop the timers and close every socket. Machines keep running and
-    /// sleep on boxd's own idle timer.
+    /// Stop the timers and close every socket. Machines keep running, and
+    /// the turns on them: the next hub follows those to their end
+    /// ([`Self::unfinished_turns`]). An idle machine hibernates on boxd's
+    /// backstop ([`crate::fleet::AUTO_HIBERNATE_BACKSTOP_SECS`]).
     pub fn shutdown(&self) {
         self.stop.cancel();
         for (_, link) in self.links.lock().drain() {

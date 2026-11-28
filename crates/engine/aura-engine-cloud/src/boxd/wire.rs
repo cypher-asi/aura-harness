@@ -185,6 +185,7 @@ pub fn machine_info(vm: proto::GetVmResponse) -> MachineInfo {
         source,
         created_ms: millis_from(vm.created_at),
         boot_ms: u64::try_from(vm.boot_time_ms).unwrap_or(0),
+        last_connected_ms: u64::try_from(vm.last_connected_ms).unwrap_or(0),
     }
 }
 

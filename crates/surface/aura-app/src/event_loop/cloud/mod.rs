@@ -60,6 +60,9 @@ mod boot;
 mod ended;
 #[cfg(test)]
 mod ended_tests;
+mod follow;
+#[cfg(test)]
+mod follow_tests;
 mod forward;
 mod machine;
 mod moving;
@@ -340,6 +343,7 @@ async fn ensure_hub(
     state
         .processes
         .set_remote(Arc::new(MachineRows(Arc::downgrade(&hub))));
+    follow::follow_unfinished(state, &hub).await;
     start_publisher(state);
     Ok(hub)
 }

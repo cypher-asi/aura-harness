@@ -1,0 +1,11 @@
+{
+  "id": "01a22076a2b4000e",
+  "title": "COO2: Why CI runs nothing",
+  "state": "completed",
+  "agent_id": "1153afcba74856250de09b66c4ac75053a0cf656e38a4406e5878bfbc9a65821",
+  "agent_name": "explorer #71",
+  "items": [],
+  "summary": "That's clear. Let me confirm the workflows' runner labels, check an older PR run, and look at self-hosted runners and the Landlock tests.",
+  "updated_ms": 1795841244434,
+  "created_ms": 1795840975540
+}

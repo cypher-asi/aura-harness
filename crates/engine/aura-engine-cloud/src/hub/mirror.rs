@@ -136,15 +136,22 @@ impl CloudHub {
     }
 
     /// Put the idle machines to sleep, copying each awake one's record
-    /// first; a machine that got work meanwhile stays up.
+    /// first; a machine that got work meanwhile stays up. One whose copy
+    /// was whole needs no wake when the next hub starts.
     pub(super) async fn sleep_idle_machines(&self) {
         for due in self.fleet.idle_machines() {
-            if due.awake {
-                if let Ok(agent) = AgentId::from_hex(&due.agent) {
-                    self.copy_before_sleep(agent).await;
+            let copied = if due.awake {
+                match AgentId::from_hex(&due.agent) {
+                    Ok(agent) => Some(self.copy_before_sleep(agent).await),
+                    Err(_) => Some(false),
                 }
-            }
+            } else {
+                None
+            };
             if self.fleet.sleep_idle(&due).await {
+                if let Some(copied) = copied {
+                    self.note_slept(&due.agent, copied);
+                }
                 if let Some(link) = self.links.lock().get(&due.agent) {
                     link.stop.cancel();
                 }
@@ -175,20 +182,19 @@ impl CloudHub {
     /// Copy what `agent`'s machine holds before it sleeps, so a machine
     /// that never wakes again leaves little behind. A copy that fails is
     /// only logged: it all stays on the machine's disk and is copied when
-    /// it next wakes.
-    pub(super) async fn copy_before_sleep(&self, agent: AgentId) {
+    /// it next wakes. Returns whether all of it was copied.
+    pub(super) async fn copy_before_sleep(&self, agent: AgentId) -> bool {
         let node = match self.node(&agent.to_hex()) {
             Ok(node) => node,
             Err(err) => {
                 tracing::warn!(%agent, error = %err, "could not reach the machine to copy it before it slept");
-                return;
+                return false;
             }
         };
-        if tokio::time::timeout(COPY_BEFORE_SLEEP, self.persist(&node, agent))
-            .await
-            .is_err()
-        {
+        let copied = tokio::time::timeout(COPY_BEFORE_SLEEP, self.persist(&node, agent)).await;
+        if copied.is_err() {
             tracing::warn!(%agent, "copying before the machine slept took too long");
         }
+        copied.unwrap_or(false)
     }
 }

@@ -102,6 +102,16 @@ impl VmProvider for FakeProvider {
         self.with_machine(machine, |_| Ok(()))
     }
 
+    async fn set_auto_suspend(&self, machine: &str, secs: u32) -> CloudResult<()> {
+        self.log(format!("SetAutoSuspend({machine}, {secs})"));
+        self.with_machine(machine, |_| Ok(()))
+    }
+
+    async fn set_idle_ignore_outbound(&self, machine: &str, enabled: bool) -> CloudResult<()> {
+        self.log(format!("SetIdleIgnoreOutbound({machine}, {enabled})"));
+        self.with_machine(machine, |_| Ok(()))
+    }
+
     async fn set_bot_protection(&self, machine: &str, enabled: bool) -> CloudResult<()> {
         self.log(format!("SetBotProtection({machine}, {enabled})"));
         self.with_machine(machine, |_| Ok(()))

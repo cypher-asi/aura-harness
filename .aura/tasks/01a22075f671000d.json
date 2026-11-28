@@ -1,0 +1,81 @@
+{
+  "id": "01a22075f671000d",
+  "title": "also finish anything that's not started",
+  "state": "open",
+  "agent_id": "49991d2b19ee2a9bdfc3d614920a410240d6510d5002b60b924af7b80f351226",
+  "agent_name": "coordinator",
+  "items": [
+    {
+      "content": "Mouse scroll must not change selection in any panel; only keys do (FEN6)",
+      "state": "completed",
+      "assignee": "FEN6"
+    },
+    {
+      "content": "Merge #63 subagent titles into main (RUS198)",
+      "state": "completed"
+    },
+    {
+      "content": "Channel to-dos panel: show only active tasks with agent info; completed ones in collapsible task history (RUS197)",
+      "state": "completed",
+      "assignee": "RUS197"
+    },
+    {
+      "content": "Empty channel: ASCII-art channel name plus coordinator welcome message (new agent)",
+      "state": "completed",
+      "assignee": "RUS198"
+    },
+    {
+      "content": "Channel History tab (RUS201 never started; needs a cloud-backed agent)",
+      "state": "completed",
+      "assignee": "RUS197"
+    },
+    {
+      "content": "Root-cause and fix: members created without a cloud machine never start; duplicate sessions; lost messages; red error state. Needs a cloud-backed agent (RUS202 never started)",
+      "state": "completed",
+      "assignee": "RUS198"
+    },
+    {
+      "content": "Older cloud machines: redeploy/update, hub checks tools before ship prompt, hub queues their branches (RUS197)",
+      "state": "pending",
+      "assignee": "RUS197"
+    },
+    {
+      "content": "Plan view header: created when, by whom, for which agent, assignee, machine (RUS199)",
+      "state": "completed",
+      "assignee": "RUS199"
+    },
+    {
+      "content": "Harness bugs: no local fallback when cloud hub is down (duplicate sessions); undeliverable agent messages fail loudly (RUS198)",
+      "state": "pending",
+      "assignee": "RUS198"
+    },
+    {
+      "content": "Wheel in pop-up pickers scrolls without moving the highlight (FEN6)",
+      "state": "pending",
+      "assignee": "FEN6"
+    },
+    {
+      "content": "Merge queue leftovers: target branch config, cloud machines pull target, worktree outside .git, Queue tab lists all, late-opened channel, stale plan hint, pub(crate), let _ (RUS199)",
+      "state": "pending",
+      "assignee": "RUS199"
+    },
+    {
+      "content": "Raw git push bypasses queue; per-member worktrees for local members (RUS197, after ship gap)",
+      "state": "pending",
+      "assignee": "RUS197"
+    },
+    {
+      "content": "History lists /plan text typed in a channel (RUS200, after current)",
+      "state": "pending",
+      "assignee": "RUS200"
+    },
+    {
+      "content": "Diagnose why GitHub Actions runs no jobs (EXP71)",
+      "state": "completed",
+      "assignee": "EXP71"
+    }
+  ],
+  "summary": "GitHub's automated checks run nothing because GitHub has locked the cypher-asi organization over a billing issue. The workflow files are fine, and no code change can fix it. Every run since November 28 has failed with \"account is locked due to a billing issue\", including GitHub's own security scans.",
+  "updated_ms": 1795841250117,
+  "created_ms": 1795840931441
+}

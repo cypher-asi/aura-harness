@@ -433,5 +433,7 @@ fn placed_agent(
         repo,
         fetched_tip: None,
         children: Vec::new(),
+        turn: None,
+        slept_ms: None,
     }
 }

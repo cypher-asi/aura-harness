@@ -2,21 +2,24 @@
 
 use std::sync::Arc;
 
+use crate::fleet::WorkGuard;
 use crate::{BootEvent, BootReporter, CloudError, CloudResult};
 use aura_config::BoxdToken;
 use aura_core_protocol::{
     InboundMessage, OutboundMessage, RuntimeRequest, SessionUsage, UserMessage,
 };
 use aura_core_types::AgentId;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::SinkExt;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
 
-use super::node_client::NodeClient;
+use super::follow::{RunWatch, Shown, StreamEnd};
+use super::marks::TurnMark;
+use super::node_client::{NodeClient, NODE_TIMEOUT};
 use super::request::{chat_request, TurnAsk};
 
-use super::{CloudHub, MIRROR_EVERY, TURN_TIMEOUT};
+use super::{CloudHub, TURN_TIMEOUT};
 
 /// What a cloud agent's turn shows, as it streams.
 #[derive(Debug, Clone, PartialEq)]
@@ -63,19 +66,25 @@ pub enum RemoteEvent {
     Title(String),
     /// A model call of the turn ended. Reply text after it is a new reply.
     ModelCallEnd,
-    /// The turn ended, with the session's usage and context so far.
+    /// Entries the turn wrote were copied here. The stream of a turn
+    /// attached to again, or followed by a hub started since it was
+    /// asked for, shows no more than how it ends: its chat shows the
+    /// turn from the record instead.
+    Copied,
+    /// The turn ended, with the session's usage and context so far
+    /// (empty for a turn that ended while no hub watched).
     Done(Box<SessionUsage>),
     /// The turn failed.
     Failed(String),
 }
 
 impl CloudHub {
-    /// Wake `hex`'s node, showing the machine waking on `tx`. A machine
-    /// that sleeps shows itself waking; the events all reach the turn's
-    /// stream before anything else does. A node older than this hub is
-    /// refused ([`CloudHub::current_node`]).
-    async fn wake_for_turn(
-        &self,
+    /// Wake `hex`'s node, showing the machine waking on `tx`, and keep a
+    /// socket to it open. A machine that sleeps shows itself waking; the
+    /// events all reach the turn's stream before anything else does. A
+    /// node older than this hub is refused ([`CloudHub::current_node`]).
+    pub(super) async fn wake_for_turn(
+        self: &Arc<Self>,
         hex: &str,
         tx: &mpsc::Sender<RemoteEvent>,
     ) -> CloudResult<NodeClient> {
@@ -91,6 +100,9 @@ impl CloudHub {
         let awake = self.current_node(hex, &boot).await;
         drop(boot);
         let _ = forward.await;
+        if awake.is_ok() {
+            self.ensure_link(hex);
+        }
         awake
     }
 
@@ -98,6 +110,11 @@ impl CloudHub {
     /// writes the turn; the hub mirrors it as it runs and when it ends.
     /// With a title model, the node also titles the chat from the prompt,
     /// sent as [`RemoteEvent::Title`].
+    ///
+    /// The turn is marked on the agent's placement until its end is
+    /// seen, and runs on when the hub stops or crashes: a hub started
+    /// since follows it ([`Self::follow_turn`]). A stream that drops is
+    /// attached to again, quietly ([`RemoteEvent::Copied`]).
     #[must_use]
     pub fn run_turn(
         self: &Arc<Self>,
@@ -120,42 +137,122 @@ impl CloudHub {
                 }
             };
             let guard = hub.fleet.begin_work(&hex);
-            let request = chat_request(agent, &ask);
-            let turn = tokio::time::timeout(
-                TURN_TIMEOUT,
-                stream_turn(
-                    &hub,
-                    &node,
-                    TurnPrompt {
-                        agent,
-                        prompt: ask.prompt,
-                        request,
-                    },
-                    &tx,
-                    cancel,
-                ),
-            )
-            .await
-            .unwrap_or(Err(CloudError::Timeout {
-                op: "turn",
-                after: TURN_TIMEOUT,
-            }));
-            if let Err(err) = hub.mirror_from(&node, agent).await {
-                tracing::warn!(agent = %hex, error = %err, "could not copy the turn's record");
-            }
-            // The machine stays awake for these: the guard is still held.
-            if let Err(err) = hub.copy_session(&node, agent).await {
-                tracing::debug!(agent = %hex, error = %err, "could not copy the session checkpoint");
-            }
-            if let Err(err) = hub.copy_traces(&node, agent).await {
-                tracing::debug!(agent = %hex, error = %err, "could not copy the trace runs");
-            }
-            drop(guard);
-            if let Err(err) = turn {
-                let _ = tx.send(RemoteEvent::Failed(err.to_string())).await;
-            }
+            let turn = TurnPrompt {
+                agent,
+                request: chat_request(agent, &ask),
+                prompt: ask.prompt,
+            };
+            let (run_id, end) = hub.drive_turn(&node, &turn, &tx, &cancel).await;
+            hub.finish_turn(&node, agent, run_id.as_deref(), end, guard, &tx)
+                .await;
         });
         rx
+    }
+
+    /// One turn: start its chat run, send the prompt and mark the turn,
+    /// then follow the run until the turn ends. Returns the run once it
+    /// started, and how the turn ended.
+    async fn drive_turn(
+        &self,
+        node: &NodeClient,
+        turn: &TurnPrompt,
+        tx: &mpsc::Sender<RemoteEvent>,
+        cancel: &CancellationToken,
+    ) -> (Option<String>, StreamEnd) {
+        let deadline = tokio::time::Instant::now() + TURN_TIMEOUT;
+        let run_id = match start_run(node, &turn.request).await {
+            Ok(run_id) => run_id,
+            Err(err) => return (None, StreamEnd::Seen(Err(err))),
+        };
+        let _streamed = self.streaming_turn(&turn.agent.to_hex(), run_id.clone());
+        let (socket, head) = match self.send_prompt(node, &run_id, turn).await {
+            Ok(sent) => sent,
+            Err(err) => return (Some(run_id), StreamEnd::Seen(Err(err))),
+        };
+        let _ = tx
+            .send(RemoteEvent::Status("Working in the cloud".into()))
+            .await;
+        let watch = RunWatch {
+            hub: self,
+            node,
+            agent: turn.agent,
+            run_id: &run_id,
+            head,
+        };
+        let end = watch
+            .follow(Some(socket), Shown::Live, tx, cancel, deadline)
+            .await;
+        (Some(run_id), end)
+    }
+
+    /// Attach to run `run_id` and send it `turn`'s prompt, marking the
+    /// turn once it went out. Returns the socket and the head of the
+    /// record the turn writes after.
+    async fn send_prompt(
+        &self,
+        node: &NodeClient,
+        run_id: &str,
+        turn: &TurnPrompt,
+    ) -> CloudResult<(NodeSocket, u64)> {
+        let mut socket = connect_run(node, run_id).await?;
+        // What the turn writes comes after the node's head now.
+        let head = match node.head(turn.agent).await {
+            Ok(head) => head,
+            Err(_) => self.store.get_head_seq(turn.agent).unwrap_or(0),
+        };
+        let message = InboundMessage::UserMessage(UserMessage {
+            content: turn.prompt.clone(),
+            tool_hints: None,
+            attachments: None,
+        });
+        let text = serde_json::to_string(&message).unwrap_or_default();
+        socket
+            .send(Message::Text(text.into()))
+            .await
+            .map_err(|err| CloudError::Transport {
+                endpoint: node.base().to_string(),
+                message: err.to_string(),
+            })?;
+        self.mark_turn(
+            turn.agent,
+            TurnMark::new(run_id, head, &turn.prompt, &turn.request),
+        );
+        Ok((socket, head))
+    }
+
+    /// After `agent`'s turn on `run_id` ended as `end` says: copy what it
+    /// wrote, its session and its runs while `guard` holds the machine
+    /// awake, let the turn's mark go and say how it went. A turn the hub
+    /// let go of runs on, its mark kept for the next hub.
+    pub(super) async fn finish_turn(
+        &self,
+        node: &NodeClient,
+        agent: AgentId,
+        run_id: Option<&str>,
+        end: StreamEnd,
+        guard: WorkGuard,
+        tx: &mpsc::Sender<RemoteEvent>,
+    ) {
+        let StreamEnd::Seen(result) = end else {
+            return;
+        };
+        let hex = agent.to_hex();
+        if let Err(err) = self.mirror_from(node, agent).await {
+            tracing::warn!(agent = %hex, error = %err, "could not copy the turn's record");
+        }
+        if let Err(err) = self.copy_session(node, agent).await {
+            tracing::debug!(agent = %hex, error = %err, "could not copy the session checkpoint");
+        }
+        if let Err(err) = self.copy_traces(node, agent).await {
+            tracing::debug!(agent = %hex, error = %err, "could not copy the trace runs");
+        }
+        if let Some(run_id) = run_id {
+            self.end_turn_mark(agent, run_id);
+        }
+        drop(guard);
+        if let Err(err) = result {
+            let _ = tx.send(RemoteEvent::Failed(err.to_string())).await;
+        }
     }
 }
 
@@ -205,138 +302,34 @@ struct TurnPrompt {
     request: RuntimeRequest,
 }
 
-/// One turn: start the chat run `turn.request` asks for, send the prompt,
-/// map the stream.
-async fn stream_turn(
-    hub: &CloudHub,
-    node: &NodeClient,
-    turn: TurnPrompt,
-    tx: &mpsc::Sender<RemoteEvent>,
-    cancel: CancellationToken,
-) -> CloudResult<()> {
-    let started = node.start_run(&turn.request).await?;
-    let _streamed = started
+/// Start the chat run `request` asks for on `node`; returns its id.
+async fn start_run(node: &NodeClient, request: &RuntimeRequest) -> CloudResult<String> {
+    let started = node.start_run(request).await?;
+    started
         .get("run_id")
         .and_then(serde_json::Value::as_str)
-        .map(|run| hub.streaming_turn(&turn.agent.to_hex(), run.to_string()));
-    let path = stream_path(&started)?;
-    let url = ws_url(node.base(), &path);
-    let (socket, _) = tokio_tungstenite::connect_async(ws_request(&url, node.token())?)
-        .await
-        .map_err(|err| CloudError::Transport {
-            endpoint: url.clone(),
-            message: err.to_string(),
-        })?;
-    let (mut sink, mut stream) = socket.split();
-    let message = InboundMessage::UserMessage(UserMessage {
-        content: turn.prompt,
-        tool_hints: None,
-        attachments: None,
-    });
-    let text = serde_json::to_string(&message).unwrap_or_default();
-    sink.send(Message::Text(text.into()))
-        .await
-        .map_err(|err| CloudError::Transport {
-            endpoint: url.clone(),
-            message: err.to_string(),
-        })?;
-    let _ = tx
-        .send(RemoteEvent::Status("Working in the cloud".into()))
-        .await;
-    TurnStream {
-        hub,
-        node,
-        agent: turn.agent,
-        url,
-        sink: &mut sink,
-        stream: &mut stream,
-        tx,
-    }
-    .relay(cancel)
-    .await
-}
-
-/// Where a started run's events stream from.
-fn stream_path(started: &serde_json::Value) -> CloudResult<String> {
-    started
-        .get("event_stream_url")
-        .and_then(serde_json::Value::as_str)
         .map(str::to_string)
-        .or_else(|| {
-            started
-                .get("run_id")
-                .and_then(serde_json::Value::as_str)
-                .map(|id| format!("/stream/{id}"))
-        })
         .ok_or_else(|| CloudError::InvalidResponse {
             op: "run",
             message: "no run id".into(),
         })
 }
 
-/// A turn's open event stream.
-struct TurnStream<'a> {
-    hub: &'a CloudHub,
-    node: &'a NodeClient,
-    agent: AgentId,
-    url: String,
-    sink: &'a mut NodeSink,
-    stream: &'a mut NodeStream,
-    tx: &'a mpsc::Sender<RemoteEvent>,
-}
-
-impl TurnStream<'_> {
-    /// Show the stream's events until the turn ends, mirroring the
-    /// record as it runs.
-    async fn relay(mut self, cancel: CancellationToken) -> CloudResult<()> {
-        let mut mirror = tokio::time::interval(MIRROR_EVERY);
-        mirror.tick().await;
-        loop {
-            tokio::select! {
-                () = cancel.cancelled() => {
-                    let cancel = serde_json::to_string(&InboundMessage::Cancel).unwrap_or_default();
-                    let _ = self.sink.send(Message::Text(cancel.into())).await;
-                    return Err(CloudError::BadState { machine: self.node.node().into(), state: "cancelled".into(), op: "finish the turn" });
-                }
-                _ = mirror.tick() => {
-                    if let Err(err) = self.hub.mirror_from(self.node, self.agent).await {
-                        tracing::debug!(error = %err, "mirror during a turn failed");
-                    }
-                }
-                frame = self.stream.next() => {
-                    let Some(frame) = frame else {
-                        return Err(CloudError::Node { node: self.node.node().into(), op: "stream", message: "closed before the turn ended".into() });
-                    };
-                    let frame = frame.map_err(|err| CloudError::Transport { endpoint: self.url.clone(), message: err.to_string() })?;
-                    if let Some(end) = self.take_frame(frame).await {
-                        return end;
-                    }
-                }
-            }
-        }
-    }
-
-    /// Show one frame; `Some` when the turn is over.
-    async fn take_frame(&mut self, frame: Message) -> Option<CloudResult<()>> {
-        let Message::Text(text) = frame else {
-            return None;
-        };
-        let Ok(message) = serde_json::from_str::<OutboundMessage>(&text) else {
-            return None;
-        };
-        match map_outbound(message) {
-            Some(RemoteEvent::Failed(err)) => Some(Err(CloudError::Node {
-                node: self.node.node().into(),
-                op: "turn",
-                message: err,
-            })),
-            Some(event @ RemoteEvent::Done { .. }) => {
-                let _ = self.tx.send(event).await;
-                Some(Ok(()))
-            }
-            Some(event) => self.tx.send(event).await.is_err().then_some(Ok(())),
-            None => None,
-        }
+/// Open the event stream of chat run `run_id` on `node`: its history
+/// first, then what it sends from now on.
+pub(super) async fn connect_run(node: &NodeClient, run_id: &str) -> CloudResult<NodeSocket> {
+    let url = ws_url(node.base(), &format!("/stream/{run_id}"));
+    let connect = tokio_tungstenite::connect_async(ws_request(&url, node.token())?);
+    match tokio::time::timeout(NODE_TIMEOUT, connect).await {
+        Ok(Ok((socket, _))) => Ok(socket),
+        Ok(Err(err)) => Err(CloudError::Transport {
+            endpoint: url,
+            message: err.to_string(),
+        }),
+        Err(_) => Err(CloudError::Timeout {
+            op: "attach to the turn",
+            after: NODE_TIMEOUT,
+        }),
     }
 }
 

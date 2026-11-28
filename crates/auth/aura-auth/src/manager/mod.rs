@@ -10,6 +10,7 @@ use aura_core_auth::{
 };
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 /// Refresh access tokens this close to expiry.
 const REFRESH_MARGIN_SECS: i64 = 60;
@@ -103,6 +104,8 @@ pub struct AuthManager {
     zos: Arc<dyn IdentityProvider>,
     subscriptions: BTreeMap<ProviderKind, Arc<dyn SubscriptionProvider>>,
     refresh_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// When each link's last early refresh failed.
+    early_failed: Mutex<HashMap<String, Instant>>,
 }
 
 impl AuthManager {
@@ -134,6 +137,7 @@ impl AuthManager {
             zos,
             subscriptions: BTreeMap::new(),
             refresh_locks: Mutex::new(HashMap::new()),
+            early_failed: Mutex::new(HashMap::new()),
         }
     }
 

@@ -59,6 +59,20 @@ impl CloudHub {
         tokio::spawn(async move { run_link(hub, hex, rx, stop).await });
     }
 
+    /// [`Self::open_link`], unless one is open already: a link gives up
+    /// while its machine sleeps or is unclaimed, and a wake or claim of
+    /// the hub's own opens none.
+    pub(super) fn ensure_link(self: &Arc<Self>, hex: &str) {
+        let open = self
+            .links
+            .lock()
+            .get(hex)
+            .is_some_and(|link| !link.frames.is_closed());
+        if !open {
+            self.open_link(hex);
+        }
+    }
+
     /// Mail from a node, for an agent here or on another node, or for the
     /// app's desk ([`Self::desk_for`]).
     pub(super) async fn take_mail(&self, mail: &MeshMail) -> MeshFrame {
@@ -217,6 +231,7 @@ async fn run_link_socket(
         // What the node wrote while no socket was open (a wake, a
         // reconnect) has no hint coming.
         if let (Some(hub), Ok(agent)) = (hub.upgrade(), AgentId::from_hex(hex)) {
+            hub.note_awake(hex);
             hub.copy_soon(agent);
         }
         let link = LinkSocket {

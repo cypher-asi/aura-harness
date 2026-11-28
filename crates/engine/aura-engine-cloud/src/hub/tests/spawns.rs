@@ -17,6 +17,8 @@ fn placed_with(children: &[AgentId]) -> PlacedAgent {
         repo: None,
         fetched_tip: None,
         children: children.iter().map(AgentId::to_hex).collect(),
+        turn: None,
+        slept_ms: None,
     }
 }
 

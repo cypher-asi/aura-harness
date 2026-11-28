@@ -37,8 +37,9 @@ use crate::provider::{HostSecret, VmProvider};
 /// Value of the secret of a repository the App can't reach.
 pub const UNLINKED: &str = crate::plans::UNLINKED;
 /// Re-mint tokens that expire within this, so a fresh one is in boxd
-/// well before the old one stops working.
-pub const REPO_MARGIN_SECS: i64 = 15 * 60;
+/// well before the old one stops working, and a machine left working
+/// while no hub runs has at least this long of it.
+pub const REPO_MARGIN_SECS: i64 = 30 * 60;
 /// The hosts a repository secret is sent to: git over https, and the
 /// REST API `gh` calls.
 pub const REPO_HOSTS: [&str; 2] = ["github.com", "api.github.com"];

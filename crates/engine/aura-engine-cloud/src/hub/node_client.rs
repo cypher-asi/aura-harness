@@ -355,6 +355,57 @@ impl NodeClient {
         .await
     }
 
+    /// Whether chat run `run_id` is still on the node: `false` once it
+    /// stopped and was let go, its turn over.
+    ///
+    /// # Errors
+    ///
+    /// When the node can't be asked.
+    pub async fn run_alive(&self, run_id: &str) -> CloudResult<bool> {
+        let response = self
+            .http
+            .get(format!("{}/v1/run/{run_id}/status", self.base))
+            .bearer_auth(self.token.expose())
+            .send()
+            .await
+            .map_err(|err| self.fail("run status", err))?;
+        let status = response.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(false);
+        }
+        let body: serde_json::Value = response.json().await.unwrap_or_default();
+        if status.is_success() {
+            return Ok(
+                body.get("status").and_then(serde_json::Value::as_str) == Some("chat_active")
+            );
+        }
+        // A node without automatons answers a run it doesn't have so;
+        // an unclaimed one answers 503 without a body.
+        let no_automatons = body
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|error| error.contains("automaton"));
+        if status == reqwest::StatusCode::SERVICE_UNAVAILABLE && no_automatons {
+            return Ok(false);
+        }
+        Err(self.fail("run status", status))
+    }
+
+    /// Stop run `run_id` and the turn it has under way.
+    ///
+    /// # Errors
+    ///
+    /// When the call fails.
+    pub async fn stop_run(&self, run_id: &str) -> CloudResult<()> {
+        self.read::<serde_json::Value>(
+            "stop run",
+            self.http
+                .post(format!("{}/v1/run/{run_id}/stop", self.base)),
+        )
+        .await
+        .map(|_| ())
+    }
+
     /// Start a run on the node (`POST /v1/run`); returns its JSON answer
     /// (`run_id`, `event_stream_url`).
     ///

@@ -29,6 +29,7 @@ use super::{CloudHub, PatchOutcome, PlaceRequest, RemoteEvent};
 
 mod machine;
 mod record;
+mod restart;
 mod session;
 
 const MACHINE: &str = "aura-re36-0001";
@@ -61,6 +62,7 @@ fn machine(base: &str) -> MachineInfo {
         source: None,
         created_ms: 0,
         boot_ms: 0,
+        last_connected_ms: 0,
     }
 }
 
@@ -78,6 +80,8 @@ fn placement(project_dir: PathBuf) -> PlacedAgent {
         repo: None,
         fetched_tip: None,
         children: Vec::new(),
+        turn: None,
+        slept_ms: None,
     }
 }
 
@@ -87,6 +91,19 @@ async fn placed(config: CloudConfig) -> Placed {
 
 /// [`placed`], what fake boxd runs in the machine being `exec(node)`.
 async fn placed_with(config: CloudConfig, exec: fn(&TestNode) -> ExecHandler) -> Placed {
+    placed_on(config, exec, 0).await
+}
+
+/// [`placed`], its node's model taking `latency_ms` over each answer.
+async fn placed_slow(latency_ms: u64) -> Placed {
+    placed_on(CloudConfig::defaults(), TestNode::exec_handler, latency_ms).await
+}
+
+async fn placed_on(
+    config: CloudConfig,
+    exec: fn(&TestNode) -> ExecHandler,
+    latency_ms: u64,
+) -> Placed {
     let hub_dir = tempfile::tempdir().expect("tempdir");
     let node_dir = tempfile::tempdir().expect("tempdir");
     let store: Arc<dyn Store> =
@@ -100,7 +117,7 @@ async fn placed_with(config: CloudConfig, exec: fn(&TestNode) -> ExecHandler) ->
         AuraBinary::Installed,
     )
     .expect("hub");
-    let node = TestNode::serve(node_dir.path(), "done").await;
+    let node = TestNode::serve_slow(node_dir.path(), "done", latency_ms).await;
     fake.on_exec(exec(&node));
     fake.insert_machine(machine(&node.base));
     let agent = AgentId::new([6; 32]);
@@ -198,6 +215,22 @@ impl Placed {
 
     fn head_of(&self, agent: AgentId) -> u64 {
         hooks::store(&self.hub).get_head_seq(agent).expect("head")
+    }
+
+    /// A hub started over this one's store, placements and machines, as
+    /// Aura started again finds them.
+    async fn restarted(&self) -> Arc<CloudHub> {
+        let hub = CloudHub::new(
+            CloudConfig::defaults(),
+            Arc::clone(hooks::store(&self.hub)),
+            self.hub_dir.path().join("cloud"),
+            Arc::new(self.fake.clone()),
+            AuraBinary::Installed,
+        )
+        .expect("hub");
+        let keep = HashSet::from([self.agent.to_hex()]);
+        hub.start_reported(&keep, &BootReporter::none()).await;
+        hub
     }
 }
 

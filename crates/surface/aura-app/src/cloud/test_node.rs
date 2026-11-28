@@ -33,10 +33,15 @@ impl TestNode {
     /// An unclaimed cloud node over a store in `dir`, its model always
     /// answering `reply`.
     pub(crate) async fn serve(dir: &Path, reply: &str) -> Self {
+        Self::serve_slow(dir, reply, 0).await
+    }
+
+    /// [`Self::serve`], its model taking `latency_ms` over each answer.
+    pub(crate) async fn serve_slow(dir: &Path, reply: &str, latency_ms: u64) -> Self {
         let store: Arc<dyn Store> =
             Arc::new(RocksStore::open(dir.join("db"), false).expect("store"));
         let provider: Arc<dyn ModelProvider + Send + Sync> =
-            Arc::new(MockProvider::simple_response(reply));
+            Arc::new(MockProvider::simple_response(reply).with_latency(latency_ms));
         let scheduler = Arc::new(Scheduler::new(
             Arc::clone(&store),
             Arc::clone(&provider),
@@ -91,6 +96,7 @@ impl TestNode {
                 owner: None,
                 plans: Vec::new(),
                 git: None,
+                public_url: None,
             },
             0,
         )

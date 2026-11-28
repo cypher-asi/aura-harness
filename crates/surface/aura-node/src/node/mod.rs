@@ -97,6 +97,7 @@ impl Node {
         state.cloud_node().attach_plans(Arc::clone(&plans));
         if self.config.cloud_node {
             start_claim_socket(&state, &self.config.data_dir, addr.port());
+            state.start_keepalive();
         }
         let app = create_router(state);
 

@@ -194,13 +194,15 @@ fn grant_for_key(key: String, user_id: Option<String>, info: Option<&KeyInfo>) -
     let subject = user_id
         .filter(|id| !id.is_empty())
         .unwrap_or_else(|| key_subject(&key));
+    let now = Utc::now();
     LinkGrant {
         tokens: OAuthTokens {
             access_token: key,
             refresh_token: None,
             id_token: None,
             scope: String::new(),
-            expires_at: Utc::now() + Duration::days(KEY_LIFETIME_DAYS),
+            expires_at: now + Duration::days(KEY_LIFETIME_DAYS),
+            issued_at: Some(now),
         },
         subject: Some(subject),
         label: info.map(|i| i.label.clone()).filter(|l| !l.is_empty()),

@@ -70,6 +70,8 @@ impl VmFleet {
         agent: &str,
         boot: &BootReporter,
     ) -> CloudResult<MachineView> {
+        let gate = Arc::clone(self.wakes.lock().entry(agent.to_string()).or_default());
+        let _one = gate.lock().await;
         let target = self.wake_target(agent)?;
         if target.state == VmState::Destroying {
             return Err(CloudError::BadState {

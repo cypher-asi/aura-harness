@@ -1,0 +1,11 @@
+{
+  "id": "01a2203aedff0004",
+  "title": "what is the current status on all the agents we spawned.",
+  "state": "completed",
+  "agent_id": "49991d2b19ee2a9bdfc3d614920a410240d6510d5002b60b924af7b80f351226",
+  "agent_name": "coordinator",
+  "items": [],
+  "summary": "Two agents are still working: - **FEN6** is waiting for the other copy of itself to push the scroll fix, so it can check it. If that copy goes quiet, FEN6 finishes the fix itself. - **RUS197** is building the to-dos panel.",
+  "updated_ms": 1795837073257,
+  "created_ms": 1795837062655
+}

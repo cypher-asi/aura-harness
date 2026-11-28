@@ -111,6 +111,65 @@ async fn send_queued_now_cancels_the_turn_and_runs_the_message_next() {
     assert!(state.queued.is_empty());
 }
 
+/// Holds a run's write-up until the test drops `release`; tells
+/// `written` once one is done.
+struct HeldWriteUp {
+    release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+    written: std::sync::mpsc::Sender<()>,
+}
+
+impl aura_agent_trace::TraceSink for HeldWriteUp {
+    fn meta(&self, _: &aura_agent_trace::RunMeta) {}
+    fn steps(&self, _: &str, _: &[aura_core_types::trace::Step]) {}
+    fn rewards(&self, _: &str, _: &[aura_core_types::trace::Reward]) {}
+    fn records(&self, _: &str, _: &[aura_agent_trace::RecordRow]) {}
+    fn summary(&self, _: &str, _: &aura_agent_trace::RunScorecard) {
+        let release = self.release.lock().unwrap();
+        let _ = release.recv_timeout(Duration::from_secs(10));
+        let _ = self.written.send(());
+    }
+}
+
+/// After each turn the agent's run is written up: its scorecard, and its
+/// log rebuilt from the whole run and the runs it spawned, which takes
+/// seconds for a long run. A message sent now doesn't wait for that.
+#[tokio::test]
+async fn send_queued_now_starts_the_message_before_the_run_is_written_up() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+
+    handle_ui_event(&mut state, message(first, "slow start", true), &links).await;
+    handle_ui_event(&mut state, message(first, "urgent", false), &links).await;
+    let (release, held) = std::sync::mpsc::channel();
+    let (written, write_up) = std::sync::mpsc::channel();
+    let run = state.hub.traces.recorder(first).expect("the turn's run");
+    run.add_sink(Arc::new(HeldWriteUp {
+        release: std::sync::Mutex::new(held),
+        written,
+    }));
+
+    // The permit is for the queued message's turn; see
+    // `send_queued_now_cancels_the_turn_and_runs_the_message_next`.
+    handle_ui_event(&mut state, UiEvent::SendQueuedNow(first.to_hex()), &links).await;
+    let finished = next_done(&mut done).await;
+    fixture.gate.add_permits(1);
+    handle_work_done(&mut state, finished).await;
+    assert!(state.hub.is_running(first), "the queued message started");
+    assert!(
+        write_up.try_recv().is_err(),
+        "before the cancelled turn was written up"
+    );
+
+    drop(release);
+    write_up.recv_timeout(Duration::from_secs(10)).unwrap();
+    let finished = next_done(&mut done).await;
+    handle_work_done(&mut state, finished).await;
+}
+
 #[tokio::test]
 async fn send_queued_now_with_nothing_queued_leaves_the_turn_alone() {
     let (fixture, _commands) = fixture();

@@ -22,13 +22,18 @@ impl CloudHub {
             what: "machine",
             name: hex.clone(),
         })?;
-        if !view.state.is_asleep() {
-            self.copy_before_sleep(agent).await;
-        }
+        let copied = if view.state.is_asleep() {
+            None
+        } else {
+            Some(self.copy_before_sleep(agent).await)
+        };
         if let Some(link) = self.links.lock().remove(&hex) {
             link.stop.cancel();
         }
         self.fleet.provider().hibernate(&view.machine.name).await?;
+        if let Some(copied) = copied {
+            self.note_slept(&hex, copied);
+        }
         self.fleet.poll().await;
         Ok(())
     }
