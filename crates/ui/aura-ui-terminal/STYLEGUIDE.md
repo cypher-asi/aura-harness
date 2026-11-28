@@ -323,6 +323,33 @@ under a fold arrow, then the timeline, newest first.
   drawn, and where the first label of a run of them comes back, a blank
   row sets the next record apart
 - **Steps**: markers `faint`, the whole line `muted`
+- **Empty channel**: an open channel with nothing said yet shows a
+  welcome from its coordinator, drawn by the UI and never posted. At the
+  top is the slug in block letters in bold `primary`, then a blank row.
+  Under that is the coordinator's code (else its name) in bold `primary`,
+  as a post's author label. Last come two `text` paragraphs: what the
+  channel is for (its description, else its title) and how to get
+  started. The letters come from a built-in five-pixel font for
+  `a-z 0-9 -` with square pixels. Large letters use `██` per pixel and
+  small ones use half blocks (`▀ ▄ █`). The banner gets only the rows
+  the words leave. It takes the first of these that fits: large on one
+  line, small on one line, small broken after the slug's hyphens (at
+  most three lines, a blank row apart), or plain `#slug` cut with `…`.
+  It never wraps mid-glyph or runs past the text area. The first post
+  or message replaces it with the chat.
+
+```text
+│  ▀▀▀█ ▄▀▀▄ █▀▀▄ █▀▀▀                         │
+│   ▄▀  █  █ █  █ █▀▀                          │
+│  ▀▀▀▀  ▀▀  ▀▀▀  ▀▀▀▀                         │
+│                                              │
+│  CO1                                         │
+│  Welcome to #zode. Ship it.                  │
+│                                              │
+│  Tell me what you need and I'll hand it to   │
+│  an agent, or @mention a member to ask them  │
+│  directly.                                   │
+```
 - **Live tail**: while a turn runs, the working line flush with the
   reply: `⬢` in `success`, the label bold `foreground`, the elapsed time
   `muted`. The to-do list is never part of the conversation.
@@ -468,4 +495,6 @@ Mono has no glyphs for them, and HOST's `🖥` as a square box left of the
 `*` box with a screen on a stand centered in it, across and down, and
 BENCH's `🔧` as a square box at the agents bar's end with an upright
 open-end wrench centered in it. Hovering either shows its name in a box
-under it, over the grid.
+under it, over the grid. An empty channel's banner stays on the grid,
+each block character filling its cell as a solid quad, while its
+welcome's words are set in the prose face, as posts are.
