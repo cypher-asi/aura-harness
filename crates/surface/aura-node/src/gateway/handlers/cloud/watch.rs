@@ -66,6 +66,18 @@ async fn watch_processes(state: &RouterState, tx: &mpsc::UnboundedSender<MeshFra
     }
 }
 
+/// `GET /v1/cloud/processes`: what [`node_processes`] finds now, the
+/// node's own answer to whether a turn or a spawned agent runs here,
+/// whoever started it. The hub asks before it restarts the node.
+pub(in crate::gateway) async fn processes_handler(
+    State(state): State<RouterState>,
+) -> ApiResult<impl IntoResponse> {
+    if !state.cloud.enabled() {
+        return Err(not_cloud());
+    }
+    Ok(Json(node_processes(&state, &mut HashMap::new())))
+}
+
 /// The hosted agents' turns under way and the agents they spawned, in a
 /// stable order. `first_seen` dates the spawned agents' rows.
 pub(super) fn node_processes(

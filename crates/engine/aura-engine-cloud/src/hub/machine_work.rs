@@ -111,6 +111,15 @@ impl CloudHub {
         }
     }
 
+    /// Whether `hex`'s node said on its socket that it runs something:
+    /// `None` until the socket said anything since it opened.
+    pub(super) fn reported_running(&self, hex: &str) -> Option<bool> {
+        self.work
+            .lock()
+            .get(hex)
+            .map(|work| work.rows.iter().any(MeshProcess::is_running))
+    }
+
     /// Forget what `hex`'s node said, once its socket is gone.
     pub(super) fn forget_processes(&self, hex: &str) {
         self.work.lock().remove(hex);
