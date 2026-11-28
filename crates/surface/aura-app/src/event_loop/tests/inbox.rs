@@ -11,7 +11,7 @@ use aura_ui::events::MessageRole;
 /// A channel `#site` with the fixture's second agent as a member, as
 /// a member joins: top-level, the coordinator having brought it in.
 /// Returns the coordinator.
-async fn channel_with_member(fixture: &Fixture) -> AgentId {
+pub(super) async fn channel_with_member(fixture: &Fixture) -> AgentId {
     let channel = channels::create_channel(
         &fixture.hub,
         NewChannel {
@@ -28,7 +28,7 @@ async fn channel_with_member(fixture: &Fixture) -> AgentId {
     channel.coordinator
 }
 
-fn code(fixture: &Fixture, agent: AgentId) -> String {
+pub(super) fn code(fixture: &Fixture, agent: AgentId) -> String {
     lock_registry_agent(fixture, agent).code.unwrap()
 }
 
@@ -89,7 +89,7 @@ async fn an_assignment_runs_as_the_members_task_and_its_report_reaches_the_coord
 
 /// The coordinator assigns the member whose code is `worker` the footer
 /// links, as todo 3, and says to whom the work went.
-async fn assign_footer(fixture: &Fixture, coordinator: AgentId, worker: &str) -> String {
+pub(super) async fn assign_footer(fixture: &Fixture, coordinator: AgentId, worker: &str) -> String {
     assign_footer_asking(fixture, coordinator, worker, "Make the footer links work.").await
 }
 

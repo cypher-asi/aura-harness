@@ -62,6 +62,7 @@ mod ended;
 mod ended_tests;
 mod forward;
 mod machine;
+mod member_start;
 mod moving;
 mod placement;
 mod publish;
@@ -79,7 +80,8 @@ use machine::MachineRows;
 pub(super) use machine::{list_sandbox, read_sandbox_file, refresh_machine_plans, MachinePlans};
 use moving::MoveMark;
 pub(super) use placement::{
-    handle_host_action, handle_set_placement, handle_setup, on_archive, start_in_cloud,
+    handle_host_action, handle_set_placement, handle_setup, on_archive, refresh_reach,
+    start_in_cloud,
 };
 pub(super) use publish::start;
 use publish::start_publisher;
@@ -336,6 +338,9 @@ async fn ensure_hub(
         .map(|agent| agent.agent_id().to_hex())
         .collect();
     hub.start_reported(&keep, boot).await;
+    // Reaches live on the hub only: what members mail goes through the
+    // inbox from the start.
+    crate::event_loop::inbox::refresh_reach(&state.hub, &hub).await;
     *state.cloud.shared.hub.lock() = Some(Arc::clone(&hub));
     state
         .processes

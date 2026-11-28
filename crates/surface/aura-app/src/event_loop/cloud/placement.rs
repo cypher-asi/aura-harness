@@ -125,14 +125,22 @@ pub(in crate::event_loop) async fn start_in_cloud(state: &mut LoopState<'_>, age
     // A channel without a project it can use keeps its members in the
     // launch project, whose folder is not theirs to take to a machine.
     if lock(&state.hub.hidden_members).contains(&agent) {
+        state.hub.standing.clear(agent);
         system(state, agent, local_instead(agent, NO_PROJECT_FOLDER)).await;
         return;
     }
     let ui = AgentUi::new(state.commands.clone(), agent);
-    let console = BootConsoleUi::new(ui, "Starting in the cloud");
+    let watch = member_start::boot_watch(&state.hub, agent);
+    let console = BootConsoleUi::new(ui, "Starting in the cloud").with_watch(watch);
     let why = match connect(state, Some(&console)).await {
         Ok(hub) => match place_request(state, &hub, agent) {
             Some(request) => {
+                let slow = member_start::report_slow_start(
+                    Arc::clone(&state.hub),
+                    agent,
+                    member_start::SLOW_START,
+                );
+                tokio::spawn(slow);
                 let mark = MoveMark::take(&state.cloud.shared, agent);
                 place(state, hub, request, console, mark);
                 return;
@@ -142,8 +150,17 @@ pub(in crate::event_loop) async fn start_in_cloud(state: &mut LoopState<'_>, age
         Err(why) => why,
     };
     let note = local_instead(agent, &why);
+    member_start::start_ended(&state.hub, agent, false, &note);
     if !console.end(false, note.clone()).await {
         system(state, agent, note).await;
+    }
+}
+
+/// Bring the reach of every placed channel member up to date
+/// ([`crate::event_loop::inbox::refresh_reach`]), when the hub is up.
+pub(in crate::event_loop) async fn refresh_reach(state: &LoopState<'_>) {
+    if let Some(hub) = state.cloud.hub() {
+        crate::event_loop::inbox::refresh_reach(&state.hub, &hub).await;
     }
 }
 
@@ -176,6 +193,7 @@ fn place(
     state.idle.remove(&agent);
     state.hub.traces.close(agent);
     let ui = AgentUi::new(state.commands.clone(), agent);
+    let app = Arc::clone(&state.hub);
     tokio::spawn(async move {
         let (boot, events) = BootReporter::channel();
         let shown = console.pump(events);
@@ -194,6 +212,9 @@ fn place(
             Err(err) => (false, format!("Could not move the agent to the cloud: {err}")),
         };
         info!(%agent, %note, "placement");
+        // A new member that could not start there works here instead.
+        let told = format!("{note} — it works on this computer instead.");
+        member_start::start_ended(&app, agent, ok, &told);
         console.end(ok, note).await;
         // After the console's last line, so queued work shows below it.
         drop(mark);

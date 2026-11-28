@@ -406,6 +406,8 @@ pub struct AgentHub {
     pub(crate) channel_chat: super::channels::ChannelChat,
     /// What agents owe each other through their inboxes.
     pub(crate) inbox: super::inbox::Inbox,
+    /// Why each agent that isn't working is idle, for its peers.
+    pub(crate) standing: super::standing::Standings,
     /// Where each channel member is in the software factory's plan, build,
     /// ship flow.
     pub(crate) factory_flows: super::factory::Flows,

@@ -173,7 +173,7 @@ pub(crate) fn add_agent(
         lock(&hub.hidden_members).insert(agent_id);
     }
     if channel.placement == ChannelPlacement::Cloud {
-        lock(&hub.cloud_starts).insert(agent_id);
+        mark_cloud_start(hub, agent_id);
     }
     drop(registry);
     if let Some(workspace) = workspace {
@@ -228,4 +228,18 @@ pub(crate) fn join_or_warn(hub: &AgentHub, child: &RegisteredAgent) {
             "Could not add a spawned agent to its parent's channel"
         );
     }
+}
+
+/// Have `agent`, a new member of a channel whose agents run in the cloud,
+/// move to a machine before its first work; its peers see it starting
+/// from now, not idle.
+fn mark_cloud_start(hub: &AgentHub, agent: AgentId) {
+    lock(&hub.cloud_starts).insert(agent);
+    hub.standing.set(
+        agent,
+        crate::event_loop::standing::Standing::Starting {
+            stage: None,
+            waiting: None,
+        },
+    );
 }

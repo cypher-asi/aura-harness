@@ -179,3 +179,72 @@ fn machine_request(from: AgentId, to: AgentId, text: &str) -> aura_engine::Remot
         text: text.into(),
     }
 }
+
+#[tokio::test]
+async fn a_cloud_members_undelivered_request_is_told_to_it() {
+    use crate::cloud::hub::MailDesk;
+    let mut hooked = member_hooks().await;
+    let (coordinator, member) = (hooked.coordinator, hooked.member);
+    let hub = Arc::clone(&hooked.fixture.hub);
+    let desk = MachineMail(Arc::downgrade(&hub));
+
+    // Its machine drops the ack: before, the log was all that was left.
+    desk.refused(
+        &machine_request(member, coordinator, "Re-review, please"),
+        "the thread is full",
+    );
+    let [told] = take_all(&mut hooked.notices).try_into().unwrap();
+    assert_eq!(told.to, member);
+    assert_eq!(told.inbox, None, "a harness notice, answered by no one");
+    let coordinator_code = code_of(&hooked.fixture, coordinator);
+    assert!(told.prompt.contains(&coordinator_code), "{}", told.prompt);
+    assert!(told
+        .prompt
+        .contains("about \"Footer\" was not delivered: the thread is full"));
+}
+
+#[tokio::test]
+async fn a_peers_state_says_why_it_is_idle() {
+    use crate::event_loop::standing::Standing;
+    let hooked = member_hooks().await;
+    let hub = Arc::clone(&hooked.fixture.hub);
+    let coordinator = PeerHooks::new(link(&hooked.fixture), hooked.coordinator, None);
+    let member = code_of(&hooked.fixture, hooked.member);
+    let state = || async { coordinator.snapshot(&member).await.unwrap() };
+
+    let idle = state().await;
+    assert_eq!(
+        (idle["working"].clone(), idle["state"].clone()),
+        (false.into(), "idle".into())
+    );
+    assert!(idle.get("why").is_none());
+
+    hub.standing.set(
+        hooked.member,
+        Standing::Starting {
+            stage: None,
+            waiting: None,
+        },
+    );
+    hub.standing.note_boot(
+        hooked.member,
+        Some("Project snapshot"),
+        Some("boxd is building it"),
+    );
+    let starting = state().await;
+    assert_eq!(starting["state"], "starting in the cloud");
+    assert_eq!(starting["why"], "Project snapshot: boxd is building it");
+    assert!(starting["since_ms"].as_u64().is_some());
+
+    hub.standing.clear(hooked.member);
+    hub.standing.set_queued(hooked.member, 1);
+    assert_eq!(state().await["state"], "queued");
+
+    hub.standing
+        .set(hooked.member, Standing::FailedToStart("no model".into()));
+    let failed = state().await;
+    assert_eq!(
+        (failed["state"].clone(), failed["why"].clone()),
+        ("failed to start".into(), "no model".into())
+    );
+}

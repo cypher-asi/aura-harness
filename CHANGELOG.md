@@ -7,6 +7,41 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Channel members no longer stall silently
+
+##### Fixed
+
+- A message one cloud member sends another now always goes through this
+  computer's inbox. Before, a member's peers were known only once its own
+  turn started, were forgotten when the app restarted, and were never
+  known for agents it spawned on its machine. Mail outside that list went
+  straight to the other member's machine. There it either started a turn
+  this computer never saw, so the next message started a second session
+  of the same agent, or it was only written to the agent's log and never
+  read. Peers are now refreshed as the cloud comes up and as members
+  join, and an agent spawned on a member's machine reaches the same
+  peers, its messages sent as the member's.
+- A message that can't be delivered now tells its sender why, in place
+  of a line in the log.
+- A cloud machine no longer starts a second run for an agent that is
+  already mid-turn there. This computer waits for that turn to end
+  ("Waiting for the turn already running on its machine"), then starts
+  its own.
+- A new member that is slow to start in the cloud (15 minutes), or fails
+  to, now tells whoever assigned it the work. So does work that can't
+  start at all, which gives up the reports it owed instead of leaving
+  them waiting.
+- Once a minute the app looks for members that owe a report but have
+  nothing running or queued. Each is asked once to carry on, then its
+  reports are given up as stalled. Members you stopped yourself are left
+  alone until their next turn.
+
+##### Added
+
+- `list_agents` and `get_agent_state` give each peer a `state`:
+  `working`, `starting in the cloud`, `queued`, `idle`, `failed to start`
+  or `stalled`, with `why` and `since_ms` where they apply.
+
 ### An empty channel opens on a welcome
 
 ##### Added

@@ -72,6 +72,20 @@ pub(crate) fn give_up_seen(
     }
 }
 
+/// Give up everything `agent_id` owes, its work having not even started,
+/// `why`, telling each sender. Returns how many it owed.
+pub(crate) fn give_up_all(hub: &AgentHub, agent_id: AgentId, why: &str) -> usize {
+    let owed = lock(&hub.inbox.state)
+        .owed
+        .remove(&agent_id)
+        .unwrap_or_default();
+    let why = capped(why, STOPPED_CHARS);
+    for owed in &owed {
+        reply(hub, agent_id, owed, false, &stopped(&why, None));
+    }
+    owed.len()
+}
+
 /// The reply of work that stopped `why`, having said `said` last.
 fn stopped(why: &str, said: Option<&str>) -> String {
     match said {

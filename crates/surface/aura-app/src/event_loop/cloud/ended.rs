@@ -66,6 +66,7 @@ async fn settle(state: &LoopState<'_>, agent: AgentId, outcome: TurnOutcome, how
         (Some(_), messages) if interrupted => {
             channels::drop_unanswered_from(state, agent, messages);
             info!(%agent, "The user stopped the cloud turn; its inbox answers wait for the next one");
+            state.hub.inbox.park(agent);
         }
         (Some(why), messages) => {
             channels::drop_unanswered_from(state, agent, messages);
