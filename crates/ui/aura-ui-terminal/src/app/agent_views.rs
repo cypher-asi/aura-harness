@@ -113,16 +113,11 @@ const fn is_busy(state: AppState) -> bool {
     matches!(state, AppState::Processing | AppState::AwaitingApproval)
 }
 
-/// Whether the input line holds an answer to a prompt (an email, a
-/// password, a sign-in code) instead of the chat's draft.
+/// Whether the input holds a prompt's answer (an email, a password, a
+/// code, a key), not the chat's draft.
 const fn input_is_prompt_answer(state: AppState) -> bool {
-    matches!(
-        state,
-        AppState::LoginEmail
-            | AppState::LoginPassword
-            | AppState::LinkCode
-            | AppState::IntegrationInput
-    )
+    use AppState::{IntegrationInput as Key, LinkCode as Code, LoginEmail, LoginPassword};
+    matches!(state, LoginEmail | LoginPassword | Code | Key)
 }
 
 impl App {
