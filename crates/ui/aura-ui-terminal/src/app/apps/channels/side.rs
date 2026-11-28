@@ -261,6 +261,12 @@ impl App {
         self.channels.merge_queues.get(id)
     }
 
+    /// The merge queue of channel `id`'s repo, once the session sent it.
+    #[must_use]
+    pub(crate) fn channel_queue(&self, id: &str) -> Option<&MergeQueueView> {
+        self.channels.merge_queues.get(id)
+    }
+
     /// Keep the merge queue of channel `channel_id`'s repo, for its QUEUE
     /// tab, in place of the one before.
     pub(in crate::app) fn set_merge_queue(&mut self, channel_id: String, queue: MergeQueueView) {

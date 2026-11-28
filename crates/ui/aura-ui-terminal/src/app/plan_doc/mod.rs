@@ -8,8 +8,13 @@
 //! and todos from the frontmatter, and any other Markdown file reads as its
 //! own body under a title from its first heading or its file name.
 
+mod facts;
 mod frontmatter;
+mod origin;
 mod parse;
+
+pub(crate) use facts::{Fact, FactTone, PlanFacts};
+pub use origin::PlanOrigin;
 
 use frontmatter::read_frontmatter;
 use parse::{from_frontmatter, from_header, front_todos, header_end, sanitize, split_frontmatter};
@@ -48,6 +53,8 @@ pub struct PlanDoc {
     pub overview: String,
     /// The todo checklist, in plan order
     pub todos: Vec<PlanTodo>,
+    /// When, by whom and where it was written, as far as it says
+    pub origin: PlanOrigin,
     /// What the author wrote after the generated header, as Markdown
     pub body: String,
     /// Index in `todos` of the todo the view was opened at
@@ -81,8 +88,9 @@ pub(super) enum TodoFocus<'a> {
 /// again.
 #[derive(Debug, Default)]
 pub(crate) struct PlanLayout {
-    /// Text width, whether text is on the cell grid, and the theme's name
-    pub(crate) key: Option<(usize, bool, String)>,
+    /// Text width, whether text is on the cell grid, the theme's name,
+    /// and a hash of the facts shown under the title
+    pub(crate) key: Option<(usize, bool, String, u64)>,
     /// One screen row each
     pub(crate) lines: Vec<Line<'static>>,
     /// Per row: `Some` of its indent columns when it is prose
@@ -136,6 +144,7 @@ impl PlanDoc {
             title: doc.title,
             overview: doc.overview,
             todos: doc.todos,
+            origin: PlanOrigin::from_frontmatter(&meta),
             body: doc.body,
             focus: None,
             scroll_to_focus: false,
@@ -249,6 +258,15 @@ impl App {
             view.jump_to(line);
         }
         self.open_detail(DetailView::File(Box::new(view)));
+    }
+
+    /// The open plan document, if one is open.
+    #[must_use]
+    pub(crate) fn plan_view(&self) -> Option<&PlanDoc> {
+        match self.detail.view.as_ref() {
+            Some(DetailView::Plan(doc)) => Some(doc.as_ref()),
+            _ => None,
+        }
     }
 
     /// The open plan document and the view's scroll, for drawing it.

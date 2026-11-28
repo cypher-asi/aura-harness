@@ -201,3 +201,31 @@ fn plan_files_are_recognized_by_their_suffix() {
     assert!(is_plan_file(Path::new(".aura/plans/a_1.plan.md")));
     assert!(!is_plan_file(Path::new("README.md")));
 }
+
+#[test]
+fn the_origin_keys_are_read_and_old_plans_have_none() {
+    let doc = parse(
+        "---\nname: Meta\ncreated_at: '2026-11-28T14:32:00Z'\nupdated_at: \"2026-11-28T15:00:00+01:00\"\n\
+         author: ab12\nmodel: claude-opus\nmachine: aura-rus199-12b4\ntodos: []\n---\n\nBody.\n",
+    );
+    let at =
+        |h, m| chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 11, 28, h, m, 0).unwrap();
+    assert_eq!(
+        doc.origin,
+        PlanOrigin {
+            created_at: Some(at(14, 32)),
+            updated_at: Some(at(14, 0)),
+            author: Some("ab12".to_string()),
+            model: Some("claude-opus".to_string()),
+            machine: Some("aura-rus199-12b4".to_string()),
+        }
+    );
+    let old = parse("---\nname: Old\ntodos:\n- id: a\n  content: first\n---\n\nBody.\n");
+    assert_eq!(old.origin, PlanOrigin::default());
+    let bad = parse("---\nname: Bad\ncreated_at: yesterday\nauthor: ''\n---\n");
+    assert_eq!(
+        bad.origin,
+        PlanOrigin::default(),
+        "unreadable keys are left out"
+    );
+}
