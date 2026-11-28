@@ -43,10 +43,12 @@
 //! be picked.
 
 mod fold;
+mod history;
 mod list;
 mod side;
 mod welcome;
 
+pub(crate) use history::{HistoryItem, HISTORY_ROWS};
 pub(crate) use side::CHANNEL_MEMBER_ROWS;
 pub(crate) use welcome::ChannelWelcome;
 
@@ -94,6 +96,8 @@ pub(crate) struct ChannelState {
     merge_queues: HashMap<String, MergeQueueView>,
     /// How far the QUEUE side tab is scrolled
     queue_scroll: InfoScroll,
+    /// The HISTORY side tab: where it is, and its summaries
+    history: history::HistoryState,
     /// The side tab shown before the channel opened, shown again when it
     /// closes
     side_tab_before: Option<SidePanelTab>,
@@ -165,6 +169,12 @@ impl ChannelState {
         self.rows_area = None;
         self.new_channel_area = None;
         self.member_rows_area = None;
+        self.history.forget_area();
+    }
+
+    /// Posts of channel `channel_id`, oldest first.
+    fn posts_of(&self, channel_id: &str) -> &[ChannelPostView] {
+        self.posts.get(channel_id).map_or(&[], Vec::as_slice)
     }
 }
 
@@ -348,6 +358,7 @@ impl App {
             self.channels.member_scroll = 0;
             self.channels.info_scroll = InfoScroll::default();
             self.channels.queue_scroll = InfoScroll::default();
+            self.channels.history.reset();
         }
         self.apps.channel = Some(id.to_string());
         self.channels.selected = row;

@@ -60,6 +60,7 @@ impl AgentHub {
         for row in &mut rows {
             if let Ok(agent_id) = AgentId::from_hex(&row.id) {
                 self.mark_plan_mode(agent_id, row);
+                self.mark_status(agent_id, row);
             }
         }
         rows
@@ -223,6 +224,7 @@ impl AgentHub {
         rows.read_activity(self.factory.store.as_ref(), &mut lock(&self.last_active));
         for (agent_id, row) in rows.listed.iter_mut().chain(rows.archived.iter_mut()) {
             self.mark_plan_mode(*agent_id, row);
+            self.mark_status(*agent_id, row);
         }
         // After the rows are complete, so the members' copies carry the
         // same activity and mode. The member set is copied out so the two

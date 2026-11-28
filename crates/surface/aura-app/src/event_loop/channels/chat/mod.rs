@@ -284,6 +284,8 @@ async fn post_from_user(
     };
     let post = append(&state.hub, &channel.id, new).await?;
     send_post(state.commands, &state.hub, channel.coordinator, &post).await;
+    let mine = vec![(post.seq, post.text.clone())];
+    super::summaries::spawn_for(state, channel.coordinator, &channel.id, mine);
     Some(post.seq)
 }
 

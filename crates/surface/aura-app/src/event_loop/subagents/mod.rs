@@ -95,6 +95,7 @@ mod lists;
 mod running;
 mod setup;
 mod spawn;
+mod status;
 mod subtask;
 mod task_run;
 mod task_tool;
@@ -409,6 +410,11 @@ pub struct AgentHub {
     /// Where each channel member is in the software factory's plan, build,
     /// ship flow.
     pub(crate) factory_flows: super::factory::Flows,
+    /// Which agents failed and why, and which are starting on a cloud
+    /// machine, for their rows ([`status::AgentStatus`])
+    pub(crate) status: status::AgentStatus,
+    /// One-line summaries of the user's long channel posts, kept on disk
+    pub(crate) post_summaries: Arc<super::channels::summaries::PostSummaries>,
     /// The chats of the agents shown last, as read from their records
     pub(super) shown_chats: Mutex<crate::record_loader::ByHead<Vec<MessageData>>>,
     /// The Record panel rows of the agents shown last

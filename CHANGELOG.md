@@ -20,6 +20,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the author and the machine. Plans from before still load, and they
   show only the facts the app can work out.
 
+### A cloud channel's members start in the cloud or fail, in red
+
+##### Fixed
+
+- A new member of a channel whose agents run in the cloud now works
+  only on a cloud machine. Before, it could sit idle forever, owing its
+  report: its first work waited for a machine start with no deadline,
+  and a start that never finished left it waiting. A start that takes
+  longer than 20 minutes now fails. A start that fails, or can't begin
+  (no project folder to start from, no connection to the cloud), fails
+  the member too, instead of quietly running it on this computer. Its
+  queued work is dropped, and whoever assigned it the work gets
+  `ok=false` with the reason right away.
+- An agent whose turn failed, or whose cloud start failed, shows it in
+  red, the Stop button's color, on its PROJECTS row and its channel
+  MEMBERS row, until its next turn starts. Its chat says why.
+
+##### Added
+
+- A member whose cloud machine is starting reads "Starting in the
+  cloud…" on MEMBERS instead of "Idle".
+
 ### An empty channel opens on a welcome
 
 ##### Added

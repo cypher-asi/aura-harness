@@ -487,9 +487,13 @@ pub enum UiCommand {
         posts: Vec<ChannelPostView>,
     },
 
+    /// Summaries of a channel's long posts by `seq`, for its HISTORY tab
+    SetPostSummaries {
+        channel_id: String,
+        summaries: Vec<(u64, String)>,
+    },
     /// The merge queue of a channel's repo, for its QUEUE tab
     SetMergeQueue {
-        /// Channel id
         channel_id: String,
         queue: crate::events::MergeQueueView,
     },

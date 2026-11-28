@@ -481,6 +481,9 @@ pub(super) fn rows(
                 code: agent.code.clone(),
                 subtitle: agent.subtitle.clone(),
                 title: agent.title.clone(),
+                // The registry does not know how work went; the hub does.
+                error: None,
+                starting: false,
             };
             (agent_id, row)
         })
