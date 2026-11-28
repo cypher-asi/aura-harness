@@ -204,6 +204,30 @@ async fn a_cloud_members_undelivered_request_is_told_to_it() {
 }
 
 #[tokio::test]
+async fn a_request_resent_after_a_reconnect_is_told_undelivered_once() {
+    use crate::cloud::hub::MailDesk;
+    let mut hooked = member_hooks().await;
+    let (coordinator, member) = (hooked.coordinator, hooked.member);
+    let hub = Arc::clone(&hooked.fixture.hub);
+    let desk = MachineMail(Arc::downgrade(&hub));
+    let mail = machine_request(member, coordinator, "Re-review, please");
+
+    // The machine resends it after each reconnect, and each is refused.
+    for _ in 0..3 {
+        desk.refused(&mail, "the thread is full");
+    }
+    assert_eq!(take_all(&mut hooked.notices).len(), 1, "told once");
+
+    // One that gets through makes a later refusal news again.
+    desk.file(machine_request(member, coordinator, "Thanks"))
+        .await
+        .unwrap();
+    let _filed = take_all(&mut hooked.notices);
+    desk.refused(&mail, "the thread is full");
+    assert_eq!(take_all(&mut hooked.notices).len(), 1, "told again");
+}
+
+#[tokio::test]
 async fn a_peers_state_says_why_it_is_idle() {
     let hooked = member_hooks().await;
     let hub = Arc::clone(&hooked.fixture.hub);

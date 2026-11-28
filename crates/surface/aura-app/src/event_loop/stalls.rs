@@ -100,5 +100,8 @@ fn give_up(state: &LoopState<'_>, agent: AgentId) {
     warn!(%agent, "Stall sweep: still idle after a retry; its reports are given up");
     super::inbox::give_up_all(&state.hub, agent, WENT_IDLE);
     state.hub.status.fail(agent, WENT_IDLE);
+    // A failed member's plan or build won't carry on: its next task
+    // starts the software factory afresh, as after a failed cloud start.
+    state.hub.factory_flows.leave(agent);
     state.hub.standing.stall(agent);
 }
