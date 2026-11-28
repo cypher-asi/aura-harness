@@ -6,6 +6,7 @@ pub(super) mod boot;
 pub(super) mod channels;
 pub(super) mod hud;
 pub(super) mod mail;
+pub(super) mod merge_queue;
 pub(super) mod messages;
 pub(super) mod plans;
 pub(super) mod policies;

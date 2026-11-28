@@ -155,10 +155,23 @@ run_band "§2" "append_entry_* used outside the kernel / store crates / tests" \
 #     machine's workspace for that patch, staging it in a scratch
 #     `GIT_INDEX_FILE` (`add`, `write-tree`). No commit, push, or call to
 #     a remote.
+#   * `crates/exec/aura-exec-merge-queue/src/git.rs` — the merge queue
+#     landing pushes in a worktree of its own: fetch into private refs,
+#     rebase, non-forced push of the checked result to the target branch.
+#     Closed subcommand allowlist; declared exception in docs/invariants.md.
 #   * Test files.
 run_band "§1" "Command::new(\"git\") outside the GitExecutor / declared exceptions" \
     'Command::new\("git"\)' \
-    '^(crates/exec/aura-exec-tools/src/git_tool/|crates/agent/aura-agent/src/git\.rs|crates/surface/aura-app/src/isolation/mod\.rs|crates/surface/aura-app/src/isolation/changes/mod\.rs|crates/surface/aura-node/src/gateway/handlers/safe_workspace/git\.rs|crates/engine/aura-engine-cloud/src/delta\.rs|crates/engine/aura-engine-cloud/src/hub/pull\.rs|crates/surface/aura-node/src/gateway/handlers/cloud/patch\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/exec/aura-exec-tools/src/git_tool/|crates/exec/aura-exec-merge-queue/src/git\.rs|crates/agent/aura-agent/src/git\.rs|crates/surface/aura-app/src/isolation/mod\.rs|crates/surface/aura-app/src/isolation/changes/mod\.rs|crates/surface/aura-node/src/gateway/handlers/safe_workspace/git\.rs|crates/engine/aura-engine-cloud/src/delta\.rs|crates/engine/aura-engine-cloud/src/hub/pull\.rs|crates/surface/aura-node/src/gateway/handlers/cloud/patch\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+
+# §1 — `sh -c` processes run only where a command is the point: the
+# command tool (`fs_tools/cmd/spawn.rs`, `confine.rs`), the verify runner,
+# the evals, and the merge queue's build and test checks
+# (`aura-exec-merge-queue/src/checks.rs`, run in the queue's own worktree
+# in a process group of their own). Declared in docs/invariants.md.
+run_band "§1" "Command::new(\"sh\") outside the declared command runners" \
+    'Command::new\("sh"\)' \
+    '^(crates/exec/aura-exec-tools/src/fs_tools/cmd/spawn\.rs|crates/exec/aura-exec-tools/src/confine\.rs|crates/agent/aura-agent/src/verify/runner/mod\.rs|crates/surface/aura-cli/src/evals/run\.rs|crates/exec/aura-exec-merge-queue/src/checks\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §1 — the git subcommands `changes/mod.rs` runs outside its tests (the first
 # literal of each `.arg(` / `.args([`) stay in the local-only set its row in

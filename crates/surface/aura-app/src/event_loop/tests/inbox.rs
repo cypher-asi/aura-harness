@@ -175,13 +175,12 @@ async fn a_new_member_of_a_cloud_channel_without_a_project_works_here_and_says_w
             _ => None,
         })
         .collect();
-    assert_eq!(
-        why,
-        [
-            "The channel has no project folder for a cloud machine to start from — it works on \
-          this computer instead."
-        ],
-    );
+    // Then the software factory: its task starts with a plan.
+    let [placed, planning] = why.as_slice() else {
+        panic!("{why:?}");
+    };
+    assert!(placed.starts_with("The channel has no project folder for a cloud machine"));
+    assert!(planning.starts_with("Plan mode:"), "{planning}");
 }
 
 #[tokio::test]

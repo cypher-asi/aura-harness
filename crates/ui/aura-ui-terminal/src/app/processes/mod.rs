@@ -178,6 +178,7 @@ impl App {
                     SidePanelTab::Tasks => self.task_list.select(index),
                     SidePanelTab::ChannelMembers => self.select_channel_member(index),
                     SidePanelTab::ChannelInfo => self.handle_channel_info_key(key),
+                    SidePanelTab::ChannelQueue => self.handle_channel_queue_key(key),
                 }
             }
             (SidePanelTab::Sandbox, KeyCode::Char(' ')) => self.sandbox.toggle_selected(),
@@ -330,7 +331,7 @@ impl App {
             }
             SidePanelTab::Tasks => self.click_task_row(column, row),
             SidePanelTab::ChannelMembers => self.click_channel_member(column, row),
-            SidePanelTab::ChannelInfo => {}
+            SidePanelTab::ChannelInfo | SidePanelTab::ChannelQueue => {}
         }
     }
 
@@ -398,7 +399,7 @@ impl App {
             SidePanelTab::ChannelMembers => self
                 .channel_member_row_at(column, row)
                 .map(HoverTarget::ChannelMemberRow),
-            SidePanelTab::ChannelInfo => None,
+            SidePanelTab::ChannelInfo | SidePanelTab::ChannelQueue => None,
         }
     }
 }

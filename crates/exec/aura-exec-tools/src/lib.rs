@@ -52,8 +52,8 @@ pub use fs_tools::{
     ProcessTags, ThresholdResult, AGENT_ID_VAR, HARNESS_PID_VAR, TOOL_USE_ID_VAR,
 };
 pub use git_tool::{
-    GitCommitPushTool, GitCommitTool, GitPushTool, GIT_LOCAL_TOOL_NAMES, GIT_REMOTE_TOOL_NAMES,
-    GIT_TOOL_NAMES,
+    GitCommitPushTool, GitCommitTool, GitPushTool, GitShipTool, GIT_LOCAL_TOOL_NAMES,
+    GIT_REMOTE_TOOL_NAMES, GIT_TOOL_NAMES, PROTECTED_BRANCHES,
 };
 pub use http_tool::{HttpAuthSource, HttpMethod, HttpToolDefinition, HttpToolDefinitionBuilder};
 pub use intent_classifier::{ClassifierError, IntentClassifier};
@@ -279,7 +279,7 @@ pub struct ToolConfig {
     /// tries") rather than three-plus so a dead remote doesn't burn
     /// the agent's wall-clock budget.
     pub git_push_attempts: u32,
-    /// The only branch `git_push` and `git_commit_push` may update.
+    /// The only branch `git_push`, `git_commit_push` and `git_ship` may update.
     /// A cloud node sets it to its agent's own branch; `None` allows
     /// any branch.
     pub push_branch: Option<String>,

@@ -136,6 +136,7 @@ impl App {
                     SidePanelTab::Tasks => self.task_list.move_by(delta),
                     SidePanelTab::ChannelMembers => self.move_channel_member(delta),
                     SidePanelTab::ChannelInfo => self.scroll_channel_info(delta),
+                    SidePanelTab::ChannelQueue => self.scroll_channel_queue(delta),
                 }
             }
         }
@@ -174,6 +175,7 @@ impl App {
                     SidePanelTab::Tasks => self.task_list.move_by(delta),
                     SidePanelTab::ChannelMembers => self.move_channel_member(delta),
                     SidePanelTab::ChannelInfo => self.scroll_channel_info(delta),
+                    SidePanelTab::ChannelQueue => self.scroll_channel_queue(delta),
                 }
             }
         }

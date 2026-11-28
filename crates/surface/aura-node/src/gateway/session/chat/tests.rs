@@ -225,7 +225,11 @@ fn the_cloud_git_note_names_the_branch_and_the_tools() {
     let note = cloud_git_note("aura/reviewer-re36");
     assert!(note.contains("`aura/reviewer-re36`"), "{note}");
     assert!(
-        note.contains("git_push") && note.contains("gh pr create"),
+        note.contains("git_ship") && note.contains("merge queue") && note.contains("git_push"),
         "{note}"
+    );
+    assert!(
+        !note.contains("gh pr create"),
+        "pushes go through the queue: {note}"
     );
 }

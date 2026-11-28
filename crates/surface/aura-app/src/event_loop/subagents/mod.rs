@@ -406,6 +406,9 @@ pub struct AgentHub {
     pub(crate) channel_chat: super::channels::ChannelChat,
     /// What agents owe each other through their inboxes.
     pub(crate) inbox: super::inbox::Inbox,
+    /// Where each channel member is in the software factory's plan, build,
+    /// ship flow.
+    pub(crate) factory_flows: super::factory::Flows,
     /// The chats of the agents shown last, as read from their records
     pub(super) shown_chats: Mutex<crate::record_loader::ByHead<Vec<MessageData>>>,
     /// The Record panel rows of the agents shown last

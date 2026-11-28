@@ -450,7 +450,9 @@ fn dispatch_turn_to_agent(
 pub(super) fn cloud_git_note(branch: &str) -> String {
     format!(
         "\n\n<cloud_git>\nYou work on branch `{branch}` of a clone of this project's repository. \
-         Commit with git_commit and push with git_push, which only pushes this branch; \
-         open a pull request from it with `gh pr create`. Never push other branches.\n</cloud_git>"
+         When your task is done, call git_ship: it commits every change, pulls main, pushes \
+         this branch and puts it in the merge queue, which merges it into main once the build \
+         and tests pass. git_commit and git_push also work, and only push this branch; every \
+         push goes into the merge queue. Never push other branches.\n</cloud_git>"
     )
 }

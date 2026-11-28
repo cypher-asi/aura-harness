@@ -118,6 +118,8 @@ async fn run_prompt(
         titles,
         context_limit: model.as_deref().map(aura_engine::context_window_for_model),
     };
+    crate::event_loop::factory::hooks::plan_first_in_cloud(&state.hub, agent);
+    state.hub.factory_flows.note_prompt(agent, &prompt.text);
     let ask = TurnAsk {
         prompt: prompt.text,
         model,

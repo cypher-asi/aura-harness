@@ -102,6 +102,7 @@ impl AgentUi {
     /// is one, so a chat rebuilt from the record still shows it.
     fn for_agent(&self, command: UiCommand) -> UiCommand {
         crate::chat_notes::record(self.agent_id, &command);
+        super::factory::observe::record(self.agent_id, &command);
         UiCommand::ForAgent {
             agent_id: self.agent_id.to_hex(),
             command: Box::new(command),

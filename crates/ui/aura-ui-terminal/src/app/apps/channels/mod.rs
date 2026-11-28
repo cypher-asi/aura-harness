@@ -45,7 +45,7 @@ pub(crate) use side::CHANNEL_MEMBER_ROWS;
 
 use crate::app::scroll::InfoScroll;
 use crate::app::{AgentsTab, App, ChatTab, RecordsTab, SidePanelTab};
-use crate::events::{ChannelPostView, ChannelSummary, UiEvent};
+use crate::events::{ChannelPostView, ChannelSummary, MergeQueueView, UiEvent};
 use ratatui::layout::Rect;
 use std::collections::HashMap;
 
@@ -79,6 +79,10 @@ pub(crate) struct ChannelState {
     member_rows_area: Option<Rect>,
     /// How far the INFO side tab is scrolled
     info_scroll: InfoScroll,
+    /// The merge queue of each channel's repo, by channel id
+    merge_queues: HashMap<String, MergeQueueView>,
+    /// How far the QUEUE side tab is scrolled
+    queue_scroll: InfoScroll,
     /// The side tab shown before the channel opened, shown again when it
     /// closes
     side_tab_before: Option<SidePanelTab>,
@@ -320,6 +324,7 @@ impl App {
             self.channels.member_selected = 0;
             self.channels.member_scroll = 0;
             self.channels.info_scroll = InfoScroll::default();
+            self.channels.queue_scroll = InfoScroll::default();
         }
         self.apps.channel = Some(id.to_string());
         self.channels.selected = row;

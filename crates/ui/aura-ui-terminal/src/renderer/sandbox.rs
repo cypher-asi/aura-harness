@@ -104,6 +104,9 @@ fn render_tab(frame: &mut Frame, area: Rect, body: Rect, app: &mut App, theme: &
         SidePanelTab::ChannelInfo => {
             super::channel_side::render_channel_info(frame, area, body, app, theme);
         }
+        SidePanelTab::ChannelQueue => {
+            super::channel_queue::render_channel_queue(frame, area, body, app, theme);
+        }
     }
 }
 

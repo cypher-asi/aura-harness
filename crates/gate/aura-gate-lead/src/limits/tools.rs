@@ -10,6 +10,7 @@ const FILE_TOOLS: &[&str] = &[
     "apply_patch",
     "git_commit",
     "git_commit_push",
+    "git_ship",
 ];
 
 /// Whether the lead keeps the tool `name`.
