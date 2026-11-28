@@ -331,6 +331,7 @@ pub(super) fn cloud_routes() -> Router<RouterState> {
     let import_limit = DefaultBodyLimit::max(64 * 1024 * 1024);
     Router::new()
         .route("/v1/host", get(cloud::host_handler))
+        .route("/v1/cloud/processes", get(cloud::processes_handler))
         .route(
             "/v1/sync/import",
             post(cloud::sync_import_handler).route_layer(import_limit),
