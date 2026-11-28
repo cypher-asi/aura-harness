@@ -206,44 +206,6 @@ impl ExecOutput {
         String::from_utf8_lossy(&self.stdout).into_owned()
     }
 
-    /// What failed, from stderr, for error messages: its error blocks
-    /// (lines from one starting `error` up to a blank line or a
-    /// `warning`), the first ones first, up to `max` bytes. A build's
-    /// warnings come before its errors and would otherwise fill the
-    /// message. Without any error line, the last `max` bytes
-    /// ([`Self::stderr_tail`]).
-    #[must_use]
-    pub fn stderr_errors(&self, max: usize) -> String {
-        let text = String::from_utf8_lossy(&self.stderr);
-        let mut errors = String::new();
-        let mut in_error = false;
-        for line in text.lines() {
-            let head = line.trim_start();
-            if head.starts_with("error") {
-                in_error = true;
-            } else if head.is_empty() || head.starts_with("warning") {
-                in_error = false;
-            }
-            if !in_error {
-                continue;
-            }
-            if errors.len() + line.len() + 1 > max {
-                if errors.is_empty() {
-                    errors.extend(line.chars().take(max));
-                }
-                break;
-            }
-            errors.push_str(line);
-            errors.push('\n');
-        }
-        let errors = errors.trim().to_string();
-        if errors.is_empty() {
-            self.stderr_tail(max)
-        } else {
-            errors
-        }
-    }
-
     /// The last `max` bytes of stderr as text, for error messages.
     #[must_use]
     pub fn stderr_tail(&self, max: usize) -> String {
@@ -497,39 +459,5 @@ mod tests {
         };
         assert_eq!(out.stderr_tail(4), "6789");
         assert!(!out.success());
-    }
-
-    #[test]
-    fn a_failed_builds_errors_come_before_its_warnings() {
-        let stderr = "   Compiling a v0.1.0\n\
-            warning: unused dependency `serde_json`\n  --> Cargo.toml:13:1\n\n\
-            error[E0425]: cannot find value `x` in this scope\n  --> src/lib.rs:3:5\n\n\
-            warning: unused import\n\n\
-            error: could not compile `a` (lib test) due to 1 previous error\n";
-        let out = ExecOutput {
-            exit_code: 101,
-            stdout: Vec::new(),
-            stderr: stderr.as_bytes().to_vec(),
-        };
-        assert_eq!(
-            out.stderr_errors(800),
-            "error[E0425]: cannot find value `x` in this scope\n  --> src/lib.rs:3:5\n\
-             error: could not compile `a` (lib test) due to 1 previous error"
-        );
-        let first = out.stderr_errors(60);
-        assert!(
-            first.starts_with("error[E0425]: cannot find value"),
-            "{first}"
-        );
-        assert!(first.len() <= 60, "{first}");
-        let warned = ExecOutput {
-            stderr: b"warning: a\nall done badly".to_vec(),
-            ..out
-        };
-        assert_eq!(
-            warned.stderr_errors(8),
-            "ne badly",
-            "no error line: the tail"
-        );
     }
 }
