@@ -262,6 +262,10 @@ mod imp {
     }
 }
 
+#[cfg(test)]
+#[cfg(target_os = "linux")]
+pub(crate) mod test_dirs;
+
 // Two attributes rather than `cfg(all(test, ...))`: clippy only treats a
 // plain `cfg(test)` module as test code.
 #[cfg(test)]
@@ -290,7 +294,9 @@ mod tests {
             eprintln!("Landlock unsupported here; skipping");
             return;
         }
-        let parent = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let Some(parent) = test_dirs::unconfined_parent() else {
+            return;
+        };
         let workspace = parent.path().join("ws");
         std::fs::create_dir(&workspace).unwrap();
 
@@ -313,7 +319,9 @@ mod tests {
         if !supported() {
             return;
         }
-        let parent = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let Some(parent) = test_dirs::unconfined_parent() else {
+            return;
+        };
         let workspace = parent.path().join("ws");
         std::fs::create_dir(&workspace).unwrap();
         assert!(!sh(&workspace, "touch ../outside"));
@@ -448,7 +456,9 @@ mod tests {
         if !supported() {
             return;
         }
-        let parent = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let Some(parent) = test_dirs::unconfined_parent() else {
+            return;
+        };
         let workspace = parent.path().join("ws");
         std::fs::create_dir(&workspace).unwrap();
         let scratch = RunScratch::new(parent.path().join("ws.tmp"));

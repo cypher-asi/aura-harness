@@ -170,8 +170,11 @@ async fn test_confined_run_command_cannot_write_above_the_workspace() {
     if !crate::confine::supported() {
         return;
     }
-    // Not under /tmp, which confined commands may write to.
-    let parent = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    // Not under /tmp or the home caches, which confined commands may
+    // write to.
+    let Some(parent) = crate::confine::test_dirs::unconfined_parent() else {
+        return;
+    };
     let workspace = parent.path().join("ws");
     std::fs::create_dir(&workspace).unwrap();
     let mut ctx = confined_ctx(&workspace);
