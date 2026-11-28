@@ -225,8 +225,9 @@ What the rows are depends on what the tab shows:
   status glyph, its name and its details on the right. ↑↓ move the
   selection and ⏎ opens it.
 - **A channel's HISTORY** (its tabs: MEMBERS, INFO, QUEUE, TASKS,
-  HISTORY) lists every message the user posted in the channel, newest
-  first, under a `muted` bold `Your messages` heading with a `faint`
+  HISTORY) lists every message the user sent in the channel, newest
+  first: those posted to members and those typed to the coordinator
+  (read from its chat; a message sent to both is listed once), under a `muted` bold `Your messages` heading with a `faint`
   `· N`. Each takes two rows: the message on one line in `foreground`,
   line breaks folded into spaces, then its local time in `muted` (`20:31`
   today, `11-27 20:31` before). A message over 80 characters shows its

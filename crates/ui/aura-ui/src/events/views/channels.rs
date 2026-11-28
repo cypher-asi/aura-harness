@@ -75,6 +75,34 @@ pub fn wants_summary(text: &str) -> bool {
     text.trim().chars().count() > POST_SUMMARY_MIN_CHARS
 }
 
+/// Set on the HISTORY key of a message the user typed to a channel's
+/// coordinator, so it never meets the `seq` of a post, which counts up
+/// from 1.
+pub const PROMPT_KEY_BIT: u64 = 1 << 63;
+
+/// The key a message the user typed to a channel's coordinator, `text`,
+/// is listed and summarized under on the channel's HISTORY tab, where a
+/// post's key is its `seq`. The same on the session and the UI: a 64-bit
+/// FNV-1a of the trimmed text with [`PROMPT_KEY_BIT`] set.
+#[must_use]
+pub fn prompt_key(text: &str) -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0100_0000_01b3;
+    let hash = text.trim().bytes().fold(OFFSET, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(PRIME)
+    });
+    hash | PROMPT_KEY_BIT
+}
+
+/// Whether `text`, a user message of a coordinator's conversation (not a
+/// shell command or an agent step), is one the user typed: not empty, and
+/// not mail another agent sent it through the inbox, which also arrives
+/// as a user message.
+#[must_use]
+pub fn is_typed_prompt(text: &str) -> bool {
+    !text.trim().is_empty() && crate::inbox::fold(text).is_none()
+}
+
 /// One post in a channel.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelPostView {
