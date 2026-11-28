@@ -7,7 +7,10 @@ use super::*;
 use crate::events::{AgentSummary, UiCommand};
 
 /// The cell `needle` starts at, on the first row with it.
-fn cell_at<'a>(buffer: &'a ratatui::buffer::Buffer, needle: &str) -> &'a ratatui::buffer::Cell {
+pub(super) fn cell_at<'a>(
+    buffer: &'a ratatui::buffer::Buffer,
+    needle: &str,
+) -> &'a ratatui::buffer::Cell {
     let y = row_of(buffer, needle);
     let row: String = (0..buffer.area.width)
         .map(|x| buffer[(x, y)].symbol())
@@ -18,7 +21,10 @@ fn cell_at<'a>(buffer: &'a ratatui::buffer::Buffer, needle: &str) -> &'a ratatui
 
 /// The cell left of the one `needle` starts at: its icon column, past
 /// the gap between them.
-fn icon_before<'a>(buffer: &'a ratatui::buffer::Buffer, needle: &str) -> &'a ratatui::buffer::Cell {
+pub(super) fn icon_before<'a>(
+    buffer: &'a ratatui::buffer::Buffer,
+    needle: &str,
+) -> &'a ratatui::buffer::Cell {
     let y = row_of(buffer, needle);
     let row: String = (0..buffer.area.width)
         .map(|x| buffer[(x, y)].symbol())
@@ -62,7 +68,7 @@ fn a_failed_agent_shows_red_on_its_projects_row() {
 
 /// The channels app with a member that failed and one starting in the
 /// cloud.
-fn members_with_failure_and_start() -> crate::App {
+pub(super) fn members_with_failure_and_start() -> crate::App {
     let member = |id: &str, code: &str| AgentSummary {
         id: id.to_string(),
         name: code.to_string(),
