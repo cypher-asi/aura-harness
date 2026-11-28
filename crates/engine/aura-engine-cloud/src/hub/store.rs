@@ -25,7 +25,7 @@ use parking_lot::Mutex;
 /// The agent id of a ZNS id, as the registry derives it.
 #[must_use]
 pub fn agent_id_of(zns: &str) -> AgentId {
-    AgentId::new(*blake3::hash(zns.as_bytes()).as_bytes())
+    AgentId::of_zns(zns)
 }
 
 /// Appends `System` rows to agents no kernel runs, one writer per agent.

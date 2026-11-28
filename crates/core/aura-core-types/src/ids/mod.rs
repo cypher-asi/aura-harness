@@ -267,6 +267,10 @@ define_id!(
     AgentId, 32, "crate::serde_helpers::hex_bytes_32", truncate = 16
 );
 
+/// Start of the ZNS id of an agent another agent spawned,
+/// `0://spawn/<agent id hex>`: it names the id its spawner gave it.
+pub const SPAWN_ZNS_PREFIX: &str = "0://spawn/";
+
 impl AgentId {
     /// Create an `AgentId` from a UUID v4.
     #[must_use]
@@ -281,6 +285,24 @@ impl AgentId {
     #[must_use]
     pub fn generate() -> Self {
         Self::from_uuid(uuid::Uuid::new_v4())
+    }
+
+    /// The id of the agent with ZNS id `zns_id`: the one a spawned
+    /// agent's [`SPAWN_ZNS_PREFIX`] id names, else the blake3 hash of
+    /// `zns_id`.
+    #[must_use]
+    pub fn of_zns(zns_id: &str) -> Self {
+        zns_id
+            .strip_prefix(SPAWN_ZNS_PREFIX)
+            .and_then(|hex| Self::from_hex(hex).ok())
+            .unwrap_or_else(|| Self(*blake3::hash(zns_id.as_bytes()).as_bytes()))
+    }
+
+    /// The ZNS id of the spawned agent with this id, which
+    /// [`Self::of_zns`] maps back to it.
+    #[must_use]
+    pub fn spawn_zns(&self) -> String {
+        format!("{SPAWN_ZNS_PREFIX}{}", self.to_hex())
     }
 }
 

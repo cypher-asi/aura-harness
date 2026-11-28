@@ -198,24 +198,32 @@ fn test_a_non_member_on_screen_takes_the_user_back_to_projects() {
     assert!(rx.try_recv().is_err(), "nothing is asked for in its place");
 }
 
-#[test]
-fn test_an_open_channel_fills_the_right_column_with_members_and_info() {
-    let (mut app, _rx) = app_with_others_channel();
-    // A layout of the user's own: Record shown, the side panel hidden
-    // and not maximized, on TRACE.
+/// [`app_with_others_channel`] come to its channel from a layout of the
+/// user's own: Record shown on POLICIES, the side panel hidden and not
+/// maximized, on TRACE.
+fn channel_over_own_layout() -> (App, mpsc::Receiver<UiEvent>) {
+    let (mut app, rx) = app_with_others_channel();
     app.panels.record_visible = true;
     app.panels.side_expanded = false;
     app.panels.sandbox_visible = false;
+    app.records.tab = RecordsTab::Policies;
     app.side.tab = SidePanelTab::Trace;
-
     app.handle_key(key(KeyCode::Left));
     assert!(app.channel_open());
-    assert!(!app.record_panel_visible(), "no Kernel panel in a channel");
+    (app, rx)
+}
+
+#[test]
+fn test_an_open_channel_shows_its_tasks_above_its_members_and_info() {
+    let (mut app, _rx) = channel_over_own_layout();
+    assert!(app.record_panel_visible(), "the channel's TASKS on top");
+    assert_eq!(app.records_tab(), RecordsTab::ChannelTasks);
+    assert_eq!(RecordsTab::tabs(true), [RecordsTab::ChannelTasks]);
     assert!(
         app.sandbox_panel_visible(),
         "shown though the agent's side panel is hidden"
     );
-    assert!(app.side_maximized());
+    assert!(!app.side_maximized(), "the two share the column");
     assert_eq!(app.side_tab(), SidePanelTab::ChannelMembers);
     assert_eq!(
         SidePanelTab::tabs(true),
@@ -230,16 +238,23 @@ fn test_an_open_channel_fills_the_right_column_with_members_and_info() {
     assert_eq!(app.side_tab(), SidePanelTab::ChannelMembers);
     assert!(app.handle_side_tab_key(shift(KeyCode::Left)));
     assert_eq!(app.side_tab(), SidePanelTab::ChannelInfo);
+}
 
+#[test]
+fn test_an_open_channel_keeps_its_panels_and_gives_back_the_users() {
+    let (mut app, _rx) = channel_over_own_layout();
     // The agent panels stay away, and the user's flags are untouched.
     for command in ["/kernel", "/files", "/inbox", "/members", "/policies"] {
         app.handle_command(command);
-        assert!(!app.record_panel_visible(), "{command}");
+        assert_eq!(app.records_tab(), RecordsTab::ChannelTasks, "{command}");
+        assert!(app.record_panel_visible(), "{command}");
         assert!(app.sandbox_panel_visible(), "{command}");
     }
     app.toggle_side_expanded();
     app.show_side_tab(SidePanelTab::Trace);
-    assert_eq!(app.side_tab(), SidePanelTab::ChannelInfo);
+    app.show_records_tab(RecordsTab::Kernel);
+    assert_eq!(app.side_tab(), SidePanelTab::ChannelMembers);
+    assert_eq!(app.records_tab(), RecordsTab::ChannelTasks);
     assert!(
         (
             app.panels.record_visible,
@@ -253,10 +268,17 @@ fn test_an_open_channel_fills_the_right_column_with_members_and_info() {
     app.handle_key(key(KeyCode::Right));
     assert!(!app.channel_open());
     assert!(app.record_panel_visible());
+    assert_eq!(
+        app.records_tab(),
+        RecordsTab::Policies,
+        "its tab comes back"
+    );
     assert!(!app.sandbox_panel_visible());
     assert!(!app.side_expanded());
     assert!(!app.side_maximized());
     assert_eq!(app.side_tab(), SidePanelTab::Trace);
+    app.show_records_tab(RecordsTab::ChannelTasks);
+    assert_eq!(app.records_tab(), RecordsTab::Policies, "no TASKS outside");
 }
 
 #[test]
@@ -269,9 +291,10 @@ fn test_a_channel_dropped_from_the_list_gives_back_the_side_tab() {
     app.process_command(UiCommand::SetChannels(Vec::new()));
     assert!(!app.channel_open());
     assert_eq!(app.side_tab(), SidePanelTab::Tasks);
+    assert_eq!(app.records_tab(), RecordsTab::Kernel, "TASKS left with it");
     assert_eq!(app.agents_tab(), AgentsTab::Channels);
     assert!(
-        !app.sandbox_panel_visible(),
+        !app.sandbox_panel_visible() && !app.record_panel_visible(),
         "nothing to show beside the list"
     );
 }

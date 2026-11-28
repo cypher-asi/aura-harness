@@ -225,3 +225,6 @@ pub(crate) async fn forward_agent_events(
 
     sink.state
 }
+
+#[cfg(test)]
+mod tests;

@@ -2,10 +2,11 @@
 
 use super::answer_approval;
 use crate::event_loop::approvals::Answer;
-use crate::event_loop::{modes, policies, LoopState};
+use crate::event_loop::{channels, modes, policies, LoopState};
 use aura_ui::{PermissionMode, UiEvent};
 
-/// Approvals, modes and policies.
+/// Approvals, modes and policies. A channel's coordinator asked into plan
+/// mode starts a planner instead ([`channels::start_planner`]).
 pub(super) async fn handle(state: &mut LoopState<'_>, event: UiEvent) {
     match event {
         UiEvent::Approve(id) => answer_approval(state, &id, Answer::Once).await,
@@ -13,7 +14,12 @@ pub(super) async fn handle(state: &mut LoopState<'_>, event: UiEvent) {
         UiEvent::Deny(id) => answer_approval(state, &id, Answer::Deny).await,
         UiEvent::SetMode { agent_id, mode } => {
             let agent_id = state.agent_or_active(&agent_id);
-            modes::set_mode(state, agent_id, mode).await;
+            if mode == PermissionMode::Plan && channels::is_coordinator_agent(&state.hub, agent_id)
+            {
+                channels::start_planner(state, agent_id, String::new(), Vec::new()).await;
+            } else {
+                modes::set_mode(state, agent_id, mode).await;
+            }
         }
         UiEvent::SetApproval { agent_id, level } => {
             let agent_id = state.agent_or_active(&agent_id);
@@ -26,12 +32,14 @@ pub(super) async fn handle(state: &mut LoopState<'_>, event: UiEvent) {
         }
         UiEvent::TogglePlan(agent_id) => {
             let agent_id = state.agent_or_active(&agent_id);
-            let next = if state.hub.mode_of(agent_id) == PermissionMode::Plan {
-                state.hub.exit_plan_mode(agent_id)
+            if state.hub.mode_of(agent_id) == PermissionMode::Plan {
+                let back = state.hub.exit_plan_mode(agent_id);
+                modes::set_mode(state, agent_id, back).await;
+            } else if channels::is_coordinator_agent(&state.hub, agent_id) {
+                channels::start_planner(state, agent_id, String::new(), Vec::new()).await;
             } else {
-                PermissionMode::Plan
-            };
-            modes::set_mode(state, agent_id, next).await;
+                modes::set_mode(state, agent_id, PermissionMode::Plan).await;
+            }
         }
         UiEvent::RequestPolicies(agent_id) => {
             let agent_id = state.agent_or_active(&agent_id);

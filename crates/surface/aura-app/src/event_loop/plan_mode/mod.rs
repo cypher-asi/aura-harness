@@ -7,7 +7,9 @@
 //! from before. `/build` switches the agent back to a mode that edits,
 //! seeds its todo list with the plan's todos, and asks it to implement
 //! the plan; while it builds, its todo list is mirrored into the plan
-//! file (see [`super::agent_events`]).
+//! file (see [`super::agent_events`]). A channel's coordinator never
+//! enters plan mode: `/plan` in its chat starts a new member that plans
+//! ([`super::channels::start_planner`]).
 //!
 //! The plan-ready note invites the user to say "implement", so a typed
 //! message that is only that (see [`asks_to_build`]) builds the agent's

@@ -209,3 +209,78 @@ fn test_a_member_put_on_screen_by_the_session_shows_its_chat_too() {
     app.handle_key(key(KeyCode::Esc));
     assert_eq!(switch_request(&mut rx).as_deref(), Some("co"));
 }
+
+#[test]
+fn test_plan_in_the_channels_chat_asks_for_a_planner_with_the_request() {
+    let (_dir, mut app, mut rx) = app_in_channel_with_events("co");
+    let shown = app.messages().len();
+    type_keys(&mut app, "/plan design the login, like");
+    app.paste_clipboard(Ok(crate::clipboard::Clipboard::Image(
+        b"\x89PNG\r\n\x1a\nimage".to_vec(),
+    )));
+    app.handle_key(key(KeyCode::Enter));
+
+    let sent: Vec<UiEvent> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    assert!(
+        matches!(
+            sent.as_slice(),
+            [UiEvent::PlanInChannel { agent_id, text, images }]
+                if agent_id == "co"
+                    && text == "design the login, like [image 1]"
+                    && images.len() == 1
+        ),
+        "only the planner is asked for: {sent:?}"
+    );
+    assert_eq!(
+        app.messages().len(),
+        shown,
+        "the channel's chat shows none of it"
+    );
+    assert_eq!(app.attached_images(), 0);
+    assert!(app.input().is_empty());
+
+    // Bare, or as a command, it asks for one that waits for its request.
+    submit(&mut app, "/plan ");
+    app.handle_command("/plan");
+    for _ in 0..2 {
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(UiEvent::PlanInChannel { text, images, .. }) if text.is_empty() && images.is_empty()
+        ));
+    }
+    assert!(rx.try_recv().is_err());
+
+    // The session lists the planner as a member, then puts it on screen:
+    // its chat opens over the channel's, and Esc goes back.
+    let mut channels = app.channels().to_vec();
+    channels[0].members.push(crate::events::AgentSummary {
+        id: "pl".to_string(),
+        code: Some("ENG1".to_string()),
+        name: "engineer #1".to_string(),
+        ..crate::events::AgentSummary::default()
+    });
+    app.process_command(UiCommand::SetChannels(channels));
+    app.process_command(UiCommand::SetActiveAgent("pl".to_string()));
+    assert!(app.channel_open());
+    assert_eq!(app.member_chat().map(|m| m.id.as_str()), Some("pl"));
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(switch_request(&mut rx).as_deref(), Some("co"));
+    assert!(app.channel_open());
+}
+
+#[test]
+fn test_plan_in_a_members_chat_plans_in_that_member() {
+    let (_dir, mut app, mut rx) = app_in_channel_with_events("re");
+    submit(&mut app, "/plan tidy the footer");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SetMode { agent_id, mode: crate::PermissionMode::Plan }) if agent_id == "re"
+    ));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::UserMessage { agent_id, text, .. })
+            if agent_id == "re" && text == "tidy the footer"
+    ));
+    app.handle_command("/plan");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::TogglePlan(agent_id)) if agent_id == "re"));
+}

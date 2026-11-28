@@ -407,12 +407,14 @@ Plan mode lets the agent research a task and write a plan before it touches code
 
 | Command | What it does |
 |---------|--------------|
-| `/plan` | Switch to plan mode. `/plan` again leaves it and returns to the previous mode (`agent` when the session started in plan mode). In plan mode the agent can read, search, run commands and write Markdown files, but not edit other files, use the network or spawn agents. |
+| `/plan` | Switch to plan mode. `/plan` again leaves it and returns to the previous mode (`agent` when the session started in plan mode). In plan mode the agent can read, search, run commands and write Markdown files, but not edit other files, use the network or spawn agents. In a channel's chat it starts a planner instead (see below). |
 | Shift+Tab | Cycle the approval level `ask` → `strict` → `yolo`; the work mode stays. |
 | `/mode <name>` | Switch work mode (`agent`, `plan`, `read-only`, `debug`). |
 | `/approval <level>` | Switch approval level (`yolo`, `ask`, `strict`). |
 | `/build [plan path]` | Leave plan mode and implement the latest plan, or the given one. |
 
 In plan mode, ask for what you want; the agent may ask a question or two, then saves a plan to `.aura/plans/<name>_<id>.plan.md` in its workspace: YAML frontmatter (`name`, `overview`, `todos`), then a readable header Aura generates from it (the plan's title, its overview and a `## Todos` checklist that follows the agent's progress), then the plan in Markdown. Aura tidies that Markdown when the plan is saved: line endings, trailing spaces, extra blank lines, and a heading that repeats the title. Keep chatting to revise it. Once there is a plan, a message that is just "implement" (or "implement it", "build it", "go ahead", "do it", "proceed") does what `/build` does; anything longer goes to the agent as feedback on the plan. While you build, the agent marks todos `in_progress` and `completed` with `todo_write`, and the strip above the input shows its progress. The mode badge next to the model name shows any mode other than agent.
+
+In a channel's chat, `/plan` leaves the coordinator as it is, since it hands work out and can't read the code. It adds a new `engineer` member to the channel, in plan mode, and opens that member's chat over the channel's, with what followed `/plan` (and any pasted images) as its first message; bare `/plan`, or `/mode plan`, opens it waiting for your request. Plan with it there, then say "implement" or run `/build` in its chat to build the plan. Esc goes back to the channel's chat, and the planner stays in the channel's MEMBERS tab. In a channel whose agents run in the cloud, the planner works on this computer, since plan mode holds only here.
 
 Every mode switch is written to the agent's record as a `mode_change` entry, and the kernel enforces the new mode from then on. A mode can't be changed while a turn is running.
