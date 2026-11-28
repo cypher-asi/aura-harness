@@ -64,10 +64,7 @@ fn start_turn(app: &mut App) {
 /// Press the left button on the cell where `needle` starts on its row.
 fn click_on(app: &mut App, rows: &[String], needle: &str) {
     let (at, row) = row_with(rows, needle).unwrap_or_else(|| panic!("no {needle:?}"));
-    let column = row
-        .find(needle)
-        .map(|x| row[..x].chars().count())
-        .unwrap_or(0);
+    let column = row.find(needle).map_or(0, |x| row[..x].chars().count());
     for kind in [
         MouseEventKind::Down(MouseButton::Left),
         MouseEventKind::Up(MouseButton::Left),
