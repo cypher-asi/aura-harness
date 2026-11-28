@@ -364,7 +364,7 @@ impl SnapshotBuilder {
                 machine: builder.to_string(),
                 command,
                 exit_code: output.exit_code,
-                stderr: output.stderr_tail(800),
+                stderr: output.stderr_errors(800),
             })
         }
     }
@@ -388,7 +388,7 @@ impl SnapshotBuilder {
             return Err(CloudError::BinaryDoesNotRun {
                 machine: builder.to_string(),
                 exit_code: output.exit_code,
-                stderr: output.stderr_tail(800),
+                stderr: output.stderr_errors(800),
             });
         }
         self.check_protocol(builder, source, boot).await

@@ -92,6 +92,7 @@ fn manifest() -> Manifest {
         kind: FieldKind::Url,
         required: false,
         default: Some(DEFAULT_CONSOLE.to_string()),
+        advanced: true,
     }];
     manifest
 }

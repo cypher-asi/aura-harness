@@ -410,6 +410,8 @@ pub struct AgentHub {
     pub(crate) channel_chat: super::channels::ChannelChat,
     /// What agents owe each other through their inboxes.
     pub(crate) inbox: super::inbox::Inbox,
+    /// The event loop's timings and paced work
+    pub(crate) loop_work: super::pacing::LoopWork,
     /// Why each agent that isn't working is idle, for its peers.
     pub(crate) standing: super::standing::Standings,
     /// Where each channel member is in the software factory's plan, build,

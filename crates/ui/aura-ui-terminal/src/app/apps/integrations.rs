@@ -7,6 +7,7 @@
 //! and goes only into that event, whose `Debug` hides it.
 
 use super::super::{App, AppState, NotificationType};
+use crate::app::wheel_views::WheelList;
 use crate::events::{IntegrationAction, IntegrationState, IntegrationView, UiEvent};
 use crate::terminal::KeyResult;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -64,6 +65,8 @@ pub(crate) struct IntegrationsState {
     /// Where each row's block and each action span were drawn
     row_areas: Vec<(Rect, usize)>,
     button_areas: Vec<(Rect, IntegrationButton)>,
+    /// The first line shown; the wheel moves it ([`WheelList::Integrations`])
+    pub(in crate::app) scroll: usize,
 }
 
 impl App {
@@ -99,6 +102,31 @@ impl App {
     ) {
         self.integrations.row_areas = rows;
         self.integrations.button_areas = buttons;
+    }
+
+    /// The first line to show of the list's `total` lines in `visible`
+    /// rows, the selected integration's block being lines `block`: where
+    /// the wheel left it while the highlight stays, else moved as little
+    /// as needed to show the whole block (its top when it is taller than
+    /// the view).
+    pub(crate) fn place_integrations(
+        &mut self,
+        block: std::ops::Range<usize>,
+        (visible, total): (usize, usize),
+    ) -> usize {
+        let key = self.integrations.selected;
+        let scroll = self.integrations.scroll;
+        let placed = if self.panels.wheel.held(WheelList::Integrations, key) {
+            scroll.min(total.saturating_sub(visible.max(1)))
+        } else {
+            // The block's last line in view, then its top, which wins
+            // when the block is taller than the view.
+            let last = block.end.saturating_sub(1).max(block.start);
+            let bottom_first = (last + 1).saturating_sub(visible.max(1));
+            scroll.max(bottom_first).min(block.start)
+        };
+        self.integrations.scroll = placed;
+        placed
     }
 
     /// The tab came to the front: ask for the list again.

@@ -213,7 +213,7 @@ impl CloudHub {
                 machine: machine.clone(),
                 command: what.to_string(),
                 exit_code: out.exit_code,
-                stderr: out.stderr_tail(400),
+                stderr: out.stderr_errors(400),
             })
         }
     }
