@@ -53,7 +53,11 @@ async fn a_ship_opens_a_pr_that_merges_at_the_tested_head_and_its_branch_goes() 
         vec![main_before, head.clone()],
         "a normal merge commit of the tested head"
     );
-    assert_eq!(forge.status_of(&head), Some(CheckState::Success));
+    assert_eq!(
+        forge.status_of(&merge),
+        Some(CheckState::Success),
+        "main is the tested commit"
+    );
     assert_eq!(
         forge.tip("aura/a-rus1"),
         None,
@@ -193,6 +197,11 @@ async fn a_head_that_moves_after_the_test_is_tested_again_before_it_merges() {
     queue.enqueue(request).await.unwrap();
     let agent = world.agent.clone();
     forge.before_next_merge(move || {
+        // As git_ship does: pull its own branch, then push on top.
+        git(
+            &agent,
+            &["pull", "-q", "--no-rebase", "origin", "aura/a-rus1"],
+        );
         commit(&agent, "late.txt", "late\n");
         git(&agent, &["push", "-q", "origin", "aura/a-rus1"]);
     });
@@ -210,13 +219,17 @@ async fn a_head_that_moves_after_the_test_is_tested_again_before_it_merges() {
         .map(|(sha, _, _)| sha.clone())
         .collect();
     assert_eq!(tested.len(), 2, "tested twice: {statuses:?}");
-    assert_eq!(tested[0], first_head);
-    assert_eq!(parents(&world, &origin_main(&world))[1], tested[1]);
+    assert_eq!(parents(&world, &tested[0])[1], first_head);
+    assert_eq!(
+        origin_main(&world),
+        tested[1],
+        "main is the second tested commit"
+    );
     assert_eq!(pr.state, PrState::Merged);
 }
 
 #[tokio::test]
-async fn an_abandoned_pr_fails_its_entry_and_its_branch_is_deleted() {
+async fn an_abandoned_pr_fails_its_entry_and_keeps_its_branch() {
     if !has_git() {
         return;
     }
@@ -244,7 +257,10 @@ async fn an_abandoned_pr_fails_its_entry_and_its_branch_is_deleted() {
         done.detail
     );
     assert_eq!(origin_main(&world), main_before);
-    assert_eq!(forge.tip("aura/a-rus1"), None, "an abandoned branch goes");
+    assert!(
+        forge.tip("aura/a-rus1").is_some(),
+        "a closed PR's branch is kept"
+    );
 }
 
 #[tokio::test]

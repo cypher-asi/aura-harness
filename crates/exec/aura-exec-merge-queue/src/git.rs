@@ -33,6 +33,7 @@ pub const ALLOWED_SUBCOMMANDS: &[&str] = &[
     "rev-parse",
     "rev-list",
     "ls-remote",
+    "remote",
     "log",
     "diff",
     "status",
