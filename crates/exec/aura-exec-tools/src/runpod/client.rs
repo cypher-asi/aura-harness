@@ -110,6 +110,21 @@ impl RunpodClient {
         })
     }
 
+    /// A client sending through `http`, an existing (shared) client.
+    /// Every request still sets its own timeout from `settings`.
+    #[must_use]
+    pub fn with_http(
+        http: reqwest::Client,
+        settings: RunpodSettings,
+        key: Arc<dyn ApiKeySource>,
+    ) -> Self {
+        Self {
+            http,
+            settings: Arc::new(settings),
+            key,
+        }
+    }
+
     /// The settings the client was built with.
     #[must_use]
     pub fn settings(&self) -> &RunpodSettings {

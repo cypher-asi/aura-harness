@@ -3,6 +3,7 @@
 //! All behavior-free, data-shape pieces of the policy engine live here so
 //! [`super::check`] can focus on the authorization pipeline itself.
 
+use super::check::ToolModeClass;
 use aura_core_modes::{AgentMode, ApprovalLevel};
 use aura_core_types::{
     ActionKind, AgentPermissions, AgentToolPermissions, Capability, InstalledIntegrationDefinition,
@@ -58,6 +59,11 @@ pub struct PolicyConfig {
     /// cannot: under [`ApprovalLevel::Yolo`] commands run confined to
     /// writes inside the workspace.
     pub approval: ApprovalLevel,
+    /// Mode classes of tools the built-in table
+    /// ([`super::tool_mode_class`]) doesn't know, such as integration
+    /// tools added at runtime. The built-in table wins; a tool in neither
+    /// is a network tool.
+    pub tool_classes: BTreeMap<String, ToolModeClass>,
 }
 
 impl Default for PolicyConfig {
@@ -94,6 +100,7 @@ impl Default for PolicyConfig {
             agent_override: None,
             mode: AgentMode::Agent,
             approval: ApprovalLevel::default(),
+            tool_classes: BTreeMap::new(),
         }
     }
 }
@@ -120,6 +127,23 @@ impl PolicyConfig {
     pub fn with_agent_permissions(mut self, permissions: AgentPermissions) -> Self {
         self.agent_permissions = permissions;
         self
+    }
+
+    /// Add `classes` to [`Self::tool_classes`].
+    #[must_use]
+    pub fn with_tool_classes(
+        mut self,
+        classes: impl IntoIterator<Item = (String, ToolModeClass)>,
+    ) -> Self {
+        self.tool_classes.extend(classes);
+        self
+    }
+
+    /// The mode class of `tool`: the built-in table's, else
+    /// [`Self::tool_classes`]'s; `None` when neither knows it.
+    #[must_use]
+    pub fn tool_class(&self, tool: &str) -> Option<ToolModeClass> {
+        super::tool_mode_class(tool).or_else(|| self.tool_classes.get(tool).copied())
     }
 
     /// Declare the [`Capability`] required to invoke `tool`.
@@ -197,6 +221,15 @@ impl PolicyConfig {
         // levels keep their hash.
         if self.approval != ApprovalLevel::default() {
             snapshot["approval"] = serde_json::json!(self.approval.name());
+        }
+        // Likewise left out when empty.
+        if !self.tool_classes.is_empty() {
+            let classes: BTreeMap<&String, String> = self
+                .tool_classes
+                .iter()
+                .map(|(tool, class)| (tool, format!("{class:?}")))
+                .collect();
+            snapshot["tool_classes"] = serde_json::json!(classes);
         }
         blake3::hash(snapshot.to_string().as_bytes())
             .to_hex()
