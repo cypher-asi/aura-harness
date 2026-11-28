@@ -382,6 +382,8 @@ under a fold arrow, then the timeline, newest first.
 - **Selected item**: `selection` fill, `on_selection` text
 - **Hover state**: `surface_hover` fill
 - **Clickable text** (records link, collapsed steps): `muted`
+- **Links in markdown**: `secondary` gray, not underlined at rest; the URL
+  after a label is `muted`. The pointer over a link underlines it.
 
 ## Code Examples
 

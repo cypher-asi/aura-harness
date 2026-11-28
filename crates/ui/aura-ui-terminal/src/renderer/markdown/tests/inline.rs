@@ -70,12 +70,26 @@ fn inline_links_show_label_and_url() {
     );
     let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(text, "see the docs (https://example.com) or https://a.io");
-    // Colored, and underlined only under the pointer (see the chat).
+}
+
+#[test]
+fn links_at_rest_are_gray_and_not_underlined() {
+    let theme = theme();
+    let body = Style::default().fg(theme.colors.text);
+    let spans = parse_inline(
+        "see [the docs](https://example.com) or <https://a.io>",
+        body,
+        &theme,
+    );
     for link in ["the docs", "https://a.io"] {
         let style = span_style(&spans, link);
-        assert_eq!(style.fg, Some(theme().colors.warning), "{link}");
+        assert_eq!(style.fg, Some(theme.colors.secondary), "{link}");
         assert!(!has(style, Modifier::UNDERLINED), "{link}");
     }
+    // The URL after a label stays a step dimmer than the label.
+    let url = span_style(&spans, " (https://example.com)");
+    assert_eq!(url.fg, Some(theme.colors.muted));
+    assert_ne!(theme.colors.secondary, theme.colors.muted);
 }
 
 #[test]

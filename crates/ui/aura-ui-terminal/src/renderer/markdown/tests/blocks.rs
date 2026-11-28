@@ -87,7 +87,7 @@ fn bold_body_text_is_brighter_than_the_body() {
         span_style(&spans, "strong").fg,
         Some(theme.colors.foreground)
     );
-    assert_eq!(span_style(&spans, "link").fg, Some(theme.colors.warning));
+    assert_eq!(span_style(&spans, "link").fg, Some(theme.colors.secondary));
 }
 
 #[test]
