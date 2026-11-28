@@ -160,7 +160,8 @@ serde_json = "1.0"
 
 # TUI
 ratatui = "0.30"
-crossterm = "0.28"
+# The version ratatui 0.30 uses, so only one crossterm is built.
+crossterm = "0.29"
 
 # Hashing
 blake3 = "1.5"
@@ -209,7 +210,8 @@ sysinfo = { version = "0.33", default-features = false, features = ["system", "d
 mimalloc = { version = "0.1", default-features = false }
 
 # Concurrency
-dashmap = "5.5"
+# The version governor uses, so only one dashmap is built.
+dashmap = "6"
 parking_lot = "0.12"
 rayon = "1.10"
 
