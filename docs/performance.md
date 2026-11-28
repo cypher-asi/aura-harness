@@ -220,3 +220,59 @@ These were checked and are not the cause in this load:
   2,000 messages, so this costs at most about 2 ms per mail once full.
 - **Memory** grows with the load: resident 100 to 290 MiB at N = 200
   over 10 s. See Memory above.
+
+## Startup
+
+How long the app takes to start with many agents
+(`crates/surface/aura-app/tests/startup_perf.rs`):
+
+```text
+cargo test --release -p aura-app --test startup_perf -- --ignored --nocapture
+```
+
+The test writes N agents with 400 turns each (about 2 KB per message)
+to a fresh data directory, opens it once as the previous run would, then
+times `session::start` with the mock provider. The cloud is not
+configured. Each time is in milliseconds from the call:
+
+- **start**: `session::start` returns. No frame is drawn before this.
+- **chat**: the chat the session opens on is sent.
+- **usable**: the loop answers the UI's first event. From here, typing,
+  switching chats and opening channels are handled.
+- **loaded**: startup's background steps are done (`StartupDone`).
+
+The middle of three runs, on the build machine (release build):
+
+| Agents | Before: start | chat | usable | After: start | chat | usable | loaded |
+|-------:|-----:|-----:|-------:|-----:|-----:|-------:|-------:|
+| 10     | 153  | 154  | 203    | 117  | 118  | 118    | 165    |
+| 50     | 114  | 115  | 168    | 108  | 108  | 109    | 149    |
+| 200    | 119  | 120  | 162    | 122  | 123  | 124    | 160    |
+
+Both columns are on the same main (`1ef4d378`). Measured again after
+merging the later main, "after" was 159/160/160/202 ms at 10 agents,
+134/134/135/184 at 50 and 126/127/128/165 at 200: run-to-run noise
+is about 40 ms, but "usable" stays within a few milliseconds of
+"chat" in every run.
+
+Before, the loop took no UI event until it had sent the side panels,
+brought the cloud hub up, refreshed peer reach and resumed everything
+the last run cut short, so "usable" came 35 to 55 ms after "chat"
+with no cloud. Each of those steps scales with what it waits on: with
+the cloud configured, its connect and the reach refresh are network
+calls. Now the loop takes UI events once the saved inbox is restored,
+and runs those steps one at a time between them (`event_loop::startup`).
+So "usable" follows "chat" within a few milliseconds whatever the
+steps cost, and they finish by "loaded".
+
+The number of agents barely moves startup. The session reads only the
+open chat's record. The agents panel's rows took 4 ms with 200 agents,
+and rebuilding a 400-turn chat about 30 ms. What remains is opening the
+database (about 100 ms). The first start after a lot was written pays
+more for it: 0.7 s with 200 agents of 400 turns
+(`AURA_PERF_FIRST_OPEN=1`).
+
+The session also opens on the chat the UI was last in, a channel or an
+agent (`SessionOptions::open_on`, read from `ui_selection.json`).
+Before, it opened on the registry's active agent and the UI then
+switched, loading a second chat.

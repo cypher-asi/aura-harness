@@ -199,7 +199,7 @@ fn test_status_line_on_one_model_measures_context_against_its_window() {
     let rows = render_rows(&mut app, 160);
     let status = &rows[rows.len() - 1];
     assert!(
-        status.contains("Claude Haiku 4.5 · auto thinking · 20% context used"),
+        status.contains("Claude Haiku 4.5 · auto thinking · ◔ 20% context used"),
         "{status:?}"
     );
     assert!(!status.contains("model"), "{status:?}");

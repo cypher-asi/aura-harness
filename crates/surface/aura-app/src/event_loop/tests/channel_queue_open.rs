@@ -15,7 +15,7 @@ struct Unused;
 #[async_trait]
 impl Integrator for Unused {
     async fn integrate(&self, _entry: &MergeEntry) -> RunOutcome {
-        RunOutcome::Failed("not in this test".to_string())
+        RunOutcome::Failed("not in this test".into())
     }
 }
 

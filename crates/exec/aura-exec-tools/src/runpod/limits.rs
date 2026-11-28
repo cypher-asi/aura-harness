@@ -57,6 +57,41 @@ impl SpendLimits {
         }
     }
 
+    /// Why a value set for one of the fields isn't usable, if one isn't:
+    /// what the Integrations panel shows instead of quietly keeping the
+    /// default.
+    ///
+    /// # Errors
+    /// The first field set to something that isn't a non-negative number
+    /// (a whole number for all but `max_hourly_usd`).
+    pub fn validate(get: impl Fn(&str) -> Option<String>) -> Result<(), String> {
+        let set = |name: &str| {
+            get(name)
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        };
+        if let Some(v) = set("max_hourly_usd") {
+            if !v.parse::<f64>().is_ok_and(|n| n.is_finite() && n >= 0.0) {
+                return Err(format!(
+                    "max_hourly_usd must be a number of dollars, not {v:?}"
+                ));
+            }
+        }
+        let whole = [
+            ("max_gpu_count", u64::from(u32::MAX)),
+            ("max_running_pods", u64::from(u32::MAX)),
+            ("max_job_seconds", u64::MAX),
+        ];
+        for (name, max) in whole {
+            if let Some(v) = set(name) {
+                if !v.parse::<u64>().is_ok_and(|n| n <= max) {
+                    return Err(format!("{name} must be a whole number, not {v:?}"));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Refuse a pod with more than `max_gpu_count` GPUs.
     pub(crate) fn check_gpu_count(&self, tool: &str, count: u32) -> Result<(), RunpodError> {
         if count > self.max_gpu_count {

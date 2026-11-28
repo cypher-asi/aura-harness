@@ -457,12 +457,12 @@ pub enum UiCommand {
 
     /// The HOST tab of the agent on screen
     SetHost(Box<crate::host::HostView>),
-
     /// The REPO tab of an agent; dropped unless it is the one on screen
     SetRepo(Box<crate::repo::RepoView>),
-
     /// Every channel that is not archived, in list order
     SetChannels(Vec<ChannelSummary>),
+    /// The session finished what it does at startup in the background
+    StartupDone,
 
     /// Every task of a channel's agents, newest first
     SetChannelTasks {

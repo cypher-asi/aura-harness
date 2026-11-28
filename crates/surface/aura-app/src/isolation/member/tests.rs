@@ -73,6 +73,7 @@ fn ship(folder: &Path) -> aura_exec_tools::git_tool::Shipped {
                 push: PushTarget::default(),
                 timeout: Duration::from_secs(20),
                 push_policy: PushPolicy::single(Duration::from_secs(20)),
+                task: None,
             },
         ))
         .unwrap()

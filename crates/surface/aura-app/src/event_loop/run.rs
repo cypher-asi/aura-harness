@@ -29,6 +29,8 @@ enum Arrived {
     ListsDue,
     /// The loop's paced inbox save is due
     SaveDue,
+    /// Time for startup's next step: nothing else waited
+    Startup,
 }
 
 impl Arrived {
@@ -47,12 +49,18 @@ impl Arrived {
             Self::Ui(_) => "ui event",
             Self::ListsDue => "agent lists",
             Self::SaveDue => "inbox save",
+            Self::Startup => "startup step",
         }
     }
 }
 
-/// Handle what arrives until the UI quits or goes away.
-pub(super) async fn run_loop(state: &mut LoopState<'_>, inbox: &mut Inbox) {
+/// Handle what arrives until the UI quits or goes away, running
+/// `startup`'s steps while no UI event waits.
+pub(super) async fn run_loop(
+    state: &mut LoopState<'_>,
+    inbox: &mut Inbox,
+    startup: &mut startup::Startup,
+) {
     let hub = Arc::clone(&state.hub);
     let mut cloud_ended = state.cloud.take_ended();
     let mut sweeps = sweep_timer();
@@ -73,7 +81,17 @@ pub(super) async fn run_loop(state: &mut LoopState<'_>, inbox: &mut Inbox) {
                 Some(event) => Arrived::Ui(event),
                 None => break,
             },
+            // Only when no UI event waits: the user goes first.
+            () = std::future::ready(()), if startup.may_run(state) => Arrived::Startup,
         };
+        if matches!(arrived, Arrived::Startup) {
+            let started = Instant::now();
+            startup.run_next(state).await;
+            hub.loop_work
+                .timings
+                .record("startup step", started.elapsed());
+            continue;
+        }
         let kind = arrived.kind();
         let saves = !matches!(arrived, Arrived::SaveDue);
         let started = Instant::now();
@@ -121,6 +139,8 @@ async fn handle(state: &mut LoopState<'_>, inbox: &Inbox, arrived: Arrived) -> b
             }
         }
         Arrived::SaveDue => inbox::save_due(state),
+        // Run by the loop itself, with its own `startup`.
+        Arrived::Startup => {}
         Arrived::Ui(event) => {
             state.hub.loop_work.timings.arrived(&event);
             // The user waits to see what they did: lists go at once.

@@ -56,7 +56,7 @@ pub fn tool_mode_class(tool: &str) -> Option<ToolModeClass> {
         | "delete_spec"
         | "create_plan" => C::MarkdownDocument,
 
-        "git_commit" => C::WorkspaceMutation,
+        "git_commit" | "git_start_task" => C::WorkspaceMutation,
 
         "run_command" | "job_kill" => C::Subprocess,
 
@@ -98,7 +98,12 @@ pub fn tool_mode_class(tool: &str) -> Option<ToolModeClass> {
 /// Classify a tool call into the [`GatedAction`] the mode gate checks.
 #[must_use]
 pub fn gated_action(tool_call: &ToolCall) -> GatedAction {
-    match tool_mode_class(&tool_call.tool) {
+    gated_action_as(tool_call, tool_mode_class(&tool_call.tool))
+}
+
+/// Classify `tool_call`, whose tool has mode class `class`.
+fn gated_action_as(tool_call: &ToolCall, class: Option<ToolModeClass>) -> GatedAction {
+    match class {
         Some(ToolModeClass::Read) => GatedAction::ReadFile,
         Some(ToolModeClass::FileWrite) => {
             if targets_markdown(&tool_call.args) {
@@ -135,7 +140,10 @@ impl Policy {
             return None;
         }
         DefaultModeGate
-            .check(mode, gated_action(tool_call))
+            .check(
+                mode,
+                gated_action_as(tool_call, self.config().tool_class(&tool_call.tool)),
+            )
             .err()
             .map(|violation| PolicyVerdict::Deny {
                 reason: format!(

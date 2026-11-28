@@ -46,6 +46,9 @@ pub struct ShipRequest<'a> {
     pub timeout: Duration,
     /// Budget of the network steps; `fetch` uses its per-attempt timeout.
     pub push_policy: PushPolicy,
+    /// The task, naming the new branch when the current one was merged
+    /// already ([`super::branches::follow_up_branch`])
+    pub task: Option<&'a str>,
 }
 
 /// A finished `git_ship`.
@@ -116,6 +119,10 @@ pub async fn git_ship_impl(
     let folder_lock = ship_lock(workspace);
     let _shipping = folder_lock.lock().await;
     let commit = git_commit_impl(workspace, request.message, request.timeout).await?;
+    let branch = match follow_up(workspace, &branch, &request).await? {
+        Some(moved) => moved,
+        None => branch,
+    };
 
     let has_origin = match remote_url(workspace, request.timeout).await {
         Ok(_) => true,
@@ -134,10 +141,16 @@ pub async fn git_ship_impl(
         });
     }
 
-    let pulled = pull_target(workspace, &request).await?;
+    let own = pull_branch(workspace, &branch, &request).await?;
+    let pulled = pull_branch(workspace, request.target, &request).await?;
     if !pulled.starts_with(SKIPPED) {
         super::fragments::check_changelog(workspace, &branch, request.timeout).await?;
     }
+    let pulled = if own.starts_with("merged") {
+        format!("{own}; {pulled}")
+    } else {
+        pulled
+    };
     let pushed = git_push_impl(workspace, request.push, request.push_policy).await?;
     info!(branch = %pushed.branch, head = %pushed.head, %pulled, "shipped");
     Ok(Shipped {
@@ -147,6 +160,34 @@ pub async fn git_ship_impl(
         head: pushed.head.clone(),
         pushed: Some(pushed),
     })
+}
+
+/// The new branch a ship of follow-up work on a merged `branch` moves
+/// to, checked against the pin; `None` when it stays.
+async fn follow_up(
+    workspace: &Path,
+    branch: &str,
+    request: &ShipRequest<'_>,
+) -> Result<Option<String>, GitToolError> {
+    if remote_url(workspace, request.timeout).await.is_err() {
+        return Ok(None);
+    }
+    let moved = super::branches::follow_up_branch(
+        workspace,
+        branch,
+        request.target,
+        request.task,
+        request.push_policy.per_attempt_timeout,
+    )
+    .await?;
+    if let Some(moved) = &moved {
+        let target = PushTarget {
+            branch: Some(moved),
+            ..request.push
+        };
+        resolve_branch(target, Some(moved))?;
+    }
+    Ok(moved)
 }
 
 /// The lock the ships of `workspace` take, one per folder in this
@@ -173,9 +214,16 @@ fn check_target_name(target: &str) -> Result<(), GitToolError> {
 }
 
 /// Fetch `origin/<target>` and merge it into the current branch. An
-/// `origin` without the target skips the pull.
-async fn pull_target(workspace: &Path, request: &ShipRequest<'_>) -> Result<String, GitToolError> {
-    let target = request.target;
+/// `origin` without that branch skips the pull.
+///
+/// The ship pulls its own branch this way first: the merge queue puts
+/// the merge it tested on a PR's branch, so a fix after a failed or
+/// moved run would otherwise be refused as not a fast-forward.
+async fn pull_branch(
+    workspace: &Path,
+    target: &str,
+    request: &ShipRequest<'_>,
+) -> Result<String, GitToolError> {
     let refspec = format!("refs/heads/{target}");
     let fetched = spawn_git(
         workspace,

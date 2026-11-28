@@ -33,6 +33,7 @@ pub use self::build::uploading;
 pub use self::fingerprint::{base_fingerprint, default_build_command, project_fingerprint};
 pub use self::index::{SnapshotIndex, SnapshotRecord};
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -144,8 +145,12 @@ pub struct SnapshotBuilder {
     /// The cloud home (`AURA_HOME/cloud`).
     home: PathBuf,
     index_path: PathBuf,
-    /// One build at a time per process; also guards the index file.
+    /// The snapshot index; also guards the index file.
     index: Mutex<Option<SnapshotIndex>>,
+    /// One gate per snapshot (the base, each project): a start that
+    /// needs a snapshot another start is building waits for that build
+    /// and reuses it, so agents launched together trigger one build.
+    gates: parking_lot::Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
 
 impl SnapshotBuilder {
@@ -176,7 +181,13 @@ impl SnapshotBuilder {
             index_path: home.join("snapshots.json"),
             home,
             index: Mutex::new(None),
+            gates: parking_lot::Mutex::default(),
         }
+    }
+
+    /// The gate of snapshot `key` ([`Self::gates`]).
+    fn gate(&self, key: &str) -> Arc<Mutex<()>> {
+        Arc::clone(self.gates.lock().entry(key.to_string()).or_default())
     }
 
     /// Delete a project's snapshot and forget it.
@@ -195,5 +206,7 @@ impl SnapshotBuilder {
     }
 }
 
+#[cfg(test)]
+mod build_once_tests;
 #[cfg(test)]
 mod tests;

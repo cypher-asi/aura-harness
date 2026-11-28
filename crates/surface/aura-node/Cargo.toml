@@ -45,7 +45,6 @@ aura-engine-cloud = { path = "../../engine/aura-engine-cloud" }
 aura-exec-domain-http = { path = "../../exec/aura-exec-domain-http" }
 aura-config = { path = "../../config/aura-config" }
 aura-context-skills = { path = "../../context/aura-context-skills" }
-aura-plugin = { path = "../../plugin/aura-plugin" }
 aura-plugin-hooks = { path = "../../plugin/aura-plugin-hooks" }
 chrono = { workspace = true }
 parking_lot = { workspace = true }
@@ -88,6 +87,7 @@ colored = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+aura-plugin = { path = "../../plugin/aura-plugin" }
 tempfile = { workspace = true }
 insta = { workspace = true }
 # `test-util` enables tokio's paused-clock test helpers

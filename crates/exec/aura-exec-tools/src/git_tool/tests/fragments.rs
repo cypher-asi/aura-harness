@@ -10,6 +10,7 @@ fn request(message: &str) -> ShipRequest<'_> {
         push: PushTarget::default(),
         timeout: Duration::from_secs(20),
         push_policy: PushPolicy::single(Duration::from_secs(20)),
+        task: None,
     }
 }
 

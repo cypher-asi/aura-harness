@@ -213,6 +213,7 @@ pub fn builtin_tools() -> Vec<Box<dyn Tool>> {
         Box::new(crate::git_tool::GitPushTool),
         Box::new(crate::git_tool::GitCommitPushTool),
         Box::new(crate::git_tool::GitShipTool),
+        Box::new(crate::git_tool::GitStartTaskTool),
         Box::new(crate::plan_tools::CreatePlanTool),
         Box::new(crate::todo::TodoWriteTool),
     ]

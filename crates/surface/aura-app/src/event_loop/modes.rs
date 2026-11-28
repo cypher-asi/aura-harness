@@ -67,7 +67,11 @@ pub(crate) fn commands_confinable() -> bool {
 /// Whether `tool` runs without asking under `permissions`. The mode's
 /// session ceiling is checked first, so this never widens what the mode
 /// allows.
-fn tool_state(permissions: Permissions, tool: &str) -> ToolState {
+fn tool_state(
+    permissions: Permissions,
+    tool: &str,
+    extra: &BTreeMap<String, ToolModeClass>,
+) -> ToolState {
     if tool == JOB_KILL_TOOL_NAME {
         // Stopping a background job only touches a job the agent started.
         return if permissions.approval == ApprovalLevel::Strict {
@@ -76,7 +80,7 @@ fn tool_state(permissions: Permissions, tool: &str) -> ToolState {
             ToolState::Allow
         };
     }
-    let class = tool_mode_class(tool);
+    let class = tool_mode_class(tool).or_else(|| extra.get(tool).copied());
     if permissions.approval == ApprovalLevel::Yolo {
         let unconfined_command = class == Some(ToolModeClass::Subprocess) && !commands_confinable();
         return if unconfined_command {
@@ -95,13 +99,24 @@ fn tool_state(permissions: Permissions, tool: &str) -> ToolState {
 /// Tools not listed, such as ones installed at runtime, ask, except under
 /// `yolo` with confinable commands, where everything runs.
 pub(crate) fn user_defaults(permissions: Permissions, tools: &[String]) -> UserToolDefaults {
+    // Integration tools, added at runtime, are classed by their effect.
+    user_defaults_with(permissions, tools, &crate::integrations::tool_classes())
+}
+
+/// [`user_defaults`] with the integration tools' classes `extra`.
+fn user_defaults_with(
+    permissions: Permissions,
+    tools: &[String],
+    extra: &BTreeMap<String, ToolModeClass>,
+) -> UserToolDefaults {
     if permissions.approval == ApprovalLevel::Yolo && commands_confinable() {
         return UserToolDefaults::full_access();
     }
     let per_tool: BTreeMap<String, ToolState> = tools
         .iter()
+        .chain(extra.keys())
         .filter_map(|tool| {
-            let state = tool_state(permissions, tool);
+            let state = tool_state(permissions, tool, extra);
             (state == ToolState::Allow).then(|| (tool.clone(), state))
         })
         .collect();
@@ -380,5 +395,60 @@ mod tests {
             "plan/strict"
         );
         assert_eq!(Permissions::default().name(), "agent/ask");
+    }
+
+    /// Classes as the integrations service gives them for Runpod.
+    fn integration_classes() -> BTreeMap<String, ToolModeClass> {
+        [
+            ("runpod_list_pods", ToolModeClass::Invoke),
+            ("runpod_create_pod", ToolModeClass::Network),
+            ("runpod_terminate_pod", ToolModeClass::Network),
+        ]
+        .into_iter()
+        .map(|(tool, class)| (tool.to_string(), class))
+        .collect()
+    }
+
+    #[test]
+    fn integration_reads_run_without_asking_and_the_rest_ask() {
+        let classes = integration_classes();
+        let state = |permissions, tool: &str| {
+            let defaults = user_defaults_with(permissions, &names(TOOLS), &classes);
+            aura_core_types::resolve_effective_permission(&defaults, None, tool)
+        };
+        let ask = Permissions::new(PermissionMode::Agent, ApprovalLevel::Ask);
+        assert_eq!(state(ask, "runpod_list_pods"), ToolState::Allow);
+        assert_eq!(state(ask, "runpod_create_pod"), ToolState::Ask);
+        assert_eq!(state(ask, "runpod_terminate_pod"), ToolState::Ask);
+        let strict = Permissions::new(PermissionMode::Agent, ApprovalLevel::Strict);
+        // Reads don't ask under strict either, as `read_file` doesn't.
+        assert_eq!(state(strict, "runpod_list_pods"), ToolState::Allow);
+        assert_eq!(state(strict, "runpod_create_pod"), ToolState::Ask);
+        let plan = Permissions::new(PermissionMode::Plan, ApprovalLevel::Ask);
+        assert_eq!(state(plan, "runpod_list_pods"), ToolState::Allow);
+    }
+
+    #[test]
+    fn the_mode_gate_lets_integration_reads_into_plan_mode_only() {
+        use aura_agent_kernel::{Policy, PolicyConfig};
+        use aura_core_types::{ActionKind, Proposal, ToolCall};
+        let policy = Policy::new(
+            PolicyConfig::default()
+                .with_mode(aura_core_modes::AgentMode::Plan)
+                .with_tool_classes(integration_classes()),
+        );
+        let allowed = |tool: &str| {
+            let call = ToolCall::new(tool, serde_json::json!({}));
+            let payload = serde_json::to_vec(&call).unwrap();
+            policy
+                .check(&Proposal::new(
+                    ActionKind::Delegate,
+                    bytes::Bytes::from(payload),
+                ))
+                .allowed
+        };
+        assert!(allowed("runpod_list_pods"));
+        assert!(!allowed("runpod_create_pod"));
+        assert!(!allowed("runpod_terminate_pod"));
     }
 }

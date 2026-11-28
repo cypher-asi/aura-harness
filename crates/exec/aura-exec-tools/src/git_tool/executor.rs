@@ -30,6 +30,10 @@ use crate::sandbox::strip_unc_prefix;
 /// (or `merge --abort` after a conflict). Both are called with fixed
 /// arguments only; the target is checked as a branch name first.
 ///
+/// `checkout` only ever runs as `checkout -q -b <new branch> <start>`
+/// on a clean tree ([`super::branches`]), `status`, `rev-list` and
+/// `ls-remote` only read.
+///
 /// `reset` only ever runs as `reset -q HEAD -- <paths>`, to leave out of
 /// a commit the hub's uncommitted work a cloud machine was seeded with
 /// ([`super::seed`]); it never moves a branch or touches the worktree.
@@ -43,6 +47,11 @@ pub(crate) const ALLOWED_SUBCOMMANDS: &[&str] = &[
     "fetch",
     "merge",
     "reset",
+    "checkout",
+    "status",
+    "rev-list",
+    "ls-remote",
+    "merge-base",
 ];
 
 fn ensure_allowed(subcmd: &str) -> Result<(), GitToolError> {

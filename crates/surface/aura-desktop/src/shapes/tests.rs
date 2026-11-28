@@ -53,7 +53,7 @@ fn every_shape_the_ui_uses_is_drawn_and_letters_are_left_to_the_font() {
     let mut text = TextSystem::new();
     let mut quads = Vec::new();
     let shapes = "─━│┃┌┐└┘┏┓┗┛├┤┬┴┼╭╮╯╰═║╔╗╚╝▀▄█▌▐░▒▓▖▟⠿⣿🗀🗁☁\
-                  ✓✔✗✘✕✖▸►▶◂◄◀▾▼▴▲◦◐◑◒◓◇◆◈■□▪▫▰▱⊘‖⏱⬢☐☒▣";
+                  ✓✔✗✘✕✖▸►▶◂◄◀▾▼▴▲◦○◔◕●◐◑◒◓◇◆◈■□▪▫▰▱⊘‖⏱⬢☐☒▣";
     for c in shapes.chars() {
         quads.clear();
         assert!(

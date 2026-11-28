@@ -14,7 +14,6 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 bytes = { workspace = true }
 tracing = { workspace = true }
-static_assertions = "1.1"
 # Sealed state-at-rest (Swarm TEE phase 5): AES-256-GCM value sealing
 # under the per-agent DEK released by the KBS after attestation.
 aes-gcm = { workspace = true }
@@ -34,6 +33,7 @@ uuid = { workspace = true }
 test-support = []
 
 [dev-dependencies]
+static_assertions = "1.1"
 tempfile = { workspace = true }
 tokio = { workspace = true }
 proptest = { workspace = true }

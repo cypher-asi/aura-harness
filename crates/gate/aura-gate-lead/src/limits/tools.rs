@@ -11,6 +11,7 @@ const FILE_TOOLS: &[&str] = &[
     "git_commit",
     "git_commit_push",
     "git_ship",
+    "git_start_task",
 ];
 
 /// Whether the lead keeps the tool `name`.
