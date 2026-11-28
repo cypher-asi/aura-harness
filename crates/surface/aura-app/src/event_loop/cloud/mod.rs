@@ -76,6 +76,7 @@ mod view;
 
 use boot::BootConsoleUi;
 pub(super) use ended::handle_ended;
+pub(in crate::event_loop) use machine::node_offers_ship;
 use machine::MachineRows;
 pub(super) use machine::{list_sandbox, read_sandbox_file, refresh_machine_plans, MachinePlans};
 pub(super) use member_start::start_in_cloud;

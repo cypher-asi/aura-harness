@@ -26,5 +26,5 @@ pub use mesh::{
 pub use sync::{
     GitClaim, NodeClaim, NodeClaimed, PlanTemplate, RecordPage, SealResponse, SessionSaved,
     SessionStarted, SyncImport, SyncImported, TracePage, WorkspacePatch, NODE_PROTOCOL,
-    PLACEHOLDER_PREFIX,
+    PLACEHOLDER_PREFIX, SHIP_TOOL,
 };
