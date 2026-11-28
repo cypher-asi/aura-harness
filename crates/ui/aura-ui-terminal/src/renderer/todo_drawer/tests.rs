@@ -103,28 +103,23 @@ fn the_drawer_lists_only_open_items_and_folds_the_rest_into_history() {
     let (at, header_row) = header(&rows).expect("header");
     assert!(header_row.contains("⬢ 2 active · 1 done"), "{header_row:?}");
     assert!(rows[at - 1].contains('├'), "{:?}", rows[at - 1]);
-    assert!(
-        rows[at + 1].contains("│ ◐ Write the lexer"),
-        "{:?}",
-        rows[at + 1]
-    );
-    assert!(
-        rows[at + 2].contains("│ ☐ Run the tests"),
-        "{:?}",
-        rows[at + 2]
-    );
-    assert!(
-        rows[at + 3].contains("│ ▸ Finished to-dos  1"),
-        "{:?}",
-        rows[at + 3]
-    );
-    assert!(rows[at + 4].contains('├'), "{:?}", rows[at + 4]);
+    let expected = [
+        "│ ◐ Write the lexer",
+        "│   In progress",
+        "│ ☐ Run the tests",
+        "│   Pending",
+        "│ ▸ Finished to-dos  1",
+    ];
+    for (row, expected) in rows[at + 1..].iter().zip(expected) {
+        assert!(row.contains(expected), "{expected:?} in {row:?}");
+    }
+    assert!(rows[at + 6].contains('├'), "{:?}", rows[at + 6]);
     assert!(
         row_with(&rows, "Read the parser").is_none(),
         "done stays in the history"
     );
     let (prompt, _) = row_with(&rows, "→ ").expect("the input");
-    assert!(prompt > at + 4, "the drawer sits above the input");
+    assert!(prompt > at + 6, "the drawer sits above the input");
 }
 
 #[test]
@@ -154,16 +149,15 @@ fn a_click_on_the_history_row_opens_and_folds_it() {
     assert!(app.todo_history_open());
     let open = rows(&mut app);
     let (at, _) = row_with(&open, "▾ Finished to-dos").expect("open history");
-    assert!(
-        open[at + 1].contains("✓ Read the parser  done"),
-        "{:?}",
-        open[at + 1]
-    );
-    assert!(
-        open[at + 2].contains("⊘ Drop the old lexer  cancelled"),
-        "{:?}",
-        open[at + 2]
-    );
+    let expected = [
+        "│ ✓ Read the parser",
+        "│   Done",
+        "│ ⊘ Drop the old lexer",
+        "│   Cancelled",
+    ];
+    for (row, expected) in open[at + 1..].iter().zip(expected) {
+        assert!(row.contains(expected), "{expected:?} in {row:?}");
+    }
     assert!(!app.todo_drawer_folded(), "the drawer itself stays open");
     click_on(&mut app, &open, "Finished to-dos");
     assert!(!app.todo_history_open());
@@ -258,14 +252,21 @@ fn a_long_list_keeps_the_item_in_progress_and_the_history_in_view() {
     let (at, header_row) = header(&rows).expect("header");
     assert!(header_row.contains("12 active · 3 done"), "{header_row:?}");
     assert!(rows[at + 1].contains("◐ Step 3 "), "{:?}", rows[at + 1]);
-    assert!(rows[at + 8].contains("☐ Step 10"), "{:?}", rows[at + 8]);
+    assert!(rows[at + 2].contains("In progress"), "{:?}", rows[at + 2]);
+    assert!(rows[at + 7].contains("☐ Step 6 "), "{:?}", rows[at + 7]);
     assert!(
         rows[at + 9].contains("▸ Finished to-dos  3"),
         "{:?}",
         rows[at + 9]
     );
-    assert!(rows[at + 10].contains("│ +4 more"), "{:?}", rows[at + 10]);
+    assert!(rows[at + 10].contains("│ +8 more"), "{:?}", rows[at + 10]);
+    assert!(
+        rows[at + 11].contains('├'),
+        "no blank row under the count: {:?}",
+        rows[at + 11]
+    );
     assert!(row_with(&rows, "Step 0 ").is_none());
+    assert!(row_with(&rows, "Step 7 ").is_none());
 }
 
 #[test]
@@ -277,7 +278,11 @@ fn a_short_screen_squeezes_the_drawer_and_counts_the_rest() {
     assert!(row_with(&rows, "◐ Step 3").is_some(), "{}", rows.join("\n"));
     let (more, more_row) = row_with(&rows, "more").expect("a +N more row");
     assert!(more > at, "{more_row:?}");
-    let shown = more - at - 1;
+    // An item's first row has its marker; the history row is one entry too.
+    let shown = rows[at + 1..more]
+        .iter()
+        .filter(|row| row.contains('◐') || row.contains('☐') || row.contains("Finished to-dos"))
+        .count();
     assert!(
         more_row.contains(&format!("+{} more", 13 - shown)),
         "{more_row:?}"
