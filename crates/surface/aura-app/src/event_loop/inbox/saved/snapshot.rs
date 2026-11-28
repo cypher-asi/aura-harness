@@ -303,6 +303,7 @@ fn saved_owed(agent: AgentId, owed: &Owed) -> SavedOwed {
         subject: owed.subject.clone(),
         todo: owed.todo.clone(),
         withdrawn: owed.withdrawn,
+        taken: owed.taken,
     }
 }
 
@@ -315,6 +316,7 @@ fn owed_of(saved: SavedOwed, from: AgentId) -> Owed {
         subject: saved.subject,
         todo: saved.todo,
         withdrawn: saved.withdrawn,
+        taken: saved.taken,
     }
 }
 

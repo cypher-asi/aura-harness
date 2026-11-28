@@ -175,6 +175,8 @@ async fn run_prompt(
     shown: bool,
 ) {
     let ui = AgentUi::new(state.commands.clone(), agent);
+    // This turn answers what its prompt asks.
+    crate::event_loop::inbox::take_up(&state.hub, agent, &prompt.text);
     show_prompt(state, (agent, &ui), &prompt, shown).await;
     let current = state.models.current().to_string();
     let linked = state.auth.linked_plans(&state.auth.owner());
@@ -189,6 +191,7 @@ async fn run_prompt(
         hub.set_reach(agent, peers);
     }
     let extras = TurnExtras {
+        said: String::new(),
         titles,
         context_limit: model.as_deref().map(aura_engine::context_window_for_model),
         reload: Some(chat_reload(Arc::clone(&state.hub), ui.clone(), agent)),
@@ -303,7 +306,13 @@ pub(super) fn watch_turn(
             }
         }
         let messages = copied.map(|checkpoint| checkpoint.messages);
-        shared.end_turn(agent, Some(TurnOutcome { failure, messages }));
+        let said = Some(std::mem::take(&mut extras.said)).filter(|said| !said.trim().is_empty());
+        let outcome = TurnOutcome {
+            failure,
+            messages,
+            said,
+        };
+        shared.end_turn(agent, Some(outcome));
     });
 }
 

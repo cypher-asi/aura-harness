@@ -125,8 +125,12 @@ pub(super) struct TurnOutcome {
     /// Why it stopped before finishing; `None` when it finished.
     pub(super) failure: Option<String>,
     /// Its conversation as its machine left it, copied here; `None`
-    /// when the copy failed.
+    /// when the copy failed. A failed copy can also leave the one an
+    /// earlier turn made.
     pub(super) messages: Option<Vec<aura_model::Message>>,
+    /// What it said last, as its reply streamed here; `None` when none
+    /// streamed (a turn followed from its record)
+    pub(super) said: Option<String>,
 }
 
 /// Shared between the loop and its tasks.

@@ -54,18 +54,22 @@ struct Settle {
 async fn settle(state: &LoopState<'_>, agent: AgentId, outcome: TurnOutcome, how: Settle) {
     let Settle { interrupted, waits } = how;
     let messages = outcome.messages.as_deref();
+    let said = outcome.said.as_deref();
     match (outcome.failure, messages) {
         (None, Some(messages)) => {
             channels::post_replies_from(state, agent, messages).await;
             // A plan turn's answer waits for the turns the factory adds.
             if !waits {
-                inbox::answer_seen(&state.hub, agent, messages);
+                inbox::answer_turn(&state.hub, agent, messages, said);
             }
         }
-        // Nothing tells what the turn answered: it still owes it all, as
-        // an agent here whose session is gone does.
+        // Without a copy, what the turn was started on is still known,
+        // and its reply streamed here: that answers it. The rest waits.
         (None, None) => {
-            warn!(%agent, "A cloud turn's conversation was not copied here; its answers wait");
+            warn!(%agent, "A cloud turn's conversation was not copied here; answering from its stream");
+            if !waits && said.is_some() {
+                inbox::answer_turn(&state.hub, agent, &[], said);
+            }
         }
         // Once the user stopped the turn, the failure it ends with is that
         // stop, whatever it was doing then.
