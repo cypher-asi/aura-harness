@@ -71,6 +71,10 @@ pub(super) struct SavedOwed {
     pub todo: Option<String>,
     /// Taken back before it started: it must never start
     pub withdrawn: bool,
+    /// A turn started on it: the turn that ends its work answers it.
+    /// Absent in files written before it existed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub taken: bool,
 }
 
 /// What kind of work a queued item is.

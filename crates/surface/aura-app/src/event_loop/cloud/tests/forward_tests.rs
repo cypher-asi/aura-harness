@@ -94,6 +94,7 @@ async fn a_finished_cloud_turn_completes_the_chat() {
     let mut events = finished_turn_with_a_tool().await;
 
     let mut extras = TurnExtras {
+        said: String::new(),
         context_limit: Some(1_000),
         ..TurnExtras::default()
     };
@@ -253,6 +254,7 @@ async fn the_machine_s_title_names_the_chat_without_breaking_the_reply() {
     drop(tx);
     let (titles, seen) = titles("fix the build please");
     let mut extras = TurnExtras {
+        said: String::new(),
         titles: Some(titles),
         ..TurnExtras::default()
     };
@@ -301,6 +303,7 @@ async fn without_a_title_from_the_machine_the_prompt_names_the_chat() {
         drop(tx);
         let (titles, seen) = titles("\n  fix   the build\nthen run tests");
         let mut extras = TurnExtras {
+            said: String::new(),
             titles: Some(titles),
             ..TurnExtras::default()
         };

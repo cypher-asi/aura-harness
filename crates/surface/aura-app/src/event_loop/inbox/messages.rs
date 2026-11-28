@@ -87,6 +87,7 @@ impl Envelope<'_> {
                 subject: subject.clone(),
                 todo: todo.map(str::to_string),
                 withdrawn: false,
+                taken: false,
             });
         }
         Some((subject, thread))

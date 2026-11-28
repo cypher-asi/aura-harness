@@ -1,5 +1,4 @@
 use super::dispatch::*;
-use super::prompts::*;
 use super::*;
 use aura_core_protocol::ModelSelection;
 use aura_core_types::{SubagentExit, SubagentResult};

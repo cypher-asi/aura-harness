@@ -96,7 +96,8 @@ mod tests;
 mod withdraw;
 
 pub(super) use answers::{
-    answer, answer_seen, give_up, give_up_all, give_up_if_archived, give_up_seen, ARCHIVED,
+    answer, answer_seen, answer_turn, give_up, give_up_all, give_up_if_archived, give_up_seen,
+    ARCHIVED,
 };
 pub use assignments::AssignTool;
 #[cfg(test)]
@@ -165,6 +166,27 @@ struct Owed {
     /// Whether its sender took it back before it started
     /// ([`withdraw`](withdraw::withdraw)): it must not start
     withdrawn: bool,
+    /// Whether a turn started on its message ([`take_up`]): that turn, or
+    /// the software factory's last turn after it, answers it, whether or
+    /// not its message is still in the conversation when the turn ends
+    taken: bool,
+}
+
+/// A turn of `agent` starts on `text`: each request `agent` owes whose
+/// message `text` carries is taken up by it. Its answer then no longer
+/// depends on finding the message in the conversation as the turn ends,
+/// which a compaction may have summarized away or a cloud copy may not
+/// hold yet.
+pub(in crate::event_loop) fn take_up(hub: &AgentHub, agent: AgentId, text: &str) {
+    let mut state = lock(&hub.inbox.state);
+    let Some(owed) = state.owed.get_mut(&agent) else {
+        return;
+    };
+    for request in owed.iter_mut() {
+        if !request.taken && text.contains(&inbox::marker(request.kind, &request.id)) {
+            request.taken = true;
+        }
+    }
 }
 
 impl Inbox {
