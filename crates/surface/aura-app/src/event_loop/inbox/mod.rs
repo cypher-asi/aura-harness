@@ -108,12 +108,16 @@ pub(super) use messages::deliver;
 use messages::{mail_view, new_id, send, shown};
 use peers::{circle, Circle, Named, Peer, Relation};
 #[cfg(test)]
+pub(super) use saved::save_now;
+#[cfg(test)]
 pub(in crate::event_loop) use saved::Resume;
 #[cfg(test)]
 pub(super) use saved::SAVED_FILE;
 #[cfg(test)]
 pub(super) use saved::{delivered, keep_saved};
-pub(super) use saved::{flush_saved, restore_saved, resume_prompt_for, resume_saved, save_now};
+pub(super) use saved::{
+    flush_saved, restore_saved, resume_prompt_for, resume_saved, save_due, save_paced,
+};
 pub(super) use starts::give_up_unstarted;
 pub(super) use withdraw::take_withdrawn;
 
