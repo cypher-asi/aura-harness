@@ -45,6 +45,7 @@ pub use entry::{
 };
 pub use error::QueueError;
 pub use integrate::{GitIntegrator, Integrator, RepoPaths};
+pub use lock::FileLock;
 pub use processor::{Limits, MergeQueue, Processor, QueueEvent, QueuePage};
 pub use state::{Enqueued, HistoryMark, QueueState, RunOutcome};
 pub use store::QUEUE_FILE;

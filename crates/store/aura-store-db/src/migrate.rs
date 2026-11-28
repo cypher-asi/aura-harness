@@ -7,9 +7,9 @@
 //! `RocksStore::open_sealed(.., Some(cipher))` would have written — so the
 //! copy is indistinguishable from a database that was sealed from birth.
 //!
-//! The atomic/resumable orchestration (temp dir, swap, `.aura-sealed`
-//! marker, plaintext-backup cleanup) lives in `aura-node`'s
-//! `state_migration` module; this module only knows how to produce a
+//! The atomic/resumable orchestration (temp dir, verify, swap,
+//! `.aura-sealed` marker, plaintext-backup cleanup) lives in
+//! [`crate::seal_migration`]; this module only knows how to produce a
 //! sealed copy.
 
 use std::path::Path;
@@ -20,7 +20,7 @@ use crate::cf;
 use crate::error::{backend, StoreError};
 use crate::seal::SealCipher;
 
-type Db = DBWithThreadMode<MultiThreaded>;
+pub(crate) type Db = DBWithThreadMode<MultiThreaded>;
 
 /// Every column family the store knows about. Mirrors the descriptor
 /// list in `RocksStore::open_sealed`, so a database produced by
@@ -124,13 +124,24 @@ pub fn seal_db_copy(
     let src_cf_names = Db::list_cf(&Options::default(), src).map_err(backend)?;
     let src_db = Db::open_cf_for_read_only(&Options::default(), src, &src_cf_names, false)
         .map_err(backend)?;
+    seal_db_copy_from(&src_db, &src_cf_names, dst, cipher)
+}
 
-    let dst_cf_names = destination_cf_names(&src_cf_names);
+/// [`seal_db_copy`] from a source the caller already holds open, so it
+/// can keep the database's lock for the whole copy. `src_cf_names`
+/// lists every family `src_db` was opened with.
+pub(crate) fn seal_db_copy_from(
+    src_db: &Db,
+    src_cf_names: &[String],
+    dst: &Path,
+    cipher: &SealCipher,
+) -> Result<SealCopyStats, StoreError> {
+    let dst_cf_names = destination_cf_names(src_cf_names);
     let dst_db = open_destination(dst, &dst_cf_names)?;
 
     let mut stats = SealCopyStats::default();
-    for cf_name in &src_cf_names {
-        copy_column_family(&src_db, &dst_db, cf_name, cipher, &mut stats)?;
+    for cf_name in src_cf_names {
+        copy_column_family(src_db, &dst_db, cf_name, cipher, &mut stats)?;
     }
 
     flush_destination(&dst_db, &dst_cf_names)?;
