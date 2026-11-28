@@ -97,3 +97,35 @@ fn a_failure_the_row_cuts_off_shows_whole_under_the_pointer() {
     assert!(pointed.contains("TurnExtras"), "{pointed}");
     assert!(pointed.contains("run_started"), "{pointed}");
 }
+
+#[test]
+fn a_starting_member_keeps_the_screen_moving_so_its_time_counts_up() {
+    let idle = channel_with(AgentSummary::default());
+    assert!(!idle.animating(), "nothing moves for an idle member");
+    let mut starting = channel_with(AgentSummary {
+        starting: true,
+        start_step: Some(StartStep {
+            label: "Preparing project snapshot".to_string(),
+            index: 5,
+            total: 9,
+            since_ms: aura_core_types::time::now_ms(),
+        }),
+        ..AgentSummary::default()
+    });
+    assert!(
+        starting.animating(),
+        "its spinner turns, so its time is drawn again"
+    );
+    let failed = channel_with(AgentSummary {
+        error: Some("Could not start on a cloud machine: no boxd key".to_string()),
+        ..AgentSummary::default()
+    });
+    assert!(!failed.animating(), "a failed member is still");
+    // Its icon is the spinner, not the member's `@`.
+    let rows = render_rows(&mut starting, 160);
+    let row = rows
+        .iter()
+        .find(|row| row.contains("rust-engineer"))
+        .unwrap();
+    assert!(!row.contains("@  rust-engineer"), "{row}");
+}
