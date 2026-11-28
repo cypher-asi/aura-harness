@@ -15,7 +15,7 @@ use aura_model::Message;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 use uuid::Uuid;
 
 pub(in crate::gateway::session) fn populate_tool_definitions(
@@ -163,12 +163,14 @@ async fn prepare_turn_context(
 
     // Resolve active skill names before creating the memory observer so we can
     // forward them for procedure extraction.
-    let active_skill_names = inject_skills(session, ctx, &mut config);
+    let active_skill_names =
+        crate::gateway::session::skills::inject_skills(session, ctx, &mut config);
+    let has_skills = !active_skill_names.is_empty();
     if let Some(ref mm) = ctx.memory_manager {
         attach_memory(mm, session, &mut config, &msg.content, active_skill_names).await;
     }
 
-    let tools = session.tool_definitions.clone();
+    let tools = turn_tools(session, has_skills);
     let messages = session.messages.clone();
 
     let recorder = helpers::trace_recorder(session, ctx, &config.model);
@@ -187,6 +189,17 @@ async fn prepare_turn_context(
         recorder,
         title,
     })
+}
+
+/// The tools a turn of `session` is offered: the session's, and
+/// `load_skill` when its skills are listed rather than pasted in.
+fn turn_tools(session: &Session, has_skills: bool) -> Vec<aura_model::ToolDefinition> {
+    let mut tools = session.tool_definitions.clone();
+    let name = aura_exec_tools::skills::LOAD_SKILL_TOOL_NAME;
+    if has_skills && !tools.iter().any(|t| t.name == name) {
+        tools.push(aura_exec_tools::skills::load_skill_definition());
+    }
+    tools
 }
 
 /// Session-scoped copy of the node tool config, extended with the
@@ -295,43 +308,6 @@ fn apply_subagent_surface(config: &mut AgentLoopConfig) {
     // registry surface `registry_chars` counts tokens for.
     config.subagents_segments =
         aura_agent_subagent::registry::registry_segments(&subagent_registry);
-}
-
-/// Inject the agent's skills into the system prompt; returns the names of
-/// the injected skills.
-fn inject_skills(session: &Session, ctx: &WsContext, config: &mut AgentLoopConfig) -> Vec<String> {
-    let mut active_skill_names: Vec<String> = Vec::new();
-    if let (Some(ref sm), Some(ref agent_id)) = (&ctx.skill_manager, &session.skill_agent_id) {
-        if let Ok(mgr) = sm.read() {
-            // Capture the prompt length before injection so the "Skills"
-            // bucket can be reported as the delta — the text the
-            // skill-injection step actually appends to the system
-            // prompt — without double-counting it under "System
-            // prompt" downstream in `agent_loop::context::recompute_breakdown`.
-            let pre_inject_chars = config.system_prompt.len();
-            let injected = mgr.inject_agent_skills(agent_id, &mut config.system_prompt);
-            let post_inject_chars = config.system_prompt.len();
-            config.skills_chars = post_inject_chars.saturating_sub(pre_inject_chars);
-            // Parallel per-skill text for the context-contents viewer.
-            // The skill body is already embedded in the system prompt;
-            // the "Skills" bucket carries only each skill's name +
-            // summary so the text is not double-counted across buckets.
-            config.skills_segments = injected
-                .iter()
-                .map(|s| (s.name.clone(), s.description.clone()))
-                .collect();
-            if !injected.is_empty() {
-                active_skill_names = injected.iter().map(|s| s.name.clone()).collect();
-                debug!(
-                    session_id = %session.session_id,
-                    skill_count = active_skill_names.len(),
-                    skills_chars = config.skills_chars,
-                    "Injected agent skills into prompt"
-                );
-            }
-        }
-    }
-    active_skill_names
 }
 
 /// Inject recalled memory into the system prompt and register the
