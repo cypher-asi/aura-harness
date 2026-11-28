@@ -219,3 +219,48 @@ fn summaries_are_asked_of_haiku_when_the_user_reaches_it() {
     );
     assert_eq!(key_of(" same text "), key_of("same text"));
 }
+
+#[test]
+fn the_coordinators_typed_messages_are_listed_under_their_prompt_key() {
+    use aura_ui::events::{ActivityData, MessageData, MessageRole};
+    let typed = |text: &str| MessageData::new(MessageRole::User, text);
+    let history = vec![
+        typed(LONG),
+        MessageData::new(MessageRole::Assistant, "Done."),
+        MessageData {
+            command: Some("cargo test".to_string()),
+            ..typed("cargo test")
+        },
+        MessageData {
+            activity: Some(ActivityData::Thinking {
+                text: "hm".to_string(),
+                duration_ms: None,
+            }),
+            ..typed("hm")
+        },
+        typed("RE36: Parser done\n(inbox reply 7 from RE36, Parser)\nAll green."),
+        typed("  "),
+        typed("ship it"),
+    ];
+    assert_eq!(
+        prompts_of(&history),
+        [
+            (prompt_key(LONG), LONG.to_string()),
+            (prompt_key("ship it"), "ship it".to_string()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_typed_message_is_summarized_under_its_prompt_key() {
+    let summaries = Arc::new(PostSummaries::new(None));
+    let stub = Stub::answering(Some("Footer links open in new tabs"));
+    let (tx, mut rx) = mpsc::channel(16);
+    let typed = vec![(prompt_key(LONG), LONG.to_string())];
+    summarize_posts(summaries, tx, "c1".into(), typed, Some(asker(&stub))).await;
+    let summary = "Footer links open in new tabs".to_string();
+    assert_eq!(
+        sent(&mut rx).await,
+        [("c1".to_string(), prompt_key(LONG), summary)]
+    );
+}

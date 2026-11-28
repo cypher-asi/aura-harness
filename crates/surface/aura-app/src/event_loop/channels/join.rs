@@ -174,6 +174,7 @@ pub(crate) fn add_agent(
     }
     if channel.placement == ChannelPlacement::Cloud {
         lock(&hub.cloud_starts).insert(agent_id);
+        lock(&hub.cloud_members).insert(agent_id);
     }
     drop(registry);
     if let Some(workspace) = workspace {

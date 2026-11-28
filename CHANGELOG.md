@@ -7,6 +7,71 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Channel members no longer stall silently
+
+##### Fixed
+
+- A message one cloud member sends another now always goes through this
+  computer's inbox. Before, a member's peers were known only once its own
+  turn started, were forgotten when the app restarted, and were never
+  known for agents it spawned on its machine. Mail outside that list went
+  straight to the other member's machine. There it either started a turn
+  this computer never saw, so the next message started a second session
+  of the same agent, or it was only written to the agent's log and never
+  read. Peers are now refreshed as the cloud comes up and as members
+  join, and an agent spawned on a member's machine reaches the same
+  peers, its messages sent as the member's.
+- A message that can't be delivered now tells its sender why, in place
+  of a line in the log.
+- A cloud machine no longer starts a second run for an agent that is
+  already mid-turn there. This computer waits for that turn to end
+  ("Waiting for the turn already running on its machine"), then starts
+  its own.
+- Work that can't start at all (its session can't be opened, its local
+  model isn't running, its plan isn't linked for the cloud) gives up the
+  reports it owed, telling whoever waits, and marks the member failed,
+  instead of leaving those reports owed.
+- Once a minute the app looks for members that owe a report but have
+  nothing running or queued. Each is asked once to carry on, then its
+  reports are given up as stalled. Members you stopped yourself are left
+  alone until their next turn.
+
+##### Added
+
+- `list_agents` and `get_agent_state` give each peer a `state`:
+  `working`, `starting in the cloud`, `queued`, `idle`, `failed` or
+  `stalled`, with `why` where it applies.
+
+### HISTORY lists the messages you typed to the coordinator
+
+##### Fixed
+
+- A channel's HISTORY tab now lists every message you sent there. It
+  used to list only messages that mentioned a member, which become
+  channel posts; a message to the coordinator alone stays in its
+  conversation and was missing. Those are listed now among the posts,
+  by time, summarized the same way when long, and Enter or a click
+  jumps the chat back to them, from a member's chat too. A message sent
+  to members and the coordinator at once is listed once. Mail other
+  agents send the coordinator is not listed.
+
+### A cloud channel's member never works here, and work taken back never starts
+
+##### Fixed
+
+- A member of a channel whose agents run in the cloud never works on
+  this computer, in the folder other agents share. That holds even when
+  its machine was never started, its start was lost to a restart, or the
+  cloud isn't connected. Work sent to it first starts (or finds) its
+  machine and waits for it; when that can't be done, the member fails in
+  red and its assigner gets `ok=false` with the reason.
+- `assign` with `withdraw` takes back the work given to a member that it
+  hasn't started, and it never starts. Giving a todo to another member
+  takes it back from the one that had it. Work already under way isn't
+  stopped and still reports.
+- Archiving a member drops the work queued for it, and gives up what it
+  owed with `ok=false`, instead of starting that work later.
+
 ### A plan says where it came from
 
 ##### Added

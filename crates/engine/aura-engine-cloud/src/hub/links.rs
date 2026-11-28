@@ -81,16 +81,15 @@ impl CloudHub {
             .unwrap_or_else(|| names::owner_tag(&self.current_owner()));
         if sender.as_deref() != Some(recipient.as_str()) {
             self.mail.forget(mail);
-            return ack(
-                false,
-                Some(format!("agent {} belongs to another user", mail.to)),
-            );
+            let why = format!("agent {} belongs to another user", mail.to);
+            self.tell_refused(mail, &why);
+            return ack(false, Some(why));
         }
-        let desk = self.desk_for(mail);
+        let filing = self.desk_for(mail);
         let elsewhere = self
             .directory
             .holder(&mail.to)
-            .filter(|holder| holder.node != HUB_NODE && desk.is_none());
+            .filter(|holder| holder.node != HUB_NODE && filing.is_none());
         if let Some(holder) = elsewhere {
             // For another node: forward it; that node drops it if its
             // sender already reached it directly.
@@ -99,9 +98,9 @@ impl CloudHub {
             }
             return ack(true, None);
         }
-        let delivered = match (desk, remote_mail(mail)) {
+        let delivered = match (filing, remote_mail(mail)) {
             (_, Err(err)) => Err(err),
-            (Some(desk), Ok(remote)) => desk.file(remote).await,
+            (Some(filing), Ok(remote)) => filing.file(remote).await,
             (None, Ok(remote)) => match self.host.lock().clone() {
                 Some(host) => host.deliver_remote(remote),
                 None => Err("the hub has no agents".to_string()),
@@ -112,6 +111,7 @@ impl CloudHub {
             Err(err) => {
                 // A resend may succeed (the agent restarted).
                 self.mail.forget(mail);
+                self.tell_refused(mail, &err);
                 ack(false, Some(err))
             }
         }
@@ -154,7 +154,7 @@ impl CloudHub {
     }
 }
 
-fn remote_mail(mail: &MeshMail) -> Result<RemoteMail, String> {
+pub(super) fn remote_mail(mail: &MeshMail) -> Result<RemoteMail, String> {
     Ok(RemoteMail {
         from: AgentId::from_hex(&mail.from).map_err(|e| format!("bad sender: {e}"))?,
         from_name: mail.from_name.clone(),

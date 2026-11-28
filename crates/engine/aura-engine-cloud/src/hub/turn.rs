@@ -198,8 +198,9 @@ struct TurnPrompt {
     request: RuntimeRequest,
 }
 
-/// One turn: start the chat run `turn.request` asks for, send the prompt,
-/// map the stream.
+/// One turn: start the chat run `turn.request` asks for once the agent
+/// has no other turn under way on its machine, send the prompt, map the
+/// stream.
 async fn stream_turn(
     hub: &CloudHub,
     node: &NodeClient,
@@ -207,7 +208,7 @@ async fn stream_turn(
     tx: &mpsc::Sender<RemoteEvent>,
     cancel: CancellationToken,
 ) -> CloudResult<()> {
-    let started = node.start_run(&turn.request).await?;
+    let started = super::busy::start_when_free(node, &turn.request, tx, &cancel).await?;
     let _streamed = started
         .get("run_id")
         .and_then(serde_json::Value::as_str)

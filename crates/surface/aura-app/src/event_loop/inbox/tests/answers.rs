@@ -134,6 +134,7 @@ async fn a_finished_assignment_reports_back_and_closes_the_coordinators_todo() {
         subject: "Footer".to_string(),
         prompt: "Fix the footer links.".to_string(),
         todo_id: Some("4".to_string()),
+        withdraw: false,
     };
     assign(&fixture.hub, coordinator, args).await.unwrap();
     let [assigned] = take_all(&mut notices).try_into().unwrap();

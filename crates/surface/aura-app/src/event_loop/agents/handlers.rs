@@ -209,8 +209,14 @@ pub(crate) async fn handle_archive_agent(state: &mut LoopState<'_>, agent_hex: &
     }
     // Archiving gives up on what they owe, even on a turn the user
     // already stopped.
+    // Work still queued for them never starts, and what an idle one owes
+    // is given up now; a busy one's is when its turn ends.
     for &id in &subtree {
         state.hub.inbox.take_interrupted(id);
+        state.queued.drop_all(id);
+        if !state.hub.is_working(id) {
+            super::super::inbox::give_up_all(&state.hub, id, super::super::inbox::ARCHIVED);
+        }
     }
     let stopped = stop_busy(state, &subtree).await;
     super::super::cloud::on_archive(state, &subtree);

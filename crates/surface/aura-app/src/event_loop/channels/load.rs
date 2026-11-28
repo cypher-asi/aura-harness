@@ -8,6 +8,9 @@ pub(crate) struct ChannelSets {
     pub(crate) members: HashSet<AgentId>,
     /// The members of channels without a project
     pub(crate) hidden: HashSet<AgentId>,
+    /// The members of channels whose agents run in the cloud, for
+    /// [`AgentHub::cloud_members`]
+    pub(crate) cloud: HashSet<AgentId>,
 }
 
 /// Bring the channels in `store` up to date with `registry` and read what
@@ -42,7 +45,47 @@ pub(crate) fn load_channels(
         warn!(%error, "Could not read which channels have a project; hiding every member");
         members.clone()
     });
-    ChannelSets { members, hidden }
+    let cloud = load_cloud(store, registry).unwrap_or_else(|error| {
+        warn!(%error, "Could not read which channels run in the cloud");
+        HashSet::new()
+    });
+    ChannelSets {
+        members,
+        hidden,
+        cloud,
+    }
+}
+
+/// The members of every channel in `store` whose agents run in the cloud,
+/// for [`AgentHub::cloud_members`]: those brought in as members, but for
+/// planners, which plan on this computer.
+fn load_cloud(
+    store: &ChannelStore,
+    registry: &AgentRegistry,
+) -> Result<HashSet<AgentId>, aura_store_db::ChannelError> {
+    let mut cloud = HashSet::new();
+    for channel in store.list()? {
+        if channel.placement != ChannelPlacement::Cloud {
+            continue;
+        }
+        let members = store.members(&channel.id)?;
+        cloud.extend(
+            members
+                .into_iter()
+                .filter(|member| member.role == MemberRole::Agent)
+                .map(|member| member.agent_id)
+                .filter(|agent| !is_planner(registry, *agent)),
+        );
+    }
+    Ok(cloud)
+}
+
+/// Whether `agent` is an instance of the planner, which plans here.
+fn is_planner(registry: &AgentRegistry, agent: AgentId) -> bool {
+    registry
+        .find(agent)
+        .and_then(|found| found.definition.as_deref())
+        .is_some_and(|definition| definition == super::plan::PLANNER_DEFINITION)
 }
 
 /// Every agent in a channel in `store`, for [`AgentHub::channel_members`].
