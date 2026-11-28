@@ -431,6 +431,15 @@ pub enum UiEvent {
         /// chip for each
         images: Vec<ImageAttachment>,
     },
+
+    /// The QUEUE tab of a channel was scrolled to its oldest merge shown:
+    /// send the finished merges before cursor `before` (its view's
+    /// `older`), as a `SetMergeQueue` with `page_before` set
+    LoadMergeHistory {
+        /// Channel id
+        channel_id: String,
+        before: u64,
+    },
 }
 
 /// What `/rewind` puts back.

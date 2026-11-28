@@ -184,6 +184,7 @@ async fn turn_task(
     let task = Task::Turn {
         prompt,
         planning: state.hub.mode_of(agent_id) == PermissionMode::Plan,
+        factory: state.hub.factory_flows.stage(agent_id).is_some(),
         agent_loop: Box::new(agent_loop),
         tools,
         steering: turn_steering,

@@ -1,5 +1,6 @@
 //! The QUEUE tab of an open channel's side panel: every merge of the
-//! merge queue of the channel's repo, newest first, as an info document.
+//! merge queue of the channel's repo, what waits and runs first, then
+//! the finished ones, newest first, as an info document.
 //!
 //! A header names the branch merges land on and the repo's folder; then
 //! each merge is a block: its state, coloured, with its branch and the
@@ -19,6 +20,10 @@
 //!   cargo test failed: parser::escapes
 //! ```
 //!
+//! Every merge is listed, the older ones a page at a time: scrolled near
+//! its end, the tab asks for the page before the oldest shown, and says
+//! `Loading older merges…` there until it comes.
+//!
 //! Without a queue, or with nothing in it, a note says where merges come
 //! from.
 
@@ -35,6 +40,13 @@ use ratatui::{
     Frame,
 };
 use unicode_width::UnicodeWidthStr;
+
+/// What QUEUE says under its oldest merge shown while older ones are on
+/// their way.
+pub(super) const LOADING_OLDER: &str = "Loading older merges…";
+
+/// Lines from the end of QUEUE at which the older merges are asked for.
+const LOAD_AHEAD: usize = 20;
 
 /// What QUEUE says while no merge has been queued.
 pub(super) const NO_MERGES: &str = "No merges yet. Every push from an agent of this channel \
@@ -56,6 +68,10 @@ pub(super) fn render_channel_queue(
     let body = Body::new(area, inner, app.focus() == PanelFocus::Sandbox);
     let lines = queue_lines(app.open_channel_queue(), body.text_width(), theme);
     let first = app.sync_channel_queue_scroll(lines.len(), body.visible());
+    // Near the oldest merge shown: ask for the ones before it.
+    if first + body.visible() + LOAD_AHEAD >= lines.len() {
+        app.request_older_merges();
+    }
     body.draw_document(frame, lines, first, theme);
 }
 
@@ -89,6 +105,12 @@ pub(super) fn queue_lines(
         }
         lines.push(entry_head(entry, width, theme));
         lines.extend(entry_facts(entry, width, theme));
+    }
+    if queue.is_some_and(|queue| queue.older.is_some()) {
+        let mut more = Info::new(width, theme);
+        more.blank();
+        more.note(LOADING_OLDER);
+        lines.extend(more.into_lines());
     }
     lines
 }

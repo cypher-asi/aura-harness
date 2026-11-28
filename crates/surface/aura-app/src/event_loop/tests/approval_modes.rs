@@ -338,3 +338,49 @@ async fn init_asks_the_agent_to_improve_an_existing_agents_md() {
         "the agent's chat learns which instruction files it loads"
     );
 }
+
+/// The system notes shown in `agent`'s chat among `sent`.
+fn notes_to(sent: &[(Option<String>, UiCommand)], agent: AgentId) -> Vec<String> {
+    let hex = agent.to_hex();
+    sent.iter()
+        .filter(|(to, _)| to.as_deref() == Some(hex.as_str()))
+        .filter_map(|(_, command)| match command {
+            UiCommand::ShowMessage(message) => Some(message.content.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn plan_mode_asks_the_user_to_build_only_when_the_factory_does_not() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut state = loop_state(&fixture, &mut b);
+    let mode = |mode| UiEvent::SetMode {
+        agent_id: first.to_hex(),
+        mode,
+    };
+
+    let _ = drain(&mut commands);
+    handle_ui_event(&mut state, mode(PermissionMode::Plan), &links).await;
+    let own = notes_to(&drain(&mut commands), first);
+    assert!(own.iter().any(|n| n.contains("/build")), "{own:?}");
+
+    handle_ui_event(&mut state, mode(PermissionMode::Agent), &links).await;
+    state.hub.factory_flows.assign(first);
+    assert!(state.hub.factory_flows.begin(first));
+    let _ = drain(&mut commands);
+    handle_ui_event(&mut state, mode(PermissionMode::Plan), &links).await;
+    let factory = notes_to(&drain(&mut commands), first);
+    let note = factory
+        .iter()
+        .find(|n| n.starts_with("Plan mode:"))
+        .expect("a plan mode note");
+    assert!(
+        !note.contains("/build") && !note.contains("implement\""),
+        "{note}"
+    );
+    assert!(note.contains("on its own"), "{note}");
+}

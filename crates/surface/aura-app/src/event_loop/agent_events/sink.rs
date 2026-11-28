@@ -51,10 +51,7 @@ impl UiCommandSink {
         let Some(view) = plan_view(&self.plan.workspace, path) else {
             return;
         };
-        let note = format!(
-            "Plan ready: {} ({path}). Keep chatting to revise it, or say \"implement\" (or run /build) to build it.",
-            view.name
-        );
+        let note = crate::event_loop::factory::plan_ready_note(&view.name, path, self.plan.factory);
         self.plan
             .tasks
             .show_plan(&self.plan.workspace, view.clone())

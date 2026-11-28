@@ -267,12 +267,6 @@ impl App {
         self.channels.merge_queues.get(id)
     }
 
-    /// Keep the merge queue of channel `channel_id`'s repo, for its QUEUE
-    /// tab, in place of the one before.
-    pub(in crate::app) fn set_merge_queue(&mut self, channel_id: String, queue: MergeQueueView) {
-        self.channels.merge_queues.insert(channel_id, queue);
-    }
-
     /// Keep the QUEUE side tab's scroll inside a document `total` lines
     /// long shown `visible` lines at a time, returning the first line to
     /// show.

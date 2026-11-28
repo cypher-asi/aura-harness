@@ -15,6 +15,7 @@
 //! - [`entry`]: what an entry is, and the push marker.
 //! - [`state`]: the queue and every change to it, pure.
 //! - [`store`]: the queue file and the one-processor-per-repo lock.
+//! - [`history`]: every finished merge, read a page at a time.
 //! - [`lock`]: the operating system's file locks both are held with.
 //! - [`config`]: target branch and checks.
 //! - [`integrate`]: landing one entry with git.
@@ -25,6 +26,7 @@ pub mod config;
 pub mod entry;
 pub mod error;
 pub mod git;
+pub mod history;
 pub mod integrate;
 pub mod lock;
 pub mod processor;
@@ -36,6 +38,7 @@ pub use entry::{
     short_sha, EntryId, MergeEntry, MergeRequest, MergeStatus, Origin, QueuedPush, MERGE_QUEUE_KEY,
 };
 pub use error::QueueError;
+pub use history::HistoryPage;
 pub use integrate::{GitIntegrator, Integrator, RepoPaths};
 pub use processor::{Limits, MergeQueue, QueueEvent};
 pub use state::{Enqueued, QueueState, RunOutcome};

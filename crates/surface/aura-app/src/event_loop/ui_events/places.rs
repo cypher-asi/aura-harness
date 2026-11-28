@@ -16,6 +16,9 @@ pub(super) async fn handle(state: &mut LoopState<'_>, event: UiEvent) {
         UiEvent::CloudSetup => cloud::handle_setup(state).await,
         UiEvent::ListSandbox(dir) => cloud::list_sandbox(state, dir),
         UiEvent::ReadSandboxFile(path) => cloud::read_sandbox_file(state, path),
+        UiEvent::LoadMergeHistory { channel_id, before } => {
+            crate::event_loop::factory::service::load_history(&channel_id, before);
+        }
         channel_event => channel(state, channel_event).await,
     }
 }

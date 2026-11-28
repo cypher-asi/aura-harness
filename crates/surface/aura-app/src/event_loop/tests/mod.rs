@@ -43,6 +43,7 @@ mod gate_review;
 mod gate_routing;
 mod helpers;
 mod inbox;
+mod merge_queue_tab;
 mod messages;
 mod open_plan;
 mod provider;

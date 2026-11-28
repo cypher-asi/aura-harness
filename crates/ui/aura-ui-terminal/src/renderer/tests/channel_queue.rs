@@ -54,6 +54,7 @@ fn zode_queue() -> crate::events::MergeQueueView {
                 ..entry("q1", "docs/readme", MergeStateView::Merged)
             },
         ],
+        ..MergeQueueView::default()
     }
 }
 
@@ -156,6 +157,7 @@ fn test_queue_tab_without_merges_says_where_they_come_from() {
             target: "main".to_string(),
             repo: "/src/zode".to_string(),
             entries: Vec::new(),
+            ..MergeQueueView::default()
         },
     });
     let rows = render_rows(&mut app, 140);
@@ -212,4 +214,37 @@ fn test_a_time_that_does_not_parse_is_cut_to_its_minutes() {
         "2024-11-27 20:31"
     );
     assert_eq!(compact_time(QUEUED_AT), local(QUEUED_AT));
+}
+
+#[test]
+fn test_queue_tab_asks_for_older_merges_when_scrolled_to_its_end() {
+    use crate::events::{UiCommand, UiEvent};
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    let mut app = queue_app().with_event_sender(tx);
+    app.process_command(UiCommand::SetMergeQueue {
+        channel_id: "c1".to_string(),
+        queue: crate::events::MergeQueueView {
+            older: Some(4_096),
+            ..zode_queue()
+        },
+    });
+    let screen = render_rows_sized(&mut app, 140, TALL).join("\n");
+    assert!(
+        screen.contains(super::super::channel_queue::LOADING_OLDER),
+        "{screen}"
+    );
+    let mut asked = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        if let UiEvent::LoadMergeHistory { before, .. } = event {
+            asked.push(before);
+        }
+    }
+    assert_eq!(asked, [4_096], "the whole queue fits: its end is on screen");
+
+    send_zode_queue(&mut app);
+    let screen = render_rows_sized(&mut app, 140, TALL).join("\n");
+    assert!(
+        !screen.contains(super::super::channel_queue::LOADING_OLDER),
+        "{screen}"
+    );
 }

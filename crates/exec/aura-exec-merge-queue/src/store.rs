@@ -13,6 +13,9 @@
 //!   operating system's ([`FileLock`]): it lasts as long as its holder
 //!   and goes with it, so nothing refreshes it and no one takes it over
 //!   from a live holder, however long a merge runs.
+//! - Every entry a change finishes is appended to the history
+//!   ([`crate::history`]) under the same lock, before the queue file is
+//!   saved, so pruning the queue file never loses a merge.
 //! - A queue file that cannot be read as a queue is moved aside (never
 //!   deleted) and the queue starts empty, so one bad write can't stop the
 //!   repo's merges for good.
@@ -20,6 +23,7 @@
 //! Everything here is blocking file IO; async callers run it on a
 //! blocking thread.
 
+use crate::entry::MergeEntry;
 use crate::error::QueueError;
 use crate::lock::FileLock;
 use crate::state::QueueState;
@@ -123,10 +127,49 @@ impl QueueStore {
         let mut after = before.clone();
         let result = edit(&mut after);
         if after != before {
+            // The history first: a merge it lacks would be lost once
+            // the queue file prunes it.
+            crate::history::append(&self.dir, &newly_finished(&before, &after))?;
             self.save(&after)?;
         }
         Ok((after, result))
     }
+
+    /// Start the history from the finished entries an older queue file
+    /// kept, when there is no history yet, under the state lock.
+    ///
+    /// # Errors
+    /// The lock can't be taken, or a file can't be read or written.
+    pub fn seed_history(&self) -> Result<(), QueueError> {
+        if crate::history::path_in(&self.dir).exists() {
+            return Ok(());
+        }
+        let _lock = FileLock::exclusive(&self.dir.join(STATE_LOCK_FILE), STATE_LOCK_WAIT)?;
+        let (state, _) = self.load()?;
+        let finished: Vec<MergeEntry> = state
+            .entries
+            .into_iter()
+            .filter(|entry| entry.status.is_finished())
+            .collect();
+        crate::history::seed(&self.dir, &finished)
+    }
+}
+
+/// The entries `after` has finished that `before` had not, in `after`'s
+/// order.
+fn newly_finished(before: &QueueState, after: &QueueState) -> Vec<MergeEntry> {
+    after
+        .entries
+        .iter()
+        .filter(|entry| entry.status.is_finished())
+        .filter(|entry| {
+            !before
+                .entries
+                .iter()
+                .any(|old| old.id == entry.id && old.status.is_finished())
+        })
+        .cloned()
+        .collect()
 }
 
 /// The right to process one repo's queue, for as long as it lives.
@@ -149,7 +192,7 @@ impl ProcessorLock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entry::{MergeRequest, Origin, QueuedPush};
+    use crate::entry::{EntryId, MergeRequest, Origin, QueuedPush};
 
     fn one_entry() -> QueueState {
         let mut state = QueueState::default();
@@ -216,6 +259,59 @@ mod tests {
         let branches: Vec<&str> = after.entries.iter().map(|e| e.branch.as_str()).collect();
         assert_eq!(branches, ["aura/a", "aura/b"]);
         assert_eq!(a.load().unwrap().0, after);
+    }
+
+    #[test]
+    fn every_finished_entry_reaches_the_history_though_the_file_prunes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = QueueStore::new(dir.path());
+        for n in 0..5 {
+            store
+                .update(|state| {
+                    let push = MergeRequest {
+                        push: QueuedPush {
+                            branch: format!("aura/{n}"),
+                            head: "h".into(),
+                            remote: None,
+                        },
+                        origin: Origin::default(),
+                    };
+                    let now = chrono::Utc::now();
+                    let id = state.enqueue(push, now).id().clone();
+                    state.claim_next(now);
+                    state.finish(&id, crate::state::RunOutcome::Failed("no".into()), now);
+                    state.prune(2);
+                })
+                .unwrap();
+        }
+        store.update(|_| ()).unwrap();
+        assert_eq!(store.load().unwrap().0.entries.len(), 2, "the file prunes");
+        let page = crate::history::read_page(dir.path(), None, 10).unwrap();
+        let ids: Vec<&str> = page.entries.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["q5", "q4", "q3", "q2", "q1"],
+            "each once, newest first"
+        );
+    }
+
+    #[test]
+    fn the_history_starts_from_an_old_queue_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = QueueStore::new(dir.path());
+        let mut state = one_entry();
+        let now = chrono::Utc::now();
+        state.claim_next(now);
+        state.finish(
+            &EntryId::from_seq(1),
+            crate::state::RunOutcome::Failed("x".into()),
+            now,
+        );
+        store.save(&state).unwrap();
+        store.seed_history().unwrap();
+        store.seed_history().unwrap();
+        let page = crate::history::read_page(dir.path(), None, 10).unwrap();
+        assert_eq!(page.entries.len(), 1);
     }
 
     #[test]

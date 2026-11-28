@@ -45,6 +45,7 @@
 mod fold;
 mod history;
 mod list;
+mod queue_pages;
 mod side;
 mod welcome;
 
@@ -100,6 +101,8 @@ pub(crate) struct ChannelState {
     info_scroll: InfoScroll,
     /// The merge queue of each channel's repo, by channel id
     merge_queues: HashMap<String, MergeQueueView>,
+    /// How far each channel's QUEUE tab has paged into its history
+    queue_pages: HashMap<String, queue_pages::QueuePages>,
     /// How far the QUEUE side tab is scrolled
     queue_scroll: InfoScroll,
     /// The HISTORY side tab: where it is, and its summaries

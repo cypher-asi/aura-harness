@@ -144,6 +144,9 @@ pub(crate) struct TurnPlan {
     /// Workspace-relative plan the agent is building, whose todos follow
     /// its todo list
     pub building: Option<String>,
+    /// Whether the software factory builds the plan the turn writes,
+    /// without waiting for the user
+    pub factory: bool,
 }
 
 /// Tokens and estimated cost of one model call, for the reply footer:

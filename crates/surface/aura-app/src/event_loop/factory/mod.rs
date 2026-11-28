@@ -7,16 +7,21 @@
 //! - [`observe`]: every push any agent makes, from its tool results.
 //! - [`turn`]: what one turn did: the plan it wrote, the pushes it made.
 //! - [`service`]: the repos' merge queues and their processors.
+//! - `repos`: the repos the channels' projects are in.
 //! - [`view`]: a queue as the QUEUE tab shows it.
 
 pub(crate) mod flow;
 pub(crate) mod hooks;
 pub(crate) mod observe;
+mod repos;
 pub(crate) mod service;
 pub(crate) mod turn;
 pub(crate) mod view;
 
 pub(crate) use flow::Flows;
+pub(crate) use notes::{plan_mode_note, plan_ready_note};
+
+mod notes;
 
 /// How a channel member works in the factory, in its prompt after its
 /// `<channel>` block.

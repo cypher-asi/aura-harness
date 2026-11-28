@@ -20,6 +20,7 @@
 
 use crate::entry::{MergeEntry, MergeRequest};
 use crate::error::QueueError;
+use crate::history::HistoryPage;
 use crate::integrate::{Integrator, RepoPaths};
 use crate::state::{Enqueued, QueueState, RunOutcome};
 use crate::store::{ProcessorLock, QueueStore};
@@ -46,7 +47,8 @@ pub struct Limits {
     pub entry_timeout: Duration,
     /// Longest an entry may wait after its branch's last push
     pub queued_ttl: chrono::Duration,
-    /// Finished entries kept for the Queue tab
+    /// Finished entries kept in the queue file, to tell a push that
+    /// merged already; every one stays in the history
     pub keep_finished: usize,
 }
 
@@ -56,7 +58,7 @@ impl Default for Limits {
             max_attempts: 3,
             entry_timeout: Duration::from_secs(3 * 60 * 60),
             queued_ttl: chrono::Duration::hours(24),
-            keep_finished: 1_000,
+            keep_finished: 200,
         }
     }
 }
@@ -101,6 +103,10 @@ impl MergeQueue {
         let store = QueueStore::new(repo.queue_dir());
         let loading = store.clone();
         let (state, _) = blocking(move || loading.load()).await?;
+        let seeding = store.clone();
+        if let Err(error) = blocking(move || seeding.seed_history()).await {
+            tracing::warn!(%error, "Could not start the merge history from the queue file");
+        }
         let (events, _) = broadcast::channel(256);
         let inner = Inner {
             repo,
@@ -143,6 +149,20 @@ impl MergeQueue {
                 self.inner.seen.lock().await.entries.clone()
             }
         }
+    }
+
+    /// Up to `limit` of the newest finished merges before cursor `before`
+    /// (the newest with `None`), newest first ([`crate::history`]).
+    ///
+    /// # Errors
+    /// The history can't be read.
+    pub async fn history(
+        &self,
+        before: Option<u64>,
+        limit: usize,
+    ) -> Result<HistoryPage, QueueError> {
+        let dir = self.inner.repo.queue_dir();
+        blocking(move || crate::history::read_page(&dir, before, limit)).await
     }
 
     /// Queue `request` and wake the processor.

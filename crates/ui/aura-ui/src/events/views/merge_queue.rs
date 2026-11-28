@@ -18,6 +18,12 @@ pub enum MergeStateView {
 }
 
 impl MergeStateView {
+    /// Whether the merge is done, merged or not.
+    #[must_use]
+    pub const fn is_finished(self) -> bool {
+        matches!(self, Self::Merged | Self::Failed)
+    }
+
     /// Upper-case name, as the QUEUE tab shows it.
     #[must_use]
     pub const fn label(self) -> &'static str {
@@ -67,6 +73,17 @@ pub struct MergeQueueView {
     pub target: String,
     /// Folder of the repo
     pub repo: String,
-    /// Every entry, newest first
+    /// The waiting and running entries, newest first, then the newest
+    /// finished ones, newest finished first
     pub entries: Vec<MergeEntryView>,
+    /// Cursor of the finished merges older than those in `entries`, to
+    /// ask for with [`crate::UiEvent::LoadMergeHistory`]; `None` when
+    /// `entries` reaches the first merge
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub older: Option<u64>,
+    /// When set, this view is the page of finished merges before that
+    /// cursor that [`crate::UiEvent::LoadMergeHistory`] asked for: its
+    /// entries go after those shown, and the rest of it is unchanged
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_before: Option<u64>,
 }

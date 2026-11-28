@@ -218,13 +218,9 @@ async fn announce_switch(
         )))
         .await;
         if to.mode == PermissionMode::Plan {
-            ui.send(system_message(
-                "Plan mode: the agent researches and writes a plan instead of changing code. \
-                 /plan again returns to the previous mode. Say \"implement\" or run /build to \
-                 implement the plan."
-                    .to_string(),
-            ))
-            .await;
+            let factory = state.hub.factory_flows.stage(agent_id).is_some();
+            ui.send(system_message(super::factory::plan_mode_note(factory)))
+                .await;
         }
     }
     if from.approval != to.approval {

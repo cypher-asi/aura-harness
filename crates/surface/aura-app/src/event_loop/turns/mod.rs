@@ -149,6 +149,9 @@ pub(super) enum Task {
         /// Whether the agent is in plan mode, where a request revises its
         /// open plan (see [`begin_task`])
         planning: bool,
+        /// Whether the software factory builds and ships what the agent
+        /// plans, without waiting for the user
+        factory: bool,
         agent_loop: Box<AgentLoop>,
         tools: Vec<ToolDefinition>,
         steering: Steering,
@@ -237,6 +240,7 @@ async fn run(
         Task::Turn {
             prompt,
             planning,
+            factory,
             agent_loop,
             tools,
             steering,
@@ -255,6 +259,7 @@ async fn run(
                 routing,
                 ui: &ui,
                 cancel: &cancel,
+                factory,
             };
             run_prompt(&mut session, prompt, planning, turn).await
         }
@@ -285,6 +290,8 @@ pub(super) struct TurnParts<'a> {
     pub ui: &'a AgentUi,
     /// Stops the turn
     pub cancel: &'a CancellationToken,
+    /// Whether the software factory builds what the turn plans
+    pub factory: bool,
 }
 
 impl TurnParts<'_> {
@@ -304,6 +311,7 @@ impl TurnParts<'_> {
                 steering: self.steering,
                 limits: self.limits,
                 recorder: self.recorder.clone(),
+                factory: self.factory,
             },
         )
         .await

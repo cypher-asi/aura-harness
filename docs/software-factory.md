@@ -155,6 +155,11 @@ Crate: `crates/exec/aura-exec-merge-queue`.
   - The file is rewritten atomically (temp file, fsync, rename) before
     any change is announced.
   - An unreadable file is moved aside, never deleted.
+  - Every finished entry is also appended, under the same lock and before
+    the queue file is saved, to `merge-history.jsonl` beside it: one JSON
+    entry per line, in the order they finished, never rewritten. It keeps
+    every merge for the QUEUE tab, which reads it a page at a time from
+    the end. A queue file from before the history seeds it once.
 - **Crash recovery:** once a processor holds the lock (never before), an
   entry left `running` goes back to `queued` in its old place. After 3
   interrupted attempts it fails.
@@ -168,7 +173,8 @@ Crate: `crates/exec/aura-exec-merge-queue`.
     before the cut), it counts as merged;
   - an entry may wait for up to 24 hours after its branch's last push
     before it expires;
-  - the 1,000 newest finished entries are kept.
+  - the queue file keeps the 200 newest finished entries (to tell a push
+    that merged already); the history keeps them all.
 - **Landing an entry** (`integrate`):
   1. Fetch the target and the entry's branch into private
      `refs/aura-queue/*` refs.
@@ -231,7 +237,11 @@ channel (`SidePanelTab::ChannelQueue`), in the terminal UI and the desktop
 app, which draws the same tabs.
 
 - The header shows the target branch and the repo.
-- Then comes one block per entry, newest first:
+- Then comes one block per entry: what waits and runs, newest first,
+  then every finished merge, newest first. The newest 100 come with the
+  queue; scrolled near the end, the tab asks for the 100 before the
+  oldest shown, and says "Loading older merges…" until they come.
+  Opening a channel sends its queue as it is then. Each block shows:
   - the state, coloured: merged, failed, running or queued;
   - the branch and short head;
   - the agent;

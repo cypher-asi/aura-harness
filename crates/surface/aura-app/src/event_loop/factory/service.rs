@@ -13,16 +13,19 @@
 //!   to the QUEUE tab of each channel on the repo.
 
 use super::observe::{self, ObservedPush};
-use super::view::queue_view;
+use super::repos::{channels_on, folder_of, has_queue_file, project_folders};
+use super::view::{history_view, queue_view};
 use crate::event_loop::agent_events::AgentUi;
 use crate::event_loop::handlers::system_message;
 use crate::event_loop::notices::Notice;
 use crate::event_loop::subagents::{lock, AgentHub};
 use aura_core_types::AgentId;
+use aura_exec_merge_queue::history;
 use aura_exec_merge_queue::{
     Enqueued, GitIntegrator, Limits, MergeEntry, MergeQueue, MergeRequest, MergeStatus, Origin,
     QueueConfig, QueueEvent, RepoPaths,
 };
+use aura_ui::events::MergeQueueView;
 use aura_ui::UiCommand;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -82,7 +85,29 @@ pub(crate) fn show_channel(channel_id: &str) {
     tokio::spawn(async move { service.show(&channel_id).await });
 }
 
+/// Channel `channel_id`'s QUEUE tab was scrolled to its oldest merge:
+/// send it the page of finished merges before cursor `before`.
+pub(crate) fn load_history(channel_id: &str, before: u64) {
+    let Some(service) = SERVICE.get() else {
+        return;
+    };
+    let service = Arc::clone(service);
+    let channel_id = channel_id.to_string();
+    tokio::spawn(async move { service.send_older(&channel_id, before).await });
+}
+
 impl QueueService {
+    /// A service for tests, not installed as the running one.
+    #[cfg(test)]
+    pub(crate) fn for_tests(hub: Arc<AgentHub>, commands: mpsc::Sender<UiCommand>) -> Arc<Self> {
+        Arc::new(Self {
+            hub,
+            commands,
+            quit: CancellationToken::new(),
+            queues: Mutex::default(),
+        })
+    }
+
     async fn run(self: Arc<Self>, mut pushes: mpsc::UnboundedReceiver<ObservedPush>) {
         self.resume_known().await;
         loop {
@@ -110,14 +135,18 @@ impl QueueService {
         }
     }
 
-    /// Send channel `channel_id`'s QUEUE tab its repo's queue, opening the
-    /// queue when the repo has one on disk.
+    /// Send channel `channel_id`'s QUEUE tab its repo's queue as it is
+    /// now, opening the queue when the repo has one on disk.
     async fn show(self: &Arc<Self>, channel_id: &str) {
-        let folders = channel_folders(&self.hub).await;
-        let Some((_, folder)) = folders.into_iter().find(|(id, _)| id == channel_id) else {
+        let Some(folder) = folder_of(&self.hub, channel_id).await else {
             return;
         };
-        let Ok(repo) = RepoPaths::of(&folder).await else {
+        self.show_folder(channel_id, &folder).await;
+    }
+
+    /// [`Self::show`] for a channel whose project is at `folder`.
+    pub(crate) async fn show_folder(self: &Arc<Self>, channel_id: &str, folder: &Path) {
+        let Ok(repo) = RepoPaths::of(folder).await else {
             return;
         };
         let known = self.queues.lock().await.get(&repo.common).cloned();
@@ -132,7 +161,31 @@ impl QueueService {
             },
             None => return,
         };
-        self.publish(&repo_queue).await;
+        let view = self.view_of(&repo_queue).await;
+        self.send_view(channel_id.to_string(), view).await;
+    }
+
+    /// Send channel `channel_id` the finished merges of its repo's queue
+    /// before cursor `before`.
+    async fn send_older(&self, channel_id: &str, before: u64) {
+        let Some(folder) = folder_of(&self.hub, channel_id).await else {
+            return;
+        };
+        let Ok(repo) = RepoPaths::of(&folder).await else {
+            return;
+        };
+        let Some(repo_queue) = self.queues.lock().await.get(&repo.common).cloned() else {
+            return;
+        };
+        let queue = &repo_queue.queue;
+        match queue.history(Some(before), history::PAGE).await {
+            Ok(page) => {
+                let top = queue.repo().top.display().to_string();
+                let view = history_view(&repo_queue.target, &top, &page, before);
+                self.send_view(channel_id.to_string(), view).await;
+            }
+            Err(error) => warn!(%channel_id, %error, "Could not read the merge history"),
+        }
     }
 
     /// Queue `observed` in the queue of the repo its agent works in.
@@ -258,72 +311,37 @@ impl QueueService {
 
     /// Send `repo_queue` to the QUEUE tab of every channel on its repo.
     async fn publish(&self, repo_queue: &RepoQueue) {
-        let repo = repo_queue.queue.repo();
-        let view = queue_view(
+        let view = self.view_of(repo_queue).await;
+        let common = &repo_queue.queue.repo().common;
+        for channel_id in channels_on(&self.hub, common).await {
+            self.send_view(channel_id, view.clone()).await;
+        }
+    }
+
+    /// `repo_queue` as the QUEUE tab first shows it: what waits and runs,
+    /// then the newest page of its history.
+    async fn view_of(&self, repo_queue: &RepoQueue) -> MergeQueueView {
+        let queue = &repo_queue.queue;
+        let page = queue.history(None, history::PAGE).await;
+        if let Err(error) = &page {
+            warn!(%error, "Could not read the merge history; showing the queue file's");
+        }
+        let top = queue.repo().top.display().to_string();
+        queue_view(
             &repo_queue.target,
-            &repo.top.display().to_string(),
-            &repo_queue.queue.entries().await,
-        );
-        for channel_id in channels_on(&self.hub, &repo.common).await {
-            // A closed UI takes no more views; nothing to do then.
-            let _ = self
-                .commands
-                .send(UiCommand::SetMergeQueue {
-                    channel_id,
-                    queue: view.clone(),
-                })
-                .await;
-        }
+            &top,
+            &queue.entries().await,
+            page.ok().as_ref(),
+        )
     }
-}
 
-/// Whether `repo` has a queue file.
-async fn has_queue_file(repo: &RepoPaths) -> bool {
-    let file = repo
-        .queue_dir()
-        .join(aura_exec_merge_queue::store::QUEUE_FILE);
-    tokio::fs::try_exists(&file).await.unwrap_or(false)
-}
-
-/// The folders of the channels' projects.
-async fn project_folders(hub: &AgentHub) -> Vec<PathBuf> {
-    let mut folders: Vec<PathBuf> = channel_folders(hub)
-        .await
-        .into_iter()
-        .map(|(_, folder)| folder)
-        .collect();
-    folders.sort();
-    folders.dedup();
-    folders
-}
-
-/// Each channel with a project, and its project's folder.
-async fn channel_folders(hub: &AgentHub) -> Vec<(String, PathBuf)> {
-    let summaries = crate::event_loop::channels::channel_summaries(hub)
-        .await
-        .unwrap_or_default();
-    summaries
-        .into_iter()
-        .filter_map(|channel| {
-            let folder = channel.project?.folder;
-            (!folder.is_empty()).then(|| (channel.id, PathBuf::from(folder)))
-        })
-        .collect()
-}
-
-/// The channels whose project is in the repo whose common git dir is
-/// `common`.
-async fn channels_on(hub: &AgentHub, common: &Path) -> Vec<String> {
-    let mut found = Vec::new();
-    for (channel_id, folder) in channel_folders(hub).await {
-        if RepoPaths::of(&folder)
-            .await
-            .is_ok_and(|repo| repo.common == common)
-        {
-            found.push(channel_id);
-        }
+    async fn send_view(&self, channel_id: String, queue: MergeQueueView) {
+        // A closed UI takes no more views; nothing to do then.
+        let _ = self
+            .commands
+            .send(UiCommand::SetMergeQueue { channel_id, queue })
+            .await;
     }
-    found
 }
 
 /// Who `agent` is, for its queue entries.

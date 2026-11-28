@@ -200,6 +200,7 @@ impl<'a, 'p> Attempting<'a, 'p> {
                 steering: &steering,
                 limits: parts.ctx.hub.long_run,
                 recorder: parts.recorder.clone(),
+                factory: false,
             },
         )
         .await;
