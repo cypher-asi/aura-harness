@@ -246,6 +246,44 @@ mod tests {
     }
 
     #[test]
+    fn the_plug_sits_in_the_middle_of_its_box_across_and_down() {
+        for side in [22, 23, 24, 25] {
+            for arm in [4.0, 5.0] {
+                let [left, right, top, bottom] = margins_of(side, |out, rect| {
+                    plug(out, rect, (arm, 1.0), ink());
+                    assert_eq!(out.len(), 4, "two prongs, the body, the cord");
+                });
+                assert_eq!(left, right, "centered across a box of {side}");
+                assert_eq!(top, bottom, "centered down a box of {side}");
+                assert!(left > 0 && top > 0, "inside a box of {side}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_plugs_prongs_stand_apart_over_its_cord() {
+        for side in [23_u8, 24] {
+            let rect = Rectangle::new(Point::new(10.0, 20.0), Size::new(f32::from(side), 23.0));
+            let mut out = Vec::new();
+            plug(&mut out, rect, (5.0, 1.0), ink());
+            let [prong, other, body, cord] = [out[0], out[1], out[2], out[3]];
+            assert_eq!((prong.w, prong.h), (other.w, other.h), "prongs alike");
+            assert!(other.x > prong.right(), "a gap between the prongs");
+            let middle = |q: &Quad| 2 * i64::from(q.x) + i64::from(q.w);
+            assert_eq!(middle(&cord), middle(&body), "cord under the body's middle");
+            assert_eq!(
+                i64::from(prong.x) - i64::from(body.x),
+                i64::from(body.right()) - i64::from(other.right()),
+                "prongs as far in from each side"
+            );
+            assert!(
+                prong.y < body.y && cord.y > body.y,
+                "prongs on top, cord below"
+            );
+        }
+    }
+
+    #[test]
     fn the_wrenchs_jaws_open_over_its_handle() {
         for side in [23_u8, 24] {
             let rect = Rectangle::new(Point::new(10.0, 20.0), Size::new(f32::from(side), 23.0));
