@@ -346,3 +346,26 @@ proptest! {
         prop_assert_eq!(id, parsed);
     }
 }
+
+#[test]
+fn a_spawned_agents_zns_id_names_its_id() {
+    let id = AgentId::generate();
+    assert_eq!(id.spawn_zns(), format!("0://spawn/{}", id.to_hex()));
+    assert_eq!(AgentId::of_zns(&id.spawn_zns()), id);
+}
+
+#[test]
+fn other_zns_ids_hash_to_their_id() {
+    for zns in [
+        "0://terminal/5f0e8c1a",
+        "0://spawn/not-hex",
+        "0://spawn/abcd",
+        "",
+    ] {
+        assert_eq!(
+            AgentId::of_zns(zns),
+            AgentId::new(*blake3::hash(zns.as_bytes()).as_bytes()),
+            "{zns}"
+        );
+    }
+}

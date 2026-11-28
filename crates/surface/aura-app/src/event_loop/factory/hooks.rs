@@ -75,9 +75,28 @@ pub(crate) fn build_gave_up(state: &LoopState<'_>, session: &AgentSession) {
     }
 }
 
-/// After a local turn of `agent` that ended `ok` or not: start what the
+/// How a turn ended, for the flow.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TurnState {
+    /// It ended well (not failed or stopped)
+    pub ok: bool,
+    /// The user stopped it to carry on: the flow stays where it was, and
+    /// the user's next turn continues it, as that turn answers the report
+    /// still owed.
+    pub interrupted: bool,
+}
+
+/// After a local turn of `agent` that ended as `how`: start what the
 /// flow does next. Returns whether the turn's answer waits for it.
-pub(crate) async fn after_local_turn(state: &mut LoopState<'_>, agent: AgentId, ok: bool) -> bool {
+pub(crate) async fn after_local_turn(
+    state: &mut LoopState<'_>,
+    agent: AgentId,
+    how: TurnState,
+) -> bool {
+    let TurnState { ok, interrupted } = how;
+    if interrupted && !ok {
+        return false;
+    }
     let Some(session) = state.idle.get(&agent) else {
         return false;
     };
@@ -129,14 +148,18 @@ pub(crate) async fn after_local_turn(state: &mut LoopState<'_>, agent: AgentId, 
 pub(crate) fn after_cloud_turn(
     state: &mut LoopState<'_>,
     agent: AgentId,
-    ok: bool,
+    how: TurnState,
     messages: &[Message],
 ) -> bool {
+    let TurnState { ok, interrupted } = how;
     let prompt = state.hub.factory_flows.prompt_of(agent);
     let pushes = turn::pushes(messages, prompt.as_deref());
     let shipped = !pushes.is_empty();
     for push in pushes {
         observe::report(ObservedPush { agent, push });
+    }
+    if interrupted && !ok {
+        return false;
     }
     let wrote = turn::wrote_plan(messages, prompt.as_deref());
     let end = TurnEnd {

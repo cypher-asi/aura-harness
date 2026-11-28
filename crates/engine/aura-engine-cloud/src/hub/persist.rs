@@ -194,6 +194,37 @@ impl CloudHub {
             .unwrap_or_default()
     }
 
+    /// Every agent spawned on a placed agent's machine whose record is
+    /// copied here, with that placed agent: `(placed, spawned)`.
+    #[must_use]
+    pub fn machine_spawns(&self) -> Vec<(AgentId, AgentId)> {
+        self.placements
+            .lock()
+            .agents
+            .iter()
+            .filter_map(|(hex, placed)| Some((AgentId::from_hex(hex).ok()?, placed)))
+            .flat_map(|(root, placed)| {
+                placed
+                    .children
+                    .iter()
+                    .filter_map(move |child| Some((root, AgentId::from_hex(child).ok()?)))
+            })
+            .collect()
+    }
+
+    /// The placed agent on whose machine `agent` was spawned, when its
+    /// record is copied with that agent's; that machine's node writes it.
+    #[must_use]
+    pub fn machine_root(&self, agent: AgentId) -> Option<AgentId> {
+        let hex = agent.to_hex();
+        self.placements
+            .lock()
+            .agents
+            .iter()
+            .find(|(_, placed)| placed.children.contains(&hex))
+            .and_then(|(root, _)| AgentId::from_hex(root).ok())
+    }
+
     /// Copy the agents in `named` along with placed agent `hex` from now
     /// on; they were named as spawned in a record that was just verified.
     /// One that already has a record here, or is placed itself, is not

@@ -90,6 +90,16 @@ async fn an_assignment_runs_as_the_members_task_and_its_report_reaches_the_coord
 /// The coordinator assigns the member whose code is `worker` the footer
 /// links, as todo 3, and says to whom the work went.
 async fn assign_footer(fixture: &Fixture, coordinator: AgentId, worker: &str) -> String {
+    assign_footer_asking(fixture, coordinator, worker, "Make the footer links work.").await
+}
+
+/// [`assign_footer`], asking `prompt`.
+async fn assign_footer_asking(
+    fixture: &Fixture,
+    coordinator: AgentId,
+    worker: &str,
+    prompt: &str,
+) -> String {
     assign(
         &fixture.hub,
         coordinator,
@@ -97,7 +107,7 @@ async fn assign_footer(fixture: &Fixture, coordinator: AgentId, worker: &str) ->
             to: Some(worker.to_lowercase()),
             agent: None,
             subject: "Footer".to_string(),
-            prompt: "Make the footer links work.".to_string(),
+            prompt: prompt.to_string(),
             todo_id: Some("3".to_string()),
         },
     )
@@ -220,7 +230,9 @@ async fn a_cloud_members_turn_answers_its_assignment_when_the_loop_hears_it_ende
     );
     let failed = report_of(Some("the model refused"), "Half way.").await;
     assert!(
-        failed.contains("Stopped before finishing: the model refused"),
+        failed.contains(
+            "Stopped before finishing: the model refused\n\nWhat it said last:\nHalf way.\n"
+        ),
         "{failed}"
     );
     assert!(failed.ends_with(&task_report_line("3", false)), "{failed}");
@@ -255,4 +267,149 @@ fn assert_prompts_fold(commands: &mut mpsc::Receiver<UiCommand>, chats: [(AgentI
             Some(first_line.as_str())
         );
     }
+}
+
+/// An assignment the mock model works on until the test releases it.
+const SLOW_FOOTER: &str = "Make the slow footer links work.";
+
+/// The report of a member whose turn on [`SLOW_FOOTER`] the user stopped
+/// with `stop`, then carried on with a message: queued before the stop
+/// when `queued`, else sent after it.
+async fn report_after_user_stop(stop: fn(AgentId) -> UiEvent, queued: bool) -> String {
+    let (fixture, _commands) = fixture();
+    let coordinator = channel_with_member(&fixture).await;
+    let member = fixture.second;
+    let mut notices = fixture.hub.take_notices();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    assign_footer_asking(&fixture, coordinator, &code(&fixture, member), SLOW_FOOTER).await;
+    notices::handle_notice(&mut state, notices.try_recv().unwrap()).await;
+    assert!(state.hub.is_running(member), "the assignment is under way");
+    let carry_on = || message(member, "Also the header.", false);
+    if queued {
+        handle_ui_event(&mut state, carry_on(), &links).await;
+    }
+
+    handle_ui_event(&mut state, stop(member), &links).await;
+    let stopped = next_done(&mut done).await;
+    // The next turn joins the slow prompt, so the mock holds it too.
+    fixture.gate.add_permits(1);
+    handle_work_done(&mut state, stopped).await;
+    assert_eq!(
+        state.hub.inbox.owed_by(member),
+        1,
+        "the stop gave up nothing"
+    );
+    assert!(notices.try_recv().is_err(), "nothing is reported yet");
+
+    if !queued {
+        handle_ui_event(&mut state, carry_on(), &links).await;
+    }
+    let finished = next_done(&mut done).await;
+    handle_work_done(&mut state, finished).await;
+    assert_eq!(state.hub.inbox.owed_by(member), 0);
+    let report = notices.try_recv().unwrap();
+    assert_eq!(report.to, coordinator);
+    report.prompt
+}
+
+#[tokio::test]
+async fn a_turn_the_user_stops_leaves_its_report_to_the_next_turn() {
+    let finished = format!("\n\nDone.\n{}", task_report_line("3", true));
+    let send_now = |agent: AgentId| UiEvent::SendQueuedNow(agent.to_hex());
+    let report = report_after_user_stop(send_now, true).await;
+    assert!(report.ends_with(&finished), "sent now: {report}");
+    let escape = |agent: AgentId| UiEvent::Cancel(agent.to_hex());
+    let report = report_after_user_stop(escape, false).await;
+    assert!(report.ends_with(&finished), "Esc: {report}");
+    let kill = |agent: AgentId| UiEvent::KillProcess(format!("turn:{}", agent.to_hex()));
+    let report = report_after_user_stop(kill, false).await;
+    assert!(report.ends_with(&finished), "killed row: {report}");
+}
+
+#[tokio::test]
+async fn archiving_a_member_mid_turn_gives_up_on_its_assignment() {
+    let (fixture, _commands) = fixture();
+    let coordinator = channel_with_member(&fixture).await;
+    let member = fixture.second;
+    let mut notices = fixture.hub.take_notices();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    assign_footer_asking(&fixture, coordinator, &code(&fixture, member), SLOW_FOOTER).await;
+    notices::handle_notice(&mut state, notices.try_recv().unwrap()).await;
+    // Stopped by the user first, the turn is still given up on.
+    handle_ui_event(&mut state, UiEvent::Cancel(member.to_hex()), &links).await;
+
+    handle_ui_event(&mut state, UiEvent::ArchiveAgent(member.to_hex()), &links).await;
+    let stopped = next_done(&mut done).await;
+    handle_work_done(&mut state, stopped).await;
+    assert_eq!(state.hub.inbox.owed_by(member), 0);
+    let report = notices.try_recv().unwrap();
+    assert_eq!(report.to, coordinator);
+    assert!(
+        report.prompt.ends_with(&format!(
+            "\n\nStopped before finishing: it was stopped\n{}",
+            task_report_line("3", false)
+        )),
+        "{}",
+        report.prompt
+    );
+}
+
+#[tokio::test]
+async fn a_cloud_turn_the_user_stops_leaves_its_report_to_the_next_turn() {
+    let (fixture, _commands) = fixture();
+    let coordinator = channel_with_member(&fixture).await;
+    let member = fixture.second;
+    let mut notices = fixture.hub.take_notices();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut state = loop_state(&fixture, &mut b);
+    assign_footer(&fixture, coordinator, &code(&fixture, member)).await;
+    let asked = aura_model::Message::user(notices.try_recv().unwrap().prompt);
+    let ended = |failure: Option<&str>, said: &[&str]| {
+        let mut messages = vec![asked.clone()];
+        for (at, text) in said.iter().enumerate() {
+            messages.push(if at % 2 == 0 {
+                aura_model::Message::assistant(*text)
+            } else {
+                aura_model::Message::user(*text)
+            });
+        }
+        let outcome = cloud::TurnOutcome {
+            failure: failure.map(str::to_string),
+            messages: Some(messages),
+        };
+        cloud::Ended::Turn(member, Some(outcome))
+    };
+
+    // Esc stops the turn on its machine, which ends it stopped.
+    state.cloud.start_turn(member);
+    handle_ui_event(&mut state, UiEvent::Cancel(member.to_hex()), &links).await;
+    let stopped = ended(Some("it was stopped"), &["Half way."]);
+    cloud::handle_ended(&mut state, stopped).await;
+    assert_eq!(
+        state.hub.inbox.owed_by(member),
+        1,
+        "the stop gave up nothing"
+    );
+    assert!(notices.try_recv().is_err(), "nothing is reported yet");
+
+    let finished = ended(None, &["Half way.", "Carry on.", "Footer links fixed."]);
+    cloud::handle_ended(&mut state, finished).await;
+    assert_eq!(state.hub.inbox.owed_by(member), 0);
+    let report = notices.try_recv().unwrap();
+    assert_eq!(report.to, coordinator);
+    assert!(
+        report.prompt.ends_with(&format!(
+            "\n\nFooter links fixed.\n{}",
+            task_report_line("3", true)
+        )),
+        "{}",
+        report.prompt
+    );
 }

@@ -43,7 +43,7 @@ impl Identity {
         let name = name.into();
 
         let identity_hash = *blake3::hash(zns_id.as_bytes()).as_bytes();
-        let agent_id = AgentId::new(identity_hash);
+        let agent_id = AgentId::of_zns(&zns_id);
 
         Self {
             agent_id,

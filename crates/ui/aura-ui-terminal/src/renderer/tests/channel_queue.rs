@@ -82,11 +82,15 @@ fn test_an_open_channel_lists_queue_right_after_info() {
     assert!(widths.len() >= 3, "{widths:?}");
 }
 
+/// Rows of a screen tall enough for the whole queue below the channel's
+/// TASKS, which shares the column.
+const TALL: u16 = 70;
+
 #[test]
 fn test_queue_tab_lists_every_merge_newest_first() {
     let mut app = queue_app();
     send_zode_queue(&mut app);
-    let rows = render_rows(&mut app, 140);
+    let rows = render_rows_sized(&mut app, 140, TALL);
     let header = line_with(&rows, "Merges into main");
     assert!(line_with(&rows, "/src/zode") > header);
     let running = line_with(&rows, "RUNNING");
@@ -121,7 +125,12 @@ fn test_queue_tab_colours_each_merge_by_its_state() {
     let mut app = queue_app();
     send_zode_queue(&mut app);
     let theme = test_theme();
-    let buffer = render_buffer(&mut app, 140);
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, TALL)).unwrap();
+    terminal
+        .draw(|frame| super::super::render(frame, &mut app, &theme))
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
     let fg_of = |text: &str| {
         let row = row_of(&buffer, text);
         find_cell(&buffer, row, text).unwrap().1.fg

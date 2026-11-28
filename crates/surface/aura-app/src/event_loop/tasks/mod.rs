@@ -25,7 +25,7 @@ use super::record_ui::RecordPanelAgent;
 use super::subagents::{lock, AgentHub};
 use aura_core_types::time::now_ms;
 use aura_core_types::AgentId;
-use aura_ui::events::{TaskState, TaskView, TodoState, TodoView};
+use aura_ui::events::{PlanView, TaskState, TaskView, TodoState, TodoView};
 use aura_ui::UiCommand;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

@@ -21,8 +21,9 @@
 //!
 //! # Invariants
 //!
-//! * An agent row's key is [`derive_agent_id`] of its `zns_id` (blake3 of
-//!   the ZNS id, as [`aura_core_types::Identity::new`] derives it), and
+//! * An agent row's key is [`derive_agent_id`] of its `zns_id` (as
+//!   [`aura_core_types::Identity::new`] derives it: the id a spawned
+//!   agent's `0://spawn/<hex>` names, else blake3 of the ZNS id), and
 //!   its `agent_id` field equals the key. [`AgentStore::stage`] refuses
 //!   records that break this.
 //! * Every agent a stored row refers to (`parent`, `active`) is named by
@@ -73,11 +74,11 @@ const META_ACTIVE: &[u8] = b"active";
 const META_PREFIXES: &[u8] = b"prefixes";
 const META_LAST_NUMBERS: &[u8] = b"last_numbers";
 
-/// The id of the agent with `zns_id`: blake3 of the ZNS id, the same
-/// derivation as [`aura_core_types::Identity::new`].
+/// The id of the agent with `zns_id`, the same derivation as
+/// [`aura_core_types::Identity::new`] ([`AgentId::of_zns`]).
 #[must_use]
 pub fn derive_agent_id(zns_id: &str) -> AgentId {
-    AgentId::new(aura_core_types::hash::hash_bytes(zns_id.as_bytes()))
+    AgentId::of_zns(zns_id)
 }
 
 /// Agents and projects of the terminal registry in the shared

@@ -75,6 +75,22 @@ pub struct AgentPlacement {
     pub folder: Option<PathBuf>,
 }
 
+/// An agent spawned where no registry saw it (on a cloud machine), for
+/// [`AgentRegistry::adopt_spawn`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Spawned<'a> {
+    /// The id its spawner gave it.
+    pub agent_id: AgentId,
+    /// ZNS id of the agent that spawned it.
+    pub parent: &'a str,
+    /// The subagent kind a `task` spawned it as; `None` for other spawns.
+    pub kind: Option<&'a str>,
+    /// The name it was spawned with.
+    pub name: &'a str,
+    /// What it was spawned to do.
+    pub subtitle: Option<&'a str>,
+}
+
 /// A folder the agents of the terminal UI work in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Project {
@@ -210,10 +226,7 @@ impl RegisteredAgent {
     /// The id [`Self::identity`] has, without building the identity.
     #[must_use]
     pub fn agent_id(&self) -> AgentId {
-        *self
-            .id
-            .0
-            .get_or_init(|| AgentId::new(*blake3::hash(self.zns_id.as_bytes()).as_bytes()))
+        *self.id.0.get_or_init(|| AgentId::of_zns(&self.zns_id))
     }
 
     /// Whether this agent holds a `/compare` (its record and runs).

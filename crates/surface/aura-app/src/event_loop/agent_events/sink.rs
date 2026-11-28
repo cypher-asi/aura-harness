@@ -55,6 +55,10 @@ impl UiCommandSink {
             "Plan ready: {} ({path}). Keep chatting to revise it, or say \"implement\" (or run /build) to build it.",
             view.name
         );
+        self.plan
+            .tasks
+            .show_plan(&self.plan.workspace, view.clone())
+            .await;
         self.ui
             .send_if_shown(UiCommand::SetPlans(plan_views(&self.plan.workspace)))
             .await;
@@ -76,6 +80,10 @@ impl UiCommandSink {
             Ok(false) => {}
             Ok(true) => {
                 if let Some(view) = plan_view(&self.plan.workspace, path) {
+                    self.plan
+                        .tasks
+                        .show_plan(&self.plan.workspace, view.clone())
+                        .await;
                     self.ui.send_if_shown(UiCommand::SetPlan(Some(view))).await;
                 }
             }
@@ -126,7 +134,8 @@ impl UiCommandSink {
     }
 
     /// End the reply message being streamed, so text that follows a tool
-    /// call or more thinking starts a new message below them.
+    /// call, more thinking or the end of the model call starts a new
+    /// message below them.
     async fn finish_streaming_if_active(&mut self) {
         if self.state.streaming_active {
             self.flush_delta().await;
@@ -367,6 +376,9 @@ impl TurnEventSink for UiCommandSink {
         input_tokens: u64,
         output_tokens: u64,
     ) {
+        // A later model call of the turn may answer a nudge or a notice
+        // with text and no tool call first: that is a reply of its own.
+        self.finish_streaming_if_active().await;
         self.turn_tokens += input_tokens + output_tokens;
         self.ui
             .send(UiCommand::SetStatus(iteration_status(

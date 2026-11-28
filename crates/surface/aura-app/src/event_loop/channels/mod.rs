@@ -1,7 +1,8 @@
 //! Channels on the event loop: making a channel together with its
 //! coordinator, starting the agents it hands work to, the project they
 //! work in, the `<channel>` block of the coordinator's and its agents'
-//! turns, the channels list the UI shows, and the UI's channel actions.
+//! turns, the channels list the UI shows, the UI's channel actions, and
+//! `/plan` in a channel's chat, which a new member plans.
 //!
 //! # Invariants
 //!
@@ -16,6 +17,9 @@
 //!   subagents ([`join_parent_channel`]). At start-up, agents an older
 //!   coordinator spawned under itself are made top-level
 //!   ([`promote_members`]).
+//! * The coordinator never enters plan mode. `/plan` in its chat, or a
+//!   switch of it to plan mode, starts a new member that plans in its own
+//!   chat instead ([`start_planner`]).
 //! * A channel with a project has its coordinator at the top of that
 //!   project (no folder of its own), so the coordinator and every agent
 //!   under it are listed in the Projects tree. A channel without one has
@@ -63,6 +67,7 @@ mod handlers;
 mod join;
 mod list;
 mod load;
+mod plan;
 mod prompt;
 mod update;
 
@@ -88,6 +93,9 @@ pub(crate) use list::{
 use load::load_members;
 pub(crate) use load::{load_channels, ChannelSets};
 use load::{move_placements, stage_rows};
+pub(crate) use plan::{is_coordinator_agent, start_planner};
+#[cfg(test)]
+pub(crate) use plan::{PLANNER_DEFINITION, PLANS_HERE};
 pub(crate) use prompt::{channel_prompt, is_coordinator};
 pub(crate) use update::{archive_channel, update_channel, ChannelEdit, CoordinatorBusy};
 

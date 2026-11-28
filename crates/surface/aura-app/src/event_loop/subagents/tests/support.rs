@@ -3,6 +3,8 @@ use super::*;
 pub(in crate::event_loop) struct Fixture {
     pub(in crate::event_loop) hub: Arc<AgentHub>,
     pub(in crate::event_loop) dispatcher: Arc<dyn SubagentDispatchHook>,
+    /// The database the agents' records are in, which the hub reads.
+    pub(in crate::event_loop) records: Arc<RocksStore>,
     pub(super) commands: mpsc::Receiver<UiCommand>,
     pub(super) trace_store: Arc<aura_store_db::TraceStore>,
     pub(super) _data: TempDir,
@@ -41,6 +43,7 @@ fn fixture_with(reply: &str, latency_ms: u64, title_model: &str) -> Fixture {
         answers_all: !title_model.is_empty(),
     };
     let workspace_root = workspace.path().to_path_buf();
+    let records = Arc::clone(&store);
     let mut captured = None;
     let hub = AgentHub::new(parts, |dispatcher| {
         captured = Some(dispatcher);
@@ -49,6 +52,7 @@ fn fixture_with(reply: &str, latency_ms: u64, title_model: &str) -> Fixture {
     Fixture {
         hub,
         dispatcher: captured.unwrap(),
+        records,
         commands,
         trace_store,
         _data: data,

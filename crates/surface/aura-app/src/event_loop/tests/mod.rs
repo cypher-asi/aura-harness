@@ -27,6 +27,7 @@ mod agent_lists;
 mod agent_selection;
 mod approval_modes;
 mod channel_chat;
+mod channel_plan;
 mod channels_projects;
 mod channels_projects_zode;
 mod commands_and_cancel;

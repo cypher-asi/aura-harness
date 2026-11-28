@@ -32,16 +32,21 @@ pub(in crate::event_loop) fn turn_summary(
 }
 
 /// Kill what the Processes tab row `id` runs. A turn or task waiting for
-/// an approval is denied, so it sees the cancellation.
+/// an approval is denied, so it sees the cancellation. A turn killed this
+/// way was stopped by the user: its inbox answers wait for the next turn.
 pub(in crate::event_loop) async fn handle_kill_process(state: &LoopState<'_>, id: &str) {
     let command = match state.processes.kill(id) {
         Ok(killed) => {
             info!(process = %id, kind = killed.kind.label(), owner = %killed.owner, "Killed from the Processes tab");
-            let agent = id
-                .strip_prefix("turn:")
+            let turn = id.strip_prefix("turn:");
+            let agent = turn
                 .or_else(|| id.strip_prefix("task:"))
                 .and_then(|hex| AgentId::from_hex(hex).ok());
             if let Some(agent) = agent {
+                let running = state.hub.is_running(agent) || state.cloud.is_running(agent);
+                if turn.is_some() && running {
+                    state.hub.inbox.interrupt(agent);
+                }
                 state.approvals.cancel_agent(agent).await;
             }
             UiCommand::ShowSuccess(format!("Stopped {}", killed.label))

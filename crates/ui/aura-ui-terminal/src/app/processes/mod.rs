@@ -187,9 +187,7 @@ impl App {
             (SidePanelTab::Repo, KeyCode::Char(']')) => self.step_repo_filter(true),
             (SidePanelTab::Repo, KeyCode::Char('o')) => self.open_selected_repo_page(),
             (SidePanelTab::Repo, KeyCode::Char('r')) => self.request_repo(true),
-            (SidePanelTab::Tasks, KeyCode::Char(' ')) => self.task_list.toggle_selected(),
-            (SidePanelTab::Tasks, KeyCode::Char('p')) => self.open_selected_row_plan(),
-            (SidePanelTab::Tasks, KeyCode::Char('t')) => self.jump_to_todo_task(),
+            (SidePanelTab::Tasks, _) => return self.handle_tasks_shortcut(key),
             (SidePanelTab::Processes, KeyCode::Char('o')) => self.jump_to_selected_owner(),
             (SidePanelTab::Processes, KeyCode::Char('k') | KeyCode::Delete) => {
                 self.request_kill_selected();

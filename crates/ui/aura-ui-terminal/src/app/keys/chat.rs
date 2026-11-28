@@ -113,6 +113,12 @@ impl App {
         }
 
         if let Some(message) = slash::strip_plan(&text) {
+            // In a channel's chat the coordinator doesn't plan: a new
+            // member does, in a chat of its own.
+            if self.coordinated_channel().is_some() {
+                self.request_channel_plan(message);
+                return KeyResult::continue_running();
+            }
             // A `/plan` word anywhere sends the rest in plan mode, never
             // as a build request ("/plan implement auth" asks for a plan).
             // On its own it enters or leaves plan mode.

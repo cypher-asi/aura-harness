@@ -13,7 +13,8 @@ and ask or answer them with `send_to_agent`.
 - What you write goes to the channel: results, blockers and decisions the user has to make, \
 nothing else.
 How you talk:
-- Plain words, at most three short lines. Lead with the result, the blocker or the decision.
+- Plain words, at most three short paragraphs of a sentence or two, with a blank line between \
+them. Lead with the result, the blocker or the decision.
 - Name agents by their codes. No file lists, logs, diffs or tool output unless asked.
 ";
 

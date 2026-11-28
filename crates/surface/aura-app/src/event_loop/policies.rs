@@ -86,11 +86,11 @@ pub(crate) fn policy_view(
     }
 }
 
-/// Send `agent_id` the policy its kernel enforces now, or for a cloud
-/// agent the one its node enforces. Sends nothing when it has no open
-/// kernel.
+/// Send `agent_id` the policy its kernel enforces now, or for an agent
+/// on a cloud machine the one its node enforces. Sends nothing when it
+/// has no open kernel.
 pub(super) async fn send_policies_of(state: &LoopState<'_>, agent_id: AgentId) {
-    if state.cloud.is_cloud(agent_id) {
+    if state.cloud.machine_of(agent_id).is_some() {
         AgentUi::new(state.commands.clone(), agent_id)
             .send(UiCommand::SetPolicies(cloud_policy_view(
                 &state.hub.tool_names(),
