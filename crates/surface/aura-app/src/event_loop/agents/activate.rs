@@ -116,6 +116,17 @@ pub(super) fn read_for_switch(
     }
 }
 
+/// The chat of `agent_id` as its record has it now, when the record grew
+/// past the chat last read of it; `None` when it didn't. Reads the
+/// record: callers on the runtime run it on a blocking thread.
+pub(crate) fn newer_chat(hub: &AgentHub, agent_id: AgentId) -> Option<Vec<MessageData>> {
+    let head = hub.factory.store.get_head_seq(agent_id).ok()?;
+    if lock(&hub.shown_chats).kept(agent_id, head).is_some() {
+        return None;
+    }
+    read_for_switch(hub, agent_id, false, true, false).chat
+}
+
 /// Confirm the agent on screen to a UI that asked to switch to it, with
 /// its lists.
 async fn confirm_active(state: &LoopState<'_>, agent_id: AgentId) {
@@ -258,9 +269,10 @@ pub(super) async fn show_active_agent(
 
 /// Point the Sandbox panel at the active agent's workspace, creating it
 /// so the panel has something to show before the first tool call. A
-/// cloud agent's workspace is on its machine, which the panel lists.
+/// cloud agent's workspace is on its machine, which the panel lists, as
+/// is an agent's spawned there.
 pub(crate) async fn send_sandbox_root(state: &LoopState<'_>) {
-    if state.cloud.is_cloud(state.active) {
+    if state.cloud.machine_of(state.active).is_some() {
         let root = PathBuf::from(aura_engine_cloud::machine_env::WORKSPACE_DIR);
         let _ = state.commands.send(UiCommand::SetSandboxRemote(root)).await;
         return;

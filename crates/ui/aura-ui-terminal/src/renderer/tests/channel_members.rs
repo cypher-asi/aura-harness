@@ -114,3 +114,57 @@ fn test_a_members_status_row_is_drawn_in_gray() {
     assert_eq!(cell_at(&buffer, "Fix parser escapes").fg, muted);
     assert_ne!(cell_at(&buffer, "rust-engineer").fg, muted);
 }
+
+/// Put `agent_id` in the cloud, placed by `owner` when it is another
+/// user's agent.
+fn place_in_cloud(app: &mut crate::App, agent_id: &str, owner: Option<&str>) {
+    use crate::host::{PlacementState, PlacementView};
+    app.process_command(crate::events::UiCommand::SetPlacement {
+        agent_id: agent_id.to_string(),
+        state: PlacementState {
+            placement: PlacementView::Cloud,
+            owner: owner.map(str::to_string),
+            ..PlacementState::default()
+        },
+    });
+}
+
+#[test]
+fn test_a_cloud_member_shows_a_cloud_after_its_name() {
+    let mut app = members_app();
+    place_in_cloud(&mut app, "r1", None);
+    place_in_cloud(&mut app, "r2", Some("Alice"));
+    let rows = render_rows(&mut app, 140);
+    let row = |needle: &str| {
+        rows.iter()
+            .find(|row| row.contains(needle))
+            .unwrap_or_else(|| panic!("no {needle:?} in:\n{}", rows.join("\n")))
+    };
+    let own = row("REN3");
+    assert!(own.contains("rust-engineer ☁"), "{own}");
+    let foreign = row("REN4");
+    // The name is cut to keep the owner in a narrow column.
+    assert!(
+        foreign.contains("rust-engine") && foreign.contains(" ☁  Alice"),
+        "{foreign}"
+    );
+    let coordinator = row("CO ");
+    assert!(!coordinator.contains('☁'), "{coordinator}");
+    assert!(!row("SB12").contains('☁'), "a local subagent has no cloud");
+}
+
+#[test]
+fn test_another_users_cloud_is_dimmer_than_your_own() {
+    let mut app = members_app();
+    place_in_cloud(&mut app, "r1", None);
+    place_in_cloud(&mut app, "r2", Some("Alice"));
+    let buffer = render_buffer(&mut app, 140);
+    let colors = test_theme().colors;
+    assert_eq!(cell_at(&buffer, "☁  Alice").fg, colors.faint);
+    let own = row_of(&buffer, "REN3");
+    let cloud = (0..buffer.area.width)
+        .map(|x| &buffer[(x, own)])
+        .find(|cell| cell.symbol() == "☁")
+        .expect("REN3's row has a cloud");
+    assert_eq!(cloud.fg, colors.muted);
+}

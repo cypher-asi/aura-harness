@@ -98,6 +98,72 @@ fn cached_agent_id_is_the_identitys() {
 }
 
 #[test]
+fn an_adopted_spawn_keeps_its_id_under_its_spawner() {
+    let dir = tempfile::tempdir().unwrap();
+    let launch = tempfile::tempdir().unwrap();
+    let mut registry = open(dir.path(), launch.path());
+    let parent = registry.create(Some("Factory".to_string())).unwrap();
+    let (child, grandchild) = (AgentId::generate(), AgentId::generate());
+
+    let adopted = registry
+        .adopt_spawn(&Spawned {
+            agent_id: child,
+            parent: &parent.zns_id,
+            kind: Some("explore"),
+            name: "explore",
+            subtitle: Some(" Map the router "),
+        })
+        .unwrap();
+    assert_eq!(adopted.agent_id(), child);
+    assert_eq!(adopted.identity().agent_id, child);
+    assert_eq!(adopted.zns_id, child.spawn_zns());
+    assert_eq!(adopted.project_id, parent.project_id);
+    assert_eq!(adopted.name, "explore #1", "an instance of its kind");
+    assert_eq!(adopted.display_name(), "EXP1: Map the router");
+    let nested = registry
+        .adopt_spawn(&Spawned {
+            agent_id: grandchild,
+            parent: &adopted.zns_id,
+            kind: None,
+            name: "scout",
+            subtitle: None,
+        })
+        .unwrap();
+    assert_eq!(nested.display_name(), "scout");
+    let tree = names(registry.tree());
+    assert_eq!(
+        tree[tree.len() - 3..],
+        [
+            ("Factory".to_string(), 0),
+            ("explore #1".to_string(), 1),
+            ("scout".to_string(), 2),
+        ]
+    );
+
+    registry.archive(child).unwrap();
+    let archived = registry.find(child).unwrap().clone();
+    let again = registry
+        .adopt_spawn(&Spawned {
+            agent_id: child,
+            parent: &parent.zns_id,
+            kind: None,
+            name: "other",
+            subtitle: None,
+        })
+        .unwrap();
+    assert_eq!(again, archived, "known already, and left in the Archive");
+    assert!(registry.find(child).unwrap().archived);
+
+    let reloaded = open(dir.path(), launch.path());
+    assert_eq!(reloaded.agents(), registry.agents());
+    assert_eq!(
+        reloaded.find(grandchild).unwrap().parent.as_deref(),
+        Some(adopted.zns_id.as_str()),
+        "a parent link to a spawned agent survives a reload"
+    );
+}
+
+#[test]
 fn set_active_to_the_active_agent_does_not_rewrite_the_store() {
     let dir = tempfile::tempdir().unwrap();
     let launch = tempfile::tempdir().unwrap();

@@ -73,7 +73,7 @@ fn inline_links_show_label_and_url() {
     // Colored, and underlined only under the pointer (see the chat).
     for link in ["the docs", "https://a.io"] {
         let style = span_style(&spans, link);
-        assert_eq!(style.fg, Some(theme().colors.warning), "{link}");
+        assert_eq!(style.fg, Some(theme().colors.secondary), "{link}");
         assert!(!has(style, Modifier::UNDERLINED), "{link}");
     }
 }
