@@ -30,9 +30,6 @@ use super::push::{
 };
 use super::{GitToolError, PushPolicy, PushTarget, Pushed};
 
-/// Branch `git_ship` pulls when the call names none.
-pub(super) const DEFAULT_TARGET: &str = "main";
-
 /// What a `git_ship` call asks for.
 #[derive(Debug, Clone, Copy)]
 pub struct ShipRequest<'a> {

@@ -23,6 +23,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The rows, their `!` icons, chat errors and the Stop button now take
   their red from one place, so they can't drift apart.
 
+### The merge queue finishes its review leftovers
+
+##### Fixed
+
+- The queue's target branch is read from `.aura/merge-queue.toml` as
+  committed on `main` (`main` by default). The queue, `git_ship`, the push
+  guard, the QUEUE tab and the agents' prompts all name that branch. An
+  uncommitted edit in some checkout no longer moves it.
+- New and forked cloud machines pull that target from GitHub, not
+  always `main`.
+- The queue's worktree and build output moved out of `.git`, to a
+  per-repo folder under the user's cache folder. The old
+  `.git/aura/merge-worktree` is removed when the new one is made.
+- Every finished merge is kept. Older ones move to
+  `merge-history.jsonl` beside the queue file, and the QUEUE tab loads
+  them 100 at a time as you scroll to "N older merges".
+- A queued entry expires 24 hours after its last change, so one put
+  back after a crash doesn't expire at once.
+- A channel member the software factory builds on its own is no longer
+  told to say "implement" or run `/build`.
+
 ### Channel post summaries are kept in the channel store
 
 ##### Changed
