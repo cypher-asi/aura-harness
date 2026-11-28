@@ -108,12 +108,15 @@ pub(super) fn render_channel_members(
         .map(display_width)
         .max()
         .unwrap_or(0);
-    let lines: Vec<Line> = (first..channel.members.len())
-        .flat_map(|index| member_rows(app, (width, code_width), &channel.members, index, theme))
+    let shown = app.shown_channel_members();
+    let lines: Vec<Line> = shown
+        .iter()
+        .skip(first)
+        .flat_map(|&index| member_rows(app, (width, code_width), &channel.members, index, theme))
         .take(visible)
         .collect();
     let view = ScrollView {
-        total: channel.members.len() * CHANNEL_MEMBER_ROWS,
+        total: shown.len() * CHANNEL_MEMBER_ROWS,
         visible,
         first: first * CHANNEL_MEMBER_ROWS,
     };
@@ -122,11 +125,11 @@ pub(super) fn render_channel_members(
 
 /// Member `index` of `members`, on two rows: the permanent agent it is an
 /// instance of, under the guides from the agent that spawned it, after
-/// its `@` (a subagent has none, so its guides run on through the icon
-/// column) or the spinner while it works, and its cloud if it runs in
-/// the cloud, with its code at the right, in a column `code_width` wide;
-/// then, in gray, what it works on. Lit by the keyboard while the panel
-/// is focused, else when it is the agent in the chat.
+/// its icon ([`member_icon`]), and its cloud if it runs in the cloud,
+/// with its code at the right, in a column `code_width` wide; then, in
+/// gray, what it works on. Lit by the keyboard while the panel is
+/// focused, else when it is the agent in the chat, or the folded member
+/// that agent is hidden under.
 fn member_rows<'a>(
     app: &App,
     (width, code_width): (usize, usize),
@@ -138,7 +141,10 @@ fn member_rows<'a>(
     let selected = if app.focus() == PanelFocus::Sandbox {
         app.selected_channel_member() == index
     } else {
-        member.id == app.active_agent_id()
+        members
+            .iter()
+            .position(|member| member.id == app.active_agent_id())
+            .is_some_and(|active| app.shown_channel_member_of(active) == index)
     };
     let hovered = app.hover() == Some(HoverTarget::ChannelMemberRow(index));
     let state = CellState::of(selected, hovered);
@@ -154,7 +160,7 @@ fn member_rows<'a>(
     let name_row = tree_row(
         width,
         (&guides, theme.colors.muted),
-        member_icon(app, member, theme),
+        member_icon(app, (member, index), theme),
         (member_name(member), member_badge(theme, cloud.as_ref())),
         cell,
         &end,
@@ -171,11 +177,15 @@ fn member_rows<'a>(
     [name_row, status_row]
 }
 
-/// A member's icon column: the spinner while it works, else the `@` of a
-/// member, or nothing for a subagent, whose guides run on through it.
-fn member_icon(app: &App, member: &AgentSummary, theme: &Theme) -> StatusIcon {
-    if app.agent_thinking(member) {
+/// A member's icon column: the spinner while it, or a subagent folded
+/// under it, works; else `▸` over the subagents it folds, `▾` once they
+/// show; else the `@` of a member, or nothing for a subagent, whose
+/// guides run on through it.
+fn member_icon(app: &App, (member, index): (&AgentSummary, usize), theme: &Theme) -> StatusIcon {
+    if app.agent_thinking(member) || app.channel_member_hides_working(index) {
         working_icon(app, theme)
+    } else if let Some(folded) = app.channel_member_fold(index) {
+        StatusIcon::new(if folded { "▸" } else { "▾" }, theme.colors.muted)
     } else if member.depth == 0 {
         StatusIcon::new("@", theme.colors.muted)
     } else {
