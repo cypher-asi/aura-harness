@@ -58,13 +58,49 @@ pub enum CommitsOutcome {
         /// Why.
         reason: String,
     },
+    /// The agent had several branches with commits (its pinned one and
+    /// task branches); what happened to each, the pinned one first.
+    Several(Vec<CommitsOutcome>),
 }
 
 impl CommitsOutcome {
+    /// `outcomes` of an agent's branches as one: none when none brought
+    /// anything, the one when one did, else all that did.
+    #[must_use]
+    pub fn combined(outcomes: Vec<Self>) -> Self {
+        let mut said: Vec<Self> = outcomes
+            .into_iter()
+            .flat_map(|outcome| match outcome {
+                Self::Several(inner) => inner,
+                other => vec![other],
+            })
+            .filter(|outcome| *outcome != Self::None)
+            .collect();
+        match said.len() {
+            0 => Self::None,
+            1 => said.remove(0),
+            _ => Self::Several(said),
+        }
+    }
+
+    /// Whether commits of some branch stayed on the machine.
+    #[must_use]
+    pub fn kept_any(&self) -> bool {
+        match self {
+            Self::Kept { .. } => true,
+            Self::Several(all) => all.iter().any(Self::kept_any),
+            Self::None | Self::Fetched { .. } => false,
+        }
+    }
+
     /// A short report for the chat; `None` when there is nothing to say.
     #[must_use]
     pub fn describe(&self) -> Option<String> {
         match self {
+            Self::Several(all) => {
+                let lines: Vec<String> = all.iter().filter_map(Self::describe).collect();
+                (!lines.is_empty()).then(|| lines.join("; "))
+            }
             Self::None => None,
             Self::Fetched { branch, commits } => {
                 Some(format!("{commits} commit(s) on branch {branch}"))
