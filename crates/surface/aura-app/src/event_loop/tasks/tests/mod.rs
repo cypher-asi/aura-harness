@@ -310,6 +310,7 @@ async fn a_plan_shows_in_the_tasks_of_the_agent_on_screen_in_its_folder() {
         path: ".aura/plans/auth.plan.md".to_string(),
         name: "Auth".to_string(),
         todos: vec![item("Add the table", TodoState::Completed)],
+        changed_ms: None,
     };
     tasks.show_plan(here.path(), plan.clone()).await;
     assert!(rx.try_recv().is_err(), "no agent on screen");

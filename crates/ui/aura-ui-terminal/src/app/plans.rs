@@ -161,6 +161,7 @@ mod tests {
                     task: None,
                 })
                 .collect(),
+            changed_ms: None,
         }
     }
 

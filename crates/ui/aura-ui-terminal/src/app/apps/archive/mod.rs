@@ -21,6 +21,7 @@
 //! its agents from the list for good (their records and folder stay on
 //! disk), so it waits for `y`: Shift+Delete, or `/remove-project`.
 
+use crate::app::days::{day_name, day_of};
 use crate::app::wheel_views::WheelList;
 use crate::app::{contains, App, NotificationType, ProjectListRow};
 use crate::events::{AgentSummary, UiEvent};
@@ -43,25 +44,9 @@ pub enum ArchiveRow {
 }
 
 /// Header of the day an agent archived at `ms` (Unix milliseconds) falls
-/// on, as seen at `now`: `Today`, `Yesterday`, else its local date in
-/// full, as `Wednesday, September 16 2026`. An unknown time reads
-/// `Earlier`.
+/// on, as seen at `now`, named as [`day_name`] names it.
 pub(crate) fn archive_day(ms: Option<u64>, now: DateTime<Local>) -> String {
-    let Some(at) = ms
-        .and_then(|ms| i64::try_from(ms).ok())
-        .and_then(DateTime::from_timestamp_millis)
-    else {
-        return "Earlier".to_string();
-    };
-    let day = at.with_timezone(&Local).date_naive();
-    let today = now.date_naive();
-    if day == today {
-        "Today".to_string()
-    } else if today.pred_opt() == Some(day) {
-        "Yesterday".to_string()
-    } else {
-        day.format("%A, %B %-d %Y").to_string()
-    }
+    day_name(day_of(ms), now.date_naive())
 }
 
 impl App {

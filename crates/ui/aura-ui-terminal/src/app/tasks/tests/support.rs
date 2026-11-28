@@ -62,12 +62,14 @@ pub(super) fn plan(name: &str, states: &[TodoState]) -> PlanView {
             .enumerate()
             .map(|(i, &state)| item(&format!("{name} {i}"), state, None))
             .collect(),
+        changed_ms: None,
     }
 }
 
-/// The rows as text, indented two spaces per level: `-`/`+` before
-/// what is open/folded, `#` before a todo, `~` before a round's first
-/// request, `@` before a task; items are their content.
+/// The rows as text, indented two spaces per level: `=` before a day's
+/// date, or `Earlier`; `-`/`+` before what is open/folded, `#` before a
+/// todo, `~` before a round's first request, `@` before a task; items
+/// are their content.
 pub(super) fn shape(list: &TaskList) -> Vec<String> {
     list.rows()
         .iter()
@@ -78,6 +80,9 @@ pub(super) fn shape(list: &TaskList) -> Vec<String> {
                 None => "",
             };
             let text = match row {
+                TaskRow::Day { day } => {
+                    day.map_or_else(|| "=Earlier".into(), |day| format!("={day}"))
+                }
                 TaskRow::Plan { plan, .. } => plan
                     .map_or("No Plan", |plan| list.plans()[plan].name.as_str())
                     .to_string(),
