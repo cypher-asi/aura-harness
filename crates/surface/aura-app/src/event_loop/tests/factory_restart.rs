@@ -91,7 +91,7 @@ fn assert_report_delivered(notices: &mut UnboundedReceiver<notices::Notice>, to:
 
 /// A member of a local channel, in a repo it can ship from, given the
 /// footer task; its planning turn is under way. Returns the coordinator.
-async fn assigned(
+pub(super) async fn assigned(
     fixture: &Fixture,
     state: &mut LoopState<'_>,
     notices: &mut UnboundedReceiver<notices::Notice>,
@@ -112,7 +112,7 @@ async fn assigned(
 }
 
 /// The branch `member` shipped, as origin has it.
-fn shipped_to_origin(origin: &Path) -> bool {
+pub(super) fn shipped_to_origin(origin: &Path) -> bool {
     std::process::Command::new("git")
         .args(["rev-parse", "--verify", "-q", "refs/heads/aura/footer"])
         .current_dir(origin)
@@ -169,7 +169,7 @@ async fn a_member_cut_off_mid_plan_plans_again_in_plan_mode_then_builds_and_ship
 
 /// Let `member`'s planning turn end: the plan is written and its build
 /// starts.
-async fn through_the_plan(
+pub(super) async fn through_the_plan(
     state: &mut LoopState<'_>,
     done: &mut mpsc::Receiver<WorkDone>,
     member: AgentId,
