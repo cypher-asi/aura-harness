@@ -21,6 +21,9 @@ pub const MAX_FONT_SIZE: f32 = 40.0;
 const ADVANCE_EM: f32 = 0.6;
 /// Line height of one row, in ems.
 const LINE_EM: f32 = 1.3;
+/// Height of a row of a single-line list, in rows: lists read better a
+/// little looser than the grid (see `aura_ui_terminal::ListPitch`).
+const LIST_ROW_EM: f32 = 1.3;
 /// Size of the chat's prose relative to the grid's font size. Prose reads
 /// a step larger than the code beside it, like body text in a chat app,
 /// while still fitting the grid's rows.
@@ -92,6 +95,12 @@ pub fn initial_font_size() -> f32 {
 /// box borders land on the pixel grid.
 pub fn cell_size(font_size: f32) -> Size {
     Size::new(font_size * ADVANCE_EM, (font_size * LINE_EM).round())
+}
+
+/// Height of a list row when a cell is `cell_height` pixels tall, on
+/// whole pixels.
+pub fn list_row_height(cell_height: f32) -> f32 {
+    (cell_height * LIST_ROW_EM).round()
 }
 
 /// Size the chat's prose is set at when the grid is at `font_size`.

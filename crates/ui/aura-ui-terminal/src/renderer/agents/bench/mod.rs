@@ -50,7 +50,7 @@ pub(super) fn render_bench(
     theme: &Theme,
 ) {
     let is_focused = app.focus() == PanelFocus::Swarm;
-    let (rows_area, bottom_row) = split_pinned(body);
+    let (rows_area, bottom_row) = split_pinned(app, area, body);
     let visible = usize::from(rows_area.height);
     app.set_bench_rows_area(rows_area);
     app.set_new_bench_area(bottom_row);

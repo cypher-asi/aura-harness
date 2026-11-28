@@ -34,6 +34,7 @@ mod kernel_link;
 mod keys;
 mod last_selection;
 mod line_edit;
+mod list_bands;
 mod list_state;
 mod members;
 pub mod mentions;
@@ -115,7 +116,6 @@ use account::Account;
 use agent_switch::AgentSwitch;
 pub use approval::PendingApproval;
 pub(crate) use apps::integrations::IntegrationButton;
-#[cfg(test)]
 pub(crate) use apps::HistoryKind;
 pub use apps::{
     AgentsTab, ArchiveRow, BenchAgent, BenchMode, BenchRow, BenchState, FormField, WorkChoice,
@@ -141,6 +141,7 @@ pub use inbox::{InboxRow, ThreadView};
 use input_state::InputState;
 use kernel_link::KernelLink;
 pub use last_selection::{LastSelection, ProjectPick, SELECTION_FILE};
+pub use list_bands::{ListBand, ListPitch};
 use list_state::ListState;
 pub use members::{MemberRow, RecordsTab};
 pub use modal::{Dialog, ModalKind};

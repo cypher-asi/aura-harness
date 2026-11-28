@@ -100,6 +100,15 @@ async fn github_repo(root: &Path, remote: Option<&str>) -> Option<Slug> {
     github::slug(&url)
 }
 
+/// The page on github.com of the repo at `root`, from its `origin`
+/// remote: `https://github.com/owner/repo`. `None` for a repo with no
+/// remote there.
+pub(crate) async fn github_page(root: &Path) -> Option<String> {
+    github_repo(root, None)
+        .await
+        .map(|slug| format!("https://github.com/{slug}"))
+}
+
 /// What loads keep between them.
 #[derive(Default)]
 struct Cache {

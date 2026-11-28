@@ -98,6 +98,17 @@ impl std::fmt::Debug for GhForge {
     }
 }
 
+/// The GitHub repo `origin` of the repo at `top` points at; `None` when
+/// it has no `origin` or it is not on github.com. Runs `git remote
+/// get-url` through the queue's own git ([`crate::git`]).
+pub async fn origin_slug(top: &std::path::Path) -> Option<RepoSlug> {
+    let timeout = std::time::Duration::from_secs(15);
+    let url = crate::git::ok(top, &["remote", "get-url", "origin"], timeout)
+        .await
+        .ok()?;
+    RepoSlug::from_remote_url(&url)
+}
+
 impl GhForge {
     /// The forge of repo `slug`, through `gh` on the `PATH` and its own
     /// sign-in.

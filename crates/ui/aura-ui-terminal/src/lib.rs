@@ -58,9 +58,9 @@ pub use app::flow::{
     layout as flow_layout, FlowState, MAX_ZOOM as FLOW_MAX_ZOOM, MIN_ZOOM as FLOW_MIN_ZOOM,
 };
 pub use app::{
-    AgentsTab, App, AppState, ArchiveRow, ChatScroll, ChatTab, InboxRow, LastSelection, MemberRow,
-    Pane, PaneChrome, PaneSplits, PaneTab, ProjectPick, ProseMeasure, ProseRow, RecordsTab,
-    SidePanelTab, SideScope, WorkspaceMove, WorkspaceTarget, SELECTION_FILE,
+    AgentsTab, App, AppState, ArchiveRow, ChatScroll, ChatTab, InboxRow, LastSelection, ListBand,
+    ListPitch, MemberRow, Pane, PaneChrome, PaneSplits, PaneTab, ProjectPick, ProseMeasure,
+    ProseRow, RecordsTab, SidePanelTab, SideScope, WorkspaceMove, WorkspaceTarget, SELECTION_FILE,
 };
 pub use events::{UiCommand, UiEvent};
 pub use mode_command::{ApprovalLevel, ModeCommandError, PermissionMode, SlashModeCommand};

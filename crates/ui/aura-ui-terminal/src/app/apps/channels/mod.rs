@@ -48,9 +48,9 @@ mod list;
 mod side;
 mod welcome;
 
-pub(crate) use history::{HistoryItem, HISTORY_ROWS};
 #[cfg(test)]
-pub(crate) use history::{HistoryKind, PLANNER_GONE};
+pub(crate) use history::PLANNER_GONE;
+pub(crate) use history::{HistoryItem, HistoryKind, HISTORY_ROWS};
 pub(crate) use side::CHANNEL_MEMBER_ROWS;
 pub(crate) use welcome::ChannelWelcome;
 
@@ -103,6 +103,9 @@ pub(crate) struct ChannelState {
     merge_queues: HashMap<String, MergeQueueView>,
     /// How far the QUEUE side tab is scrolled
     queue_scroll: InfoScroll,
+    /// Where QUEUE drew each branch that opens its page this frame, with
+    /// the page
+    queue_links: Vec<(Rect, String)>,
     /// The channel whose QUEUE tab last asked for older merges, and how
     /// many merges it showed then: it asks once per page shown
     older_asked: Option<(String, usize)>,

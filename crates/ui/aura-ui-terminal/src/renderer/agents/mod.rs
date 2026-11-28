@@ -115,9 +115,11 @@ fn agents_header(app: &mut App, bar: Rect) -> PanelHeader<'static, AgentsTab> {
     }
 }
 
-/// `body` split into a list's rows and the row pinned under them, which
-/// holds the list's "+ New …".
-fn split_pinned(body: Rect) -> (Rect, Rect) {
+/// `body`, inside the panel bordered by `area`, split into a list's rows
+/// and the row pinned at its bottom, which holds the list's "+ New …".
+/// The rows are cut to those that fit at the list pitch (see
+/// [`App::list_rows`]); the pinned row keeps the bottom.
+fn split_pinned(app: &mut App, area: Rect, body: Rect) -> (Rect, Rect) {
     let rows = Rect {
         height: body.height.saturating_sub(1),
         ..body
@@ -127,7 +129,7 @@ fn split_pinned(body: Rect) -> (Rect, Rect) {
         height: body.height.min(1),
         ..body
     };
-    (rows, pinned)
+    (app.list_rows(area, rows), pinned)
 }
 
 /// Draw a list's visible `lines` into `rows`, the pinned line on its row,

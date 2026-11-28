@@ -38,6 +38,7 @@ impl Stage {
             rows: ROWS,
             prose: &[],
             panes: &[],
+            bands: &[],
             cursor: self.cursor,
             metrics: Metrics::new(14.0),
             palette: self.palette,
@@ -237,6 +238,7 @@ fn a_panel_that_scrolls_leaves_the_one_beside_it_painted() {
     painter.paint_with(
         &View {
             panes: &panes,
+            bands: &[],
             ..stage.view()
         },
         &mut text,
@@ -247,6 +249,7 @@ fn a_panel_that_scrolls_leaves_the_one_beside_it_painted() {
         .paint_with(
             &View {
                 panes: &panes,
+                bands: &[],
                 ..stage.view()
             },
             &mut text,

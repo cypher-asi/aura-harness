@@ -27,10 +27,11 @@
 //! "Finished to-dos" row, once it is opened. Past [`MAX_TODO_ROWS`] rows,
 //! or past the rows the screen leaves it, the items on screen start at
 //! the item in progress so it stays in view, keep the history row, and a
-//! `+N more` row counts the rest.
+//! `+N more` row counts the rest. An opened history starts them at its
+//! own row instead, and the wheel scrolls them from there.
 //!
-//! The drawer records where it drew its header and its history row on
-//! the [`App`] for the mouse.
+//! The drawer records where it drew its header, its history row, each
+//! item and the rows the wheel scrolls on the [`App`] for the mouse.
 
 mod rows;
 
@@ -68,7 +69,8 @@ pub(super) fn height(app: &App) -> u16 {
         return BORDER_ROWS + 1;
     }
     let entries = rows::entries(app);
-    let (shown, more) = rows::fit(&entries, MAX_TODO_ROWS);
+    let start = rows::history_start(app, &entries);
+    let (shown, more) = rows::fit(&entries, MAX_TODO_ROWS, start);
     u16::try_from(rows::rows_of(&entries, &shown) + usize::from(more))
         .unwrap_or(u16::MAX)
         .saturating_add(BORDER_ROWS + 1)
@@ -78,8 +80,8 @@ pub(super) fn height(app: &App) -> u16 {
 /// where its header went.
 pub(super) fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     if !app.todo_drawer_shown() || area.height < BORDER_ROWS + 1 || area.width < 6 {
+        forget_rows(app);
         app.set_todo_drawer_header(None);
-        app.set_todo_history_row(None);
         return;
     }
     let block = Block::default()
@@ -96,14 +98,24 @@ pub(super) fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme
 
     let room = usize::from(inner.height.saturating_sub(1));
     if app.todo_drawer_folded() || room == 0 {
-        app.set_todo_history_row(None);
+        forget_rows(app);
         return;
     }
     draw_rows(frame, app, (header, inner.bottom(), room), theme);
 }
 
+/// Nothing under the header was drawn: no history row, items or rows to
+/// scroll for the mouse.
+fn forget_rows(app: &mut App) {
+    app.set_todo_history_row(None);
+    app.set_todo_item_hits(Vec::new());
+    let first = app.todo_history_scroll();
+    app.set_todo_history_scroll(first, None);
+}
+
 /// Draw the rows under `header`, down to `bottom`, at most `room` of
-/// them, and record where the history row went.
+/// them, and record where the history row, each item and the rows the
+/// wheel scrolls went.
 fn draw_rows(
     frame: &mut Frame,
     app: &mut App,
@@ -111,16 +123,19 @@ fn draw_rows(
     theme: &Theme,
 ) {
     let entries = rows::entries(app);
-    let (shown, more) = rows::fit(&entries, room.min(MAX_TODO_ROWS));
+    let start = rows::history_start(app, &entries);
+    let (shown, more) = rows::fit(&entries, room.min(MAX_TODO_ROWS), start);
     // A column clear of each border.
     let text_room = usize::from(header.width.saturating_sub(2));
     let mut y = header.y + 1;
     let mut history = None;
+    let mut hits = Vec::new();
     for &index in &shown {
         let entry = entries[index];
         if matches!(entry, rows::Entry::History(_)) && y < bottom {
             history = Some(Rect { y, ..header });
         }
+        let top = y;
         // An item the screen cuts short keeps its first row; past `bottom`
         // are the border and the input.
         for mut line in rows::entry_lines(app, entry, text_room, theme) {
@@ -131,8 +146,30 @@ fn draw_rows(
             frame.render_widget(Paragraph::new(line), Rect { y, ..header });
             y += 1;
         }
+        if let rows::Entry::Open(todo) | rows::Entry::Closed(todo) = entry {
+            let area = Rect {
+                y: top,
+                height: y - top,
+                ..header
+            };
+            hits.push((area, todo.assignee.clone()));
+        }
     }
+    let scroll_rows = (start.is_some() && more).then(|| Rect {
+        y: header.y + 1,
+        height: y - header.y - 1,
+        ..header
+    });
+    // The wheel moves on from where the window was drawn, not from past
+    // its end; a history that fits keeps its start for when it no longer
+    // does.
+    let first = match start {
+        Some(_) if more => shown.first().copied().unwrap_or(0),
+        _ => app.todo_history_scroll(),
+    };
     let hidden = entries.len() - shown.len();
+    app.set_todo_history_scroll(first, scroll_rows);
+    app.set_todo_item_hits(hits);
     if more && hidden > 0 && y < bottom {
         let more = Line::from(Span::styled(
             format!(" +{hidden} more"),

@@ -1,13 +1,22 @@
 //! The HISTORY tab of an open channel's side panel: every message the user
-//! posted in the channel, newest first, two rows each.
+//! sent in the channel, newest first, drawn as MEMBERS draws its members,
+//! two rows each.
 //!
 //! ```text
-//! Your messages · 3
-//!  Make the footer links open in a new tab
-//!  20:31
-//!  Plan the parser rewrite and split it…
-//!  11-27 09:12
+//!  #  Make the footer links open in a new tab
+//!     20:31 · to members
+//!  →  Plan the parser rewrite and split it…
+//!     11-27 09:12 · to the coordinator
+//!  P  Split the lexer from the parser
+//!     11-27 09:05 · plan · RUS3
 //! ```
+//!
+//! The first row is a list row: the kind of message in the icon column
+//! (`#` a post to the members, `→` a message typed to the coordinator,
+//! `P` a `/plan` request), then what it says. The second row is the
+//! muted detail row MEMBERS draws under each member: when it was sent and
+//! where it went, a `/plan` request with the code of the member planning
+//! it. Nothing is bold and only the icon column is gray.
 //!
 //! A message longer than [`POST_SUMMARY_MIN_CHARS`] shows its one-line
 //! summary once the session sent one, else the message cut at a word.
@@ -18,22 +27,16 @@
 use super::chrome::{Body, ScrollView};
 use super::side_list::render_empty;
 use super::text::display_width;
-use crate::app::{HistoryItem, HoverTarget, PanelFocus, HISTORY_ROWS};
-use crate::components::{cell_style, CellState};
-use crate::events::{wants_summary, POST_SUMMARY_MIN_CHARS};
+use crate::animation::AURA_WIDTH;
+use crate::app::{HistoryItem, HistoryKind, HoverTarget, PanelFocus, HISTORY_ROWS};
+use crate::components::{cell_style, detail_row, list_row, CellState, StatusIcon, ROW_INSET};
+use crate::events::{wants_summary, ChannelSummary, POST_SUMMARY_MIN_CHARS};
 use crate::{App, Theme};
 use chrono::{DateTime, Local};
-use ratatui::{
-    layout::Rect,
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    Frame,
-};
+use ratatui::{layout::Rect, style::Style, text::Line, Frame};
 
 /// What HISTORY says before the user posts in the channel.
 pub(super) const NO_MESSAGES: &str = "No messages yet. What you post in this channel is listed here, newest first; pick one to jump to it.";
-/// Columns a row leaves at its left before the text.
-const INSET: usize = 1;
 
 /// Draw the open channel's history into `inner`, the body below the tab
 /// bar of the panel bordered by `area`.
@@ -45,26 +48,17 @@ pub(super) fn render_channel_history(
     theme: &Theme,
 ) {
     app.set_channel_history_rows(None);
-    if app.open_channel().is_none() {
+    let Some(channel) = app.open_channel().cloned() else {
         return;
-    }
+    };
     let items = app.channel_history();
-    if items.is_empty() || inner.height < 2 {
+    if items.is_empty() {
         render_empty(frame, inner, NO_MESSAGES, theme);
         return;
     }
-    let heading = Rect { height: 1, ..inner };
-    let rows = Rect {
-        y: inner.y + 1,
-        height: inner.height - 1,
-        ..inner
-    };
-    frame.render_widget(
-        ratatui::widgets::Paragraph::new(heading_line(items.len(), theme)),
-        heading,
-    );
-    let body = Body::new(area, rows, app.focus() == PanelFocus::Sandbox);
-    app.set_channel_history_rows(Some(rows));
+    let body = Body::new(area, inner, app.focus() == PanelFocus::Sandbox);
+    app.set_channel_history_rows(Some(body.rows()));
+    // A panel too short for an item's two rows still shows its text.
     let visible = (body.visible() / HISTORY_ROWS).max(1);
     let first = app.sync_channel_history_scroll(items.len(), visible);
     let width = body.width();
@@ -72,7 +66,7 @@ pub(super) fn render_channel_history(
         .iter()
         .enumerate()
         .skip(first)
-        .flat_map(|(index, item)| item_rows(app, (index, item), width, theme))
+        .flat_map(|(index, item)| item_rows(app, &channel, (index, item), width, theme))
         .take(body.visible())
         .collect();
     let view = ScrollView {
@@ -83,25 +77,11 @@ pub(super) fn render_channel_history(
     body.draw(frame, lines, view, theme);
 }
 
-/// `Your messages · N`, in `muted`, the count `faint`.
-fn heading_line(count: usize, theme: &Theme) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            " Your messages",
-            Style::default()
-                .fg(theme.colors.muted)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" · {count}"),
-            Style::default().fg(theme.colors.faint),
-        ),
-    ])
-}
-
-/// Item `index`'s two rows: what it says, then when it was sent.
+/// Item `index`'s two rows: its kind and what it says, then, muted, when
+/// it was sent and where it went.
 fn item_rows(
     app: &App,
+    channel: &ChannelSummary,
     (index, item): (usize, &HistoryItem),
     width: usize,
     theme: &Theme,
@@ -110,24 +90,50 @@ fn item_rows(
     let hovered = app.hover() == Some(HoverTarget::ChannelHistoryRow(index));
     let state = CellState::of(selected, hovered);
     let text = cell_style(theme, state, Style::default().fg(theme.colors.foreground));
-    let time = cell_style(theme, state, Style::default().fg(theme.colors.muted));
-    let room = width.saturating_sub(INSET + 1);
-    [
-        row(&shown_text(item, room), text.bg, text.text, width),
-        row(&compact_time(item.at_ms), time.bg, time.text, width),
-    ]
+    let room = width.saturating_sub(2 * ROW_INSET + AURA_WIDTH + 1);
+    let icon = StatusIcon::new(kind_mark(item.kind), theme.colors.muted);
+    let first = list_row(width, 0, icon, &shown_text(item, room), text, None);
+    let detail = cell_style(theme, state, Style::default().fg(theme.colors.muted));
+    let second = detail_row(
+        width,
+        "",
+        &detail_text(channel, item),
+        (detail.bg, detail.text),
+        theme,
+    );
+    [first, second]
 }
 
-/// One row: `text` after the inset, padded to `width` on `bg`.
-fn row(text: &str, bg: Option<Color>, style: Style, width: usize) -> Line<'static> {
-    let fill = bg.map_or_else(Style::default, |bg| Style::default().bg(bg));
-    let lead = format!("{:INSET$}", "");
-    let pad = width.saturating_sub(INSET + display_width(text));
-    Line::from(vec![
-        Span::styled(lead, fill),
-        Span::styled(text.to_string(), fill.patch(style)),
-        Span::styled(" ".repeat(pad), fill),
-    ])
+/// The icon column of an item: where the message went.
+const fn kind_mark(kind: HistoryKind) -> &'static str {
+    match kind {
+        HistoryKind::Post => "#",
+        HistoryKind::Typed => "→",
+        HistoryKind::Plan => "P",
+    }
+}
+
+/// An item's second row: `20:31 · to members`, `… · to the
+/// coordinator`, or `… · plan · RUS3` with the code of the member
+/// planning it, when it is still in the channel.
+pub(super) fn detail_text(channel: &ChannelSummary, item: &HistoryItem) -> String {
+    let to = match item.kind {
+        HistoryKind::Post => "to members".to_string(),
+        HistoryKind::Typed => "to the coordinator".to_string(),
+        HistoryKind::Plan => {
+            let planner = item.planner.as_deref().and_then(|id| {
+                let member = channel.members.iter().find(|member| member.id == id)?;
+                member.code.clone().or_else(|| Some(member.name.clone()))
+            });
+            planner.map_or_else(|| "plan".to_string(), |code| format!("plan · {code}"))
+        }
+    };
+    let time = compact_time(item.at_ms);
+    if time.is_empty() {
+        to
+    } else {
+        format!("{time} · {to}")
+    }
 }
 
 /// What an item shows in `room` columns: its summary when it has one and
