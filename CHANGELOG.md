@@ -7,6 +7,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Subagents are titled by the work they do
+
+##### Fixed
+
+- A subagent's row names what it works on, such as "EXL1: Merge queue
+  store tests". Before, many rows read "EXL1: In the Rust workspace" or
+  "IMP89: You are working". A `task` call can now give a `description`,
+  which becomes the title, for local and cloud subagents alike. Without
+  one, the title comes from the brief's first sentence that says what
+  to do, skipping workspace paths, "You are ..." lines, section labels
+  and rules. Titles are cut at a word to fit the row.
+
 ### A member's report survives a turn the user stops
 
 ##### Fixed
