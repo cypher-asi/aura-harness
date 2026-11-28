@@ -35,6 +35,13 @@ impl IntegrationId {
         }
     }
 
+    /// A built-in integration's fixed id, known to be valid (checked by
+    /// the built-ins' tests).
+    pub(crate) fn builtin(id: &'static str) -> Self {
+        debug_assert!(Self::new(id).is_ok(), "{id} is not a valid id");
+        Self(id.to_string())
+    }
+
     /// The id as text.
     #[must_use]
     pub fn as_str(&self) -> &str {
