@@ -154,6 +154,7 @@ fn manifest() -> Manifest {
         kind: FieldKind::Url,
         required: false,
         default: Some(DEFAULT_API.to_string()),
+        advanced: true,
     }];
     manifest
 }

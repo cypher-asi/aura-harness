@@ -37,3 +37,16 @@
   is reconnected first, at most eight at a time, in the background. A
   machine that can't be reached is tried again with backoff before its
   turn is reported lost. A sleeping machine with no work is left asleep.
+
+### The context ring and panel
+
+##### Added
+
+- The footer's context share has a ring that fills as the window does
+  (`○ ◔ ◑ ◕ ●`). Clicking it, or `/context`, opens a CONTEXT panel
+  showing what fills the window: system prompt, tools, MCP tools,
+  subagents, skills, messages and free space. Each part shows its tokens
+  and share, with a stacked bar above. The total is the model's own
+  count of its last call. The parts are measured from their text, and
+  messages are the rest. `/context text` still writes the old report
+  into the chat. The desktop app draws the rings too.

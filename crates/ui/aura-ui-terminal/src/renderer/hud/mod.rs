@@ -3,7 +3,7 @@
 //! to-do drawer draws.
 //!
 //! ```text
-//! qwen3:4b · auto thinking · 23% context used · 2 calls        ● Ready
+//! qwen3:4b · auto thinking · ◔ 23% context used · 2 calls      ● Ready
 //! / for commands · @ for files · $ for a terminal · Ctrl+O steps
 //! ```
 
@@ -13,6 +13,7 @@ pub(super) use notice::{notice_icon, render_notice};
 
 use super::text::display_width;
 use crate::app::format::format_tokens;
+use crate::app::hud::context_usage::ring;
 use crate::app::hud::{Hud, SessionStats};
 use crate::mode_command::PermissionMode;
 use crate::{App, Theme};
@@ -86,7 +87,9 @@ fn push_mode_part(parts: &mut Vec<(String, Color)>, mode: Option<PermissionMode>
     }
 }
 
-/// How much of the model's context window is used, on one model.
+/// How much of the model's context window is used, on one model, with
+/// the ring when the window is known. A click on it opens the CONTEXT
+/// panel ([`context_part`] finds where it was drawn).
 fn push_context_part(
     parts: &mut Vec<(String, Color)>,
     stats: &SessionStats,
@@ -101,7 +104,8 @@ fn push_context_part(
         let mut text = format!("{} context", format_tokens(stats.context_tokens));
         let mut color = theme.colors.muted;
         if let Some(percent) = stats.context_percent_in(window.or(stats.context_limit)) {
-            text = format!("{percent}% context used");
+            // The ring fills as the window does; a click opens CONTEXT.
+            text = format!("{} {percent}% context used", ring(percent));
             color = match percent {
                 90.. => theme.colors.error,
                 75.. => theme.colors.warning,
@@ -202,6 +206,26 @@ fn fitting<'a>(parts: Vec<Vec<Span<'a>>>, room: usize, theme: &Theme) -> Vec<Spa
     spans
 }
 
+/// Where the context part, the one that starts with a ring, was drawn
+/// among `spans` on `row`.
+fn context_part(spans: &[Span<'_>], row: Rect) -> Option<Rect> {
+    let mut x = 0;
+    for span in spans {
+        let width = display_width(&span.content);
+        let rings = ["○ ", "◔ ", "◑ ", "◕ ", "● "];
+        if rings.iter().any(|r| span.content.starts_with(r)) && span.content.contains("context") {
+            return Some(Rect {
+                x: row.x.saturating_add(u16::try_from(x).ok()?),
+                width: u16::try_from(width).ok()?.min(row.width),
+                height: 1,
+                ..row
+            });
+        }
+        x += width;
+    }
+    None
+}
+
 fn spans_width(spans: &[Span<'_>]) -> usize {
     spans.iter().map(|s| display_width(&s.content)).sum()
 }
@@ -212,7 +236,8 @@ fn spans_width(spans: &[Span<'_>]) -> usize {
 /// thinking level, and it gives way before the model. Returns where a
 /// notice can go on the row: the gap between the two, or everything left
 /// of the status when that gap is too narrow to read.
-pub(super) fn render_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) -> Rect {
+pub(super) fn render_footer(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) -> Rect {
+    app.set_context_ring_area(None);
     if area.height == 0 || area.width == 0 {
         return Rect { height: 0, ..area };
     }
@@ -233,12 +258,15 @@ pub(super) fn render_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Th
     parts.extend(stats.map(|(text, color)| vec![Span::styled(text, Style::default().fg(color))]));
     let stats = fitting(parts, room, theme);
     let stats_width = spans_width(&stats);
+    let ring = context_part(&stats, row);
     frame.render_widget(Paragraph::new(Line::from(stats)), row);
     frame.render_widget(
         Paragraph::new(Line::from(status)).alignment(Alignment::Right),
         row,
     );
 
+    // The spans borrow from `app`; the ring is recorded once they're drawn.
+    app.set_context_ring_area(ring);
     let left_of_status = Rect {
         width: u16::try_from(room).unwrap_or(u16::MAX),
         ..row
