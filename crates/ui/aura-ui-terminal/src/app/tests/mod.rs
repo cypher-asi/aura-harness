@@ -18,6 +18,7 @@ mod approvals_and_mentions;
 mod basics;
 mod channel_chat;
 mod channel_form;
+mod channel_history_plan;
 mod channel_member_chat;
 mod channel_member_chat_edges;
 mod channel_member_folds;

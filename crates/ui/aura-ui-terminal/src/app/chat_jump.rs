@@ -21,16 +21,26 @@ pub(crate) const JUMP_WAIT: Duration = Duration::from_secs(3);
 /// How long a block the chat jumped to stays lit.
 pub(crate) const FLASH: Duration = Duration::from_millis(1_200);
 
+/// A jump to a message the user typed, waiting for its block: its text's
+/// key, when it was sent, the chat it is in, and when it was asked.
+#[derive(Debug, Clone)]
+struct TypedJump {
+    key: u64,
+    at_ms: u64,
+    /// The member whose own chat holds it; `None` for the channel's chat
+    member: Option<String>,
+    asked: Instant,
+}
+
 /// Where a jump is.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct ChatJump {
     /// The block to jump to, and when that was asked
     pending: Option<(u64, Instant)>,
     /// The block jumped to, and when it was reached
     flash: Option<(u64, Instant)>,
-    /// A typed message to jump to once its block is known: its key, when
-    /// it was sent, and when the jump was asked
-    typed: Option<(u64, u64, Instant)>,
+    /// A typed message to jump to once its block is known
+    typed: Option<TypedJump>,
 }
 
 impl App {
@@ -49,23 +59,41 @@ impl App {
     /// coordinator keyed `key`, sent at `at_ms`, once the channel's chat
     /// shows it, putting the chat tab on screen.
     pub(crate) fn request_chat_jump_to_typed(&mut self, key: u64, at_ms: u64) {
+        self.request_typed_jump(key, at_ms, None);
+    }
+
+    /// Jump the chat to the message keyed `key`, sent at `at_ms`, in the
+    /// own chat of channel member `member`, once that chat is on screen
+    /// and shows it: a `/plan` request in its planner's chat.
+    pub(crate) fn request_chat_jump_in_member(&mut self, member: &str, key: u64, at_ms: u64) {
+        self.request_typed_jump(key, at_ms, Some(member.to_string()));
+    }
+
+    fn request_typed_jump(&mut self, key: u64, at_ms: u64, member: Option<String>) {
         if self.chat_tab() != ChatTab::Chat {
             self.show_chat_tab(ChatTab::Chat);
         }
         self.chat.jump.pending = None;
-        self.chat.jump.typed = Some((key, at_ms, Instant::now()));
+        self.chat.jump.typed = Some(TypedJump {
+            key,
+            at_ms,
+            member,
+            asked: Instant::now(),
+        });
         self.request_redraw();
     }
 
     /// Turn a jump to a typed message into one to its block once the
     /// chat holds it, dropping one that waited too long.
     fn resolve_typed_jump(&mut self) {
-        let Some((key, at_ms, asked)) = self.chat.jump.typed else {
+        let Some(jump) = self.chat.jump.typed.as_ref() else {
             return;
         };
+        let asked = jump.asked;
+        let found = self.typed_message_block(jump.key, jump.at_ms, jump.member.as_deref());
         if asked.elapsed() > JUMP_WAIT {
             self.chat.jump.typed = None;
-        } else if let Some(block) = self.typed_message_block(key, at_ms) {
+        } else if let Some(block) = found {
             self.chat.jump.typed = None;
             self.chat.jump.pending = Some((block, asked));
         }

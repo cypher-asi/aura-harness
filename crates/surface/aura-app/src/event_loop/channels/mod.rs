@@ -73,8 +73,8 @@ pub(crate) mod summaries;
 mod update;
 
 pub(crate) use chat::{
-    drop_unanswered, drop_unanswered_from, post_replies, post_replies_from, route_user_message,
-    send_posts_of, take_digest, ChannelChat,
+    drop_unanswered, drop_unanswered_from, post_plan_request, post_replies, post_replies_from,
+    route_user_message, send_posts_of, take_digest, ChannelChat,
 };
 pub(crate) use create::create_channel;
 pub(super) use handlers::{
