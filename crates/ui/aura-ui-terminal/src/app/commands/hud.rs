@@ -31,7 +31,12 @@ impl App {
     }
 
     fn cmd_set_todos(&mut self, todos: Vec<TodoView>) {
+        let agent = self.active_agent_id().to_string();
+        self.time_todos(&agent, &todos);
         self.hud.todos = todos;
+        if !self.hud.todos.iter().any(|todo| todo.state.is_closed()) {
+            self.set_todo_history_row(None);
+        }
         if self.hud.todos.is_empty() {
             self.reset_todo_drawer();
         } else if self.hud.has_open_todos() {

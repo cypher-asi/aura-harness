@@ -10,8 +10,8 @@
 //! │  Change the guidance the agent gets for writing plans...  │
 //! │                                                           │
 //! │  TODOS  2/5                                               │
-//! │  ☒ Rewrite the plan-writing bullet                        │
-//! │  ▣ Update the create_plan description                     │
+//! │  ✓ Rewrite the plan-writing bullet                        │
+//! │  ◐ Update the create_plan description                     │
 //! │  ☐ Extend the plan_mode test                              │
 //! │  ──────────────────────────────────────────────────────── │
 //! │  Why plans read badly today                               │

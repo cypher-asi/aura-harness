@@ -18,7 +18,7 @@ impl App {
             "whoami" | "me" => self.send_command_event(UiEvent::Whoami),
             "context" | "ctx" => self.context_command(),
             "cost" | "usage" => self.cost_command(),
-            "todos" | "todo" => self.todos_command(),
+            "todos" | "todo" => self.todos_command(arg),
             "compact" => self.handle_compact_command(arg),
             "init" => self.handle_init_command(),
             "resume" => self.handle_resume_command(arg),
@@ -54,7 +54,16 @@ impl App {
 
     /// `/todos`: fold or open the to-do drawer, or bring a finished list
     /// back into it.
-    fn todos_command(&mut self) {
+    fn todos_command(&mut self, arg: &str) {
+        if arg.trim() == "history" && !self.hud.todos.is_empty() {
+            if !self.toggle_todo_history() {
+                self.notifications.current = Some((
+                    "No finished to-dos yet".to_string(),
+                    NotificationType::Warning,
+                ));
+            }
+            return;
+        }
         if self.hud.todos.is_empty() {
             self.notifications.current = Some((
                 "The agent has no todo list".to_string(),

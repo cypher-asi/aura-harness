@@ -203,9 +203,9 @@ fn test_tasks_tab_lists_plans_with_their_todos_above_their_tasks() {
         rows[auth]
     );
     assert_eq!(row_with(&rows, "Add session table"), auth + 1);
-    assert!(rows[auth + 1].contains('☒'));
+    assert!(rows[auth + 1].contains('✓'));
     assert!(
-        rows[auth + 2].contains("▣  Write the login handler"),
+        rows[auth + 2].contains("◐  Write the login handler"),
         "{}",
         rows[auth + 2]
     );
@@ -244,8 +244,8 @@ fn test_tasks_tab_lines_todos_up_under_their_plans_fold_arrow() {
     // The todos' boxes sit right under the plan's fold arrow; only the
     // task under a todo is indented, one level.
     let arrow = last_column(&rows, auth, '▾');
-    assert_eq!(last_column(&rows, auth + 1, '☒'), arrow);
-    assert_eq!(last_column(&rows, auth + 2, '▣'), arrow);
+    assert_eq!(last_column(&rows, auth + 1, '✓'), arrow);
+    assert_eq!(last_column(&rows, auth + 2, '◐'), arrow);
     assert_eq!(last_column(&rows, auth + 3, '✓'), arrow + 2);
     let parser = row_with(&rows, "Parser cleanup");
     assert_eq!(
@@ -291,7 +291,7 @@ fn test_tasks_tab_colors_plans_and_todos_by_their_state() {
     assert_eq!(fg_of("Parser cleanup"), muted, "plan with nothing left");
     assert_eq!(fg_of("Auth rework"), foreground, "plan with todos left");
     let check_row = row_of(&buffer, "Add session table");
-    let (_, check) = find_cell(&buffer, check_row, "☒").unwrap();
+    let (_, check) = find_cell(&buffer, check_row, "✓").unwrap();
     assert_eq!(check.fg, faint);
 }
 
