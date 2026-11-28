@@ -33,7 +33,7 @@ use crate::error::{CloudError, CloudResult};
 use crate::names;
 
 pub mod pull;
-pub use pull::{parse_pulled, pull_latest, PULLED, PULL_BRANCH};
+pub use pull::{parse_pulled, pull_latest, start_from_latest, PULLED, PULL_BRANCH};
 
 /// Where a snapshot build's bundle is uploaded.
 pub const SNAPSHOT_BUNDLE: &str = "/tmp/aura-project.bundle";
@@ -189,6 +189,12 @@ pub struct BranchStart<'a> {
     /// Whether [`DELTA_ARCHIVE`] was uploaded (the hub has uncommitted
     /// changes).
     pub delta: bool,
+    /// Start the branch from `origin`'s latest [`PULL_BRANCH`] instead of
+    /// the hub's HEAD, leaving out the hub's unpushed commits and its
+    /// uncommitted changes ([`start_from_latest`]). Without `origin`, or
+    /// when it can't be fetched, the branch starts at the hub's HEAD,
+    /// still without the uncommitted changes.
+    pub clean: bool,
 }
 
 /// Shell run in a new agent's machine: fetch the hub's newer commits,
@@ -216,7 +222,7 @@ pub fn start_branch(start: &BranchStart<'_>) -> CloudResult<String> {
         Some(url) => return Err(bad("remote", url)),
         None => "git remote remove origin >/dev/null 2>&1 || true; ".to_string(),
     };
-    let delta = if start.delta {
+    let delta = if start.delta && !start.clean {
         format!(
             "tar -xzf {DELTA_ARCHIVE}; \
              if [ -s .aura-deleted ]; then tr '\\n' '\\0' < .aura-deleted | xargs -0 rm -f --; fi; \
@@ -225,10 +231,10 @@ pub fn start_branch(start: &BranchStart<'_>) -> CloudResult<String> {
     } else {
         String::new()
     };
-    let pull = if start.remote_url.is_some() {
-        pull_latest(PULL_BRANCH)?
-    } else {
-        String::new()
+    let pull = match (start.remote_url.is_some(), start.clean) {
+        (true, true) => start_from_latest(PULL_BRANCH, name)?,
+        (true, false) => pull_latest(PULL_BRANCH)?,
+        (false, _) => String::new(),
     };
     Ok(format!(
         "set -e; cd \"$AURA_WORKSPACE\"; {fetch}git update-ref {HUB_HEAD_REF} {head}; \
@@ -384,6 +390,7 @@ mod tests {
             remote_url: Some("https://github.com/a/b.git'; id; '"),
             bundle: false,
             delta: false,
+            clean: false,
         };
         assert!(start_branch(&start).is_err());
         let start = BranchStart {

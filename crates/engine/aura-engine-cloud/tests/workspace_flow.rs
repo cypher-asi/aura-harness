@@ -158,6 +158,7 @@ fn place(s: &Setup, snapshot: &str, branch: &str) -> String {
         remote_url: Some("https://github.com/acme/app.git"),
         bundle: newer.is_some(),
         delta: !changes.is_empty(),
+        clean: false,
     };
     sh(
         &s.root,

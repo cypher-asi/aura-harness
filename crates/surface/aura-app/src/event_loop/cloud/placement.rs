@@ -102,7 +102,7 @@ async fn move_to_cloud(
             .await;
         return;
     }
-    let Some(request) = place_request(state, &hub, agent) else {
+    let Some(request) = place_request(state, &hub, agent, false) else {
         console
             .end(
                 false,
@@ -204,10 +204,14 @@ fn recall(
     });
 }
 
+/// What placing `agent` asks of `hub`. A channel member's start is
+/// `clean` ([`PlaceRequest::clean`]): its machine starts from what is
+/// shipped, not from what is open on this computer.
 pub(super) fn place_request(
     state: &LoopState<'_>,
     hub: &CloudHub,
     agent: AgentId,
+    clean: bool,
 ) -> Option<PlaceRequest> {
     let registry = lock(&state.hub.registry);
     let entry = registry.find(agent)?;
@@ -229,6 +233,7 @@ pub(super) fn place_request(
         fork_from,
         owner: state.auth.owner(),
         owner_name: state.auth.identity().display_name().map(str::to_string),
+        clean,
     })
 }
 

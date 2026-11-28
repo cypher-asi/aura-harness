@@ -67,6 +67,7 @@ impl CloudHub {
         boot.fact("snapshot commit", short_commit(snapshot_commit));
         let dir = request.project_dir.clone();
         let base = snapshot_commit.to_string();
+        let with_changes = !request.clean;
         let packed = boot
             .wait(
                 BootStage::SyncFiles,
@@ -75,7 +76,7 @@ impl CloudHub {
                     short_commit(snapshot_commit)
                 ),
                 None,
-                tokio::task::spawn_blocking(move || pack_project(&dir, &base)),
+                tokio::task::spawn_blocking(move || pack_project(&dir, &base, with_changes)),
             )
             .await
             .map_err(|err| {
@@ -92,6 +93,7 @@ impl CloudHub {
             remote_url,
             bundle: has_bundle,
             delta: has_delta,
+            clean: request.clean,
         })?;
         let stdout = self
             .run_script(
@@ -310,7 +312,9 @@ fn report_pull(stdout: &str, boot: &BootReporter) {
 }
 
 /// The project in `dir` packed for a machine whose snapshot is at `base`.
-fn pack_project(dir: &Path, base: &str) -> CloudResult<PackedProject> {
+/// The project at `dir` for a new machine whose snapshot is at `base`:
+/// the commits since, and, `with_changes`, its uncommitted changes.
+fn pack_project(dir: &Path, base: &str, with_changes: bool) -> CloudResult<PackedProject> {
     let head = delta::head_commit(dir)?;
     let bundle = if head == base {
         None
@@ -319,7 +323,7 @@ fn pack_project(dir: &Path, base: &str) -> CloudResult<PackedProject> {
     };
     let changes = delta::collect(dir, &head)?;
     let changed = changes.files.len() + changes.deleted.len();
-    let archive = if changes.is_empty() {
+    let archive = if changes.is_empty() || !with_changes {
         None
     } else {
         Some(delta::pack(dir, &changes)?)
