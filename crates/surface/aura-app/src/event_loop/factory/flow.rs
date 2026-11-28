@@ -158,9 +158,6 @@ impl Flows {
     /// Whether a restore queued `agent`'s cut-off factory work again and
     /// it hasn't started yet. A turn resumed on reopen skips such an
     /// agent: its work is queued already.
-    // The hook RUS203's turn resume on reopen calls; until it lands only
-    // the tests do.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn resumes_after_restart(&self, agent: AgentId) -> bool {
         locked(&self.resumed).contains(&agent)
     }

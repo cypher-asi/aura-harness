@@ -132,7 +132,7 @@
       "assignee": "RUS202"
     }
   ],
-  "summary": "RUS203 merged PR #96, so restarts no longer lose reports, and agents carry on by themselves when the app reopens. A turn that was running when you quit restarts right away. A cloud agent that kept working while the app was closed is reconnected, or its finished result is collected and reported to me. Queued work and messages come back too, and messages are saved to disk before the sender is told …",
-  "updated_ms": 1795849104302,
+  "summary": "RUS203 added the last test, PR #97. It restarts the app while one agent is in the middle of a software-factory build and another is mid-turn on its own task. After the reopen, each one finishes exactly once and both reports reach me. The test fails if the double-run guard is removed, so the restart work and the factory work fit together correctly.",
+  "updated_ms": 1795849447467,
   "created_ms": 1795848154402
 }

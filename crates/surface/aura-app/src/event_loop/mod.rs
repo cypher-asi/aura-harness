@@ -256,7 +256,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
 
     run_loop(&mut state, &mut inbox).await;
     state.stop_side_panels();
-    inbox::flush_saved(&state, &mut inbox.notice_rx).await;
+    inbox::flush_saved(&state).await;
     shut_down(&mut state, &mut inbox.done_rx).await;
     publisher.abort();
     state.processes.save();
@@ -392,6 +392,7 @@ async fn run_loop(state: &mut LoopState<'_>, inbox: &mut Inbox) {
             Some(outcome) = inbox.link_rx.recv() => {
                 auth::handle_link_outcome(state, outcome).await;
             }
+            () = hub.inbox.save_poked() => {}
             () = inbox.quit.cancelled() => break,
             event = state.events.recv() => {
                 let Some(event) = event else { break };
@@ -400,8 +401,7 @@ async fn run_loop(state: &mut LoopState<'_>, inbox: &mut Inbox) {
                 }
             }
         }
-        // The write goes on without the loop.
-        drop(inbox::keep_saved(state));
+        inbox::save_now(state).await;
     }
 }
 

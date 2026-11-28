@@ -12,13 +12,14 @@ use aura_exec_tools::todo::task_report_line;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 /// Save the inbox as the loop does when it quits, forget it all as a
-/// new process would, and restore it as the loop does when it starts.
-/// Returns the agents that got queued work back.
-async fn restart(
+/// new process would (the notices still on their way too), and restore
+/// it as the loop does when it starts.
+pub(super) async fn restart(
     state: &mut LoopState<'_>,
     notices: &mut UnboundedReceiver<notices::Notice>,
-) -> Vec<AgentId> {
-    owed::flush_saved(state, notices).await;
+) -> owed::Resume {
+    owed::flush_saved(state).await;
+    while notices.try_recv().is_ok() {}
     state.hub.inbox.forget_all();
     state.queued.clear();
     owed::restore_saved(state).await
@@ -26,6 +27,7 @@ async fn restart(
 
 /// Queue `assignment` for `member` as delivery does for a busy one.
 fn queue(state: &mut LoopState<'_>, member: AgentId, assignment: &notices::Notice) {
+    owed::delivered(&state.hub, member, &assignment.prompt);
     let work = Work::Prompt {
         prompt: Prompt::inbox(assignment.prompt.clone(), Request::New),
         shown: false,
@@ -40,8 +42,15 @@ fn saved_text(state: &LoopState<'_>) -> String {
 }
 
 /// The report `notices` holds next: to `coordinator`, closing todo 3.
-fn assert_reported(notices: &mut UnboundedReceiver<notices::Notice>, to: AgentId, ok: bool) {
+/// The loop gave it to the coordinator, as delivery does.
+fn assert_reported(
+    hub: &AgentHub,
+    notices: &mut UnboundedReceiver<notices::Notice>,
+    to: AgentId,
+    ok: bool,
+) {
     let report = notices.try_recv().unwrap();
+    owed::delivered(hub, report.to, &report.prompt);
     assert_eq!(report.to, to);
     assert!(
         report.prompt.ends_with(&task_report_line("3", ok)),
@@ -60,14 +69,22 @@ async fn a_debt_saved_before_a_crash_is_swept_and_reported_by_the_next_turn() {
     let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
     let mut state = loop_state(&fixture, &mut b);
     assert!(
-        owed::restore_saved(&mut state).await.is_empty(),
+        owed::restore_saved(&mut state)
+            .await
+            .queued_agents()
+            .is_empty(),
         "no file yet"
     );
     assign_footer(&fixture, coordinator, &code(&fixture, member)).await;
-    let _lost = notices.try_recv().unwrap();
-
+    assert!(
+        saved_text(&state).contains("\"todo\":\"3\""),
+        "assign saved it before it returned"
+    );
+    // Given to it, then lost with its turn.
+    let lost = notices.try_recv().unwrap();
+    owed::delivered(&state.hub, member, &lost.prompt);
     // Saved as the loop saves after each event; then the app dies.
-    owed::keep_saved(&state).unwrap().await.unwrap();
+    owed::save_now(&state).await;
     assert!(owed::keep_saved(&state).is_none(), "unchanged: not written");
     state.hub.inbox.forget_all();
     assert_eq!(state.hub.inbox.owed_by(member), 0);
@@ -80,7 +97,7 @@ async fn a_debt_saved_before_a_crash_is_swept_and_reported_by_the_next_turn() {
     let finished = next_done(&mut done).await;
     handle_work_done(&mut state, finished).await;
     assert_eq!(state.hub.inbox.owed_by(member), 0);
-    assert_reported(&mut notices, coordinator, true);
+    assert_reported(&state.hub, &mut notices, coordinator, true);
 }
 
 #[tokio::test]
@@ -98,7 +115,7 @@ async fn a_queued_assignment_runs_after_a_restart_and_reports_to_its_assigner() 
     queue(&mut state, member, &assignment);
 
     let restored = restart(&mut state, &mut notices).await;
-    assert_eq!(restored, [member]);
+    assert_eq!(restored.queued_agents(), [member]);
     assert_eq!(state.queued.len(member), 1);
     assert_eq!(state.hub.inbox.owed_by(member), 1);
     owed::resume_saved(&mut state, restored).await;
@@ -113,7 +130,7 @@ async fn a_queued_assignment_runs_after_a_restart_and_reports_to_its_assigner() 
         "{asked:?}"
     );
     assert_eq!(state.hub.inbox.owed_by(member), 0);
-    assert_reported(&mut notices, coordinator, true);
+    assert_reported(&state.hub, &mut notices, coordinator, true);
 }
 
 #[tokio::test]
@@ -129,7 +146,10 @@ async fn an_undelivered_assignment_is_delivered_after_a_restart() {
     // Sent, still in the notice channel as the app quits.
     assign_footer(&fixture, coordinator, &code(&fixture, member)).await;
 
-    assert!(restart(&mut state, &mut notices).await.is_empty());
+    assert!(restart(&mut state, &mut notices)
+        .await
+        .queued_agents()
+        .is_empty());
     let again = notices.try_recv().unwrap();
     assert_eq!(again.to, member);
     assert!(again.prompt.contains("Make the footer links work."));
@@ -139,7 +159,7 @@ async fn an_undelivered_assignment_is_delivered_after_a_restart() {
     let finished = next_done(&mut done).await;
     handle_work_done(&mut state, finished).await;
     assert_eq!(state.hub.inbox.owed_by(member), 0);
-    assert_reported(&mut notices, coordinator, true);
+    assert_reported(&state.hub, &mut notices, coordinator, true);
 }
 
 #[tokio::test]
@@ -185,12 +205,18 @@ async fn work_given_up_stays_given_up_across_a_restart() {
     let mut state = loop_state(&fixture, &mut b);
     owed::restore_saved(&mut state).await;
     assign_footer(&fixture, coordinator, &code(&fixture, member)).await;
-    let _assignment = notices.try_recv().unwrap();
+    let assignment = notices.try_recv().unwrap();
+    owed::delivered(&state.hub, member, &assignment.prompt);
     owed::give_up_all(&state.hub, member, "its local model is not running");
-    assert_reported(&mut notices, coordinator, false);
+    assert_reported(&state.hub, &mut notices, coordinator, false);
 
-    assert!(restart(&mut state, &mut notices).await.is_empty());
-    assert!(!saved_text(&state).contains("Footer"), "not saved");
+    assert!(restart(&mut state, &mut notices)
+        .await
+        .queued_agents()
+        .is_empty());
+    let saved = saved_text(&state);
+    assert!(saved.contains("\"owed\":[]"), "not owed: {saved}");
+    assert!(!saved.contains("Make the footer"), "nor queued: {saved}");
     assert_eq!(state.hub.inbox.owed_by(member), 0);
     assert!(notices.try_recv().is_err(), "not told again");
 }
@@ -224,17 +250,17 @@ async fn a_queued_assignment_the_user_removed_stays_gone_across_a_restart() {
         id: only_queued_id(&state, member),
     };
     handle_ui_event(&mut state, remove, &links).await;
-    assert_reported(&mut notices, coordinator, false);
+    assert_reported(&state.hub, &mut notices, coordinator, false);
     assert_eq!(state.hub.inbox.owed_by(member), 0);
     owed::keep_saved(&state).unwrap().await.unwrap();
     assert!(
-        !saved_text(&state).contains("Footer"),
+        !saved_text(&state).contains("Make the footer"),
         "{}",
         saved_text(&state)
     );
 
     let restored = restart(&mut state, &mut notices).await;
-    assert!(restored.is_empty());
+    assert!(restored.queued_agents().is_empty());
     assert_eq!(state.queued.len(member), 0, "the item stays gone");
     assert_eq!(state.hub.inbox.owed_by(member), 0, "the debt stays settled");
     assert!(state.hub.inbox.owing().is_empty(), "the sweep sees nothing");
@@ -268,7 +294,7 @@ async fn a_queued_assignment_edited_with_its_marker_kept_survives_a_restart() {
     let before = state.hub.inbox.owing();
 
     let restored = restart(&mut state, &mut notices).await;
-    assert_eq!(restored, [member]);
+    assert_eq!(restored.queued_agents(), [member]);
     assert_eq!(
         state.hub.inbox.owing(),
         before,
@@ -283,5 +309,5 @@ async fn a_queued_assignment_edited_with_its_marker_kept_survives_a_restart() {
     handle_work_done(&mut state, finished).await;
     assert!(user_texts(&state, member).contains(&edited));
     assert_eq!(state.hub.inbox.owed_by(member), 0);
-    assert_reported(&mut notices, coordinator, true);
+    assert_reported(&state.hub, &mut notices, coordinator, true);
 }

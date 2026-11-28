@@ -1,32 +1,41 @@
 //! The rows of the to-do drawer: its count, the items still open with the
 //! agent on each, the "Finished to-dos" row and, opened, the closed items.
 //!
+//! An item takes two rows, as a member does on the side panel's MEMBERS:
+//! its marker and its text, then, under the text and in gray, the agent
+//! it was given to and how that agent is doing, else the item's state.
+//!
 //! ```text
 //! ⬢ 2 active · 5 done
-//! ◐ Fix the redirect             → FEN6 · working 4m
-//! ☐ Run the tests                → REV6 · idle
+//! ◐ Fix the redirect
+//!   FEN6 · working 4m
+//! ☐ Run the tests
+//!   Pending
 //! ▸ Finished to-dos  5
 //! ```
 //!
-//! An item's agent is never left out for lack of room: its text is cut
-//! first, then the agent's status, down to `→ CODE`.
+//! Nothing is bold. As on the side panel, only the marker has the item's
+//! state color: the text is `foreground` while the item is open and
+//! `muted` once it is closed. Each row is cut to the drawer on its own.
 
 use super::super::hud::truncate;
-use super::super::plans::{marker, marker_color, todo_style};
+use super::super::plans::{marker, marker_color};
+use super::super::side_list::{name_style, Tone};
 use super::super::text::display_width;
 use crate::app::TodoAgent;
 use crate::events::{TodoState, TodoView};
 use crate::{App, Theme};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use std::time::Duration;
 
-/// Narrowest an item's text is cut to before its agent's status goes.
-const MIN_TEXT: usize = 8;
+/// Rows an item takes: its text, then its agent and status.
+const ITEM_ROWS: usize = 2;
 /// What the history row is called.
 pub(super) const HISTORY: &str = "Finished to-dos";
 
-/// One row of the drawer under its header.
+/// One entry of the drawer under its header: an item, on its two rows,
+/// or the history row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Entry<'a> {
     /// An item still open
@@ -37,8 +46,18 @@ pub(super) enum Entry<'a> {
     Closed(&'a TodoView),
 }
 
-/// Every row the drawer has for `app`'s list, before it is fitted to the
-/// screen: the items still open, then the history row when an item is
+impl Entry<'_> {
+    /// Rows the entry takes on screen.
+    pub(super) const fn rows(self) -> usize {
+        match self {
+            Self::Open(_) | Self::Closed(_) => ITEM_ROWS,
+            Self::History(_) => 1,
+        }
+    }
+}
+
+/// Every entry the drawer has for `app`'s list, before it is fitted to
+/// the screen: the items still open, then the history row when an item is
 /// closed, then the closed items when the history is open (always, for a
 /// list with nothing left open).
 pub(super) fn entries(app: &App) -> Vec<Entry<'_>> {
@@ -60,28 +79,57 @@ pub(super) fn entries(app: &App) -> Vec<Entry<'_>> {
     rows
 }
 
-/// Which of `entries` fit in `room` rows, as a range, and whether a
-/// `+N more` row takes the last one. The rows start at the item in
-/// progress, so it stays in view, and the history row is kept.
+/// Rows the entries `shown` of `entries` take.
+pub(super) fn rows_of(entries: &[Entry<'_>], shown: &[usize]) -> usize {
+    shown.iter().map(|&at| entries[at].rows()).sum()
+}
+
+/// Which of `entries` fit in `room` rows, and whether a `+N more` row
+/// takes the last one. The entries start at the item in progress, so it
+/// stays in view, and keep the history row. The item in progress shows
+/// even in fewer rows than it takes, cut short.
 pub(super) fn fit(entries: &[Entry<'_>], room: usize) -> (Vec<usize>, bool) {
-    if entries.len() <= room {
-        return ((0..entries.len()).collect(), false);
+    let all: Vec<usize> = (0..entries.len()).collect();
+    if rows_of(entries, &all) <= room {
+        return (all, false);
     }
-    let room = room.saturating_sub(1).max(1);
-    let history = entries.iter().position(|e| matches!(e, Entry::History(_)));
+    let room = room.saturating_sub(1);
     let current = entries
         .iter()
         .position(|e| matches!(e, Entry::Open(t) if t.state == TodoState::InProgress))
         .unwrap_or(0);
-    let first = current.min(entries.len() - room);
-    let mut shown: Vec<usize> = (first..first + room).collect();
-    if let Some(history) = history.filter(|at| !shown.contains(at)) {
-        if history > first && room > 1 {
+    let (first, end) = window(entries, current, room);
+    if first == end {
+        return (vec![current], true);
+    }
+    let mut shown: Vec<usize> = (first..end).collect();
+    let history = entries.iter().position(|e| matches!(e, Entry::History(_)));
+    if let Some(history) = history.filter(|&at| at >= end) {
+        // The last items give their rows to the history row.
+        while shown.len() > 1 && rows_of(entries, &shown) >= room {
             shown.pop();
+        }
+        if rows_of(entries, &shown) < room {
             shown.push(history);
         }
     }
     (shown, true)
+}
+
+/// The entries that fill `room` rows from `current` on, then before it
+/// once the list ends, as the range `first..end`; empty when `current`
+/// alone takes more.
+fn window(entries: &[Entry<'_>], current: usize, room: usize) -> (usize, usize) {
+    let (mut first, mut end, mut used) = (current, current, 0);
+    while end < entries.len() && used + entries[end].rows() <= room {
+        used += entries[end].rows();
+        end += 1;
+    }
+    while end > current && first > 0 && used + entries[first - 1].rows() <= room {
+        first -= 1;
+        used += entries[first].rows();
+    }
+    (first, end)
 }
 
 /// `2 active · 5 done`, with `Working on` before it during a turn; `dropped`
@@ -102,7 +150,7 @@ pub(super) fn count_spans(
         .iter()
         .filter(|t| t.state == TodoState::Cancelled)
         .count();
-    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let lit = Style::default().fg(theme.colors.foreground);
     let mut spans = vec![Span::styled("⬢ ", Style::default().fg(theme.colors.faint))];
     let count = format!("{active} active");
     if working {
@@ -110,17 +158,17 @@ pub(super) fn count_spans(
             Some(frame) => spans.extend(crate::animation::shimmer_spans(
                 "Working",
                 frame,
-                bold,
+                Style::default(),
                 (theme.colors.muted, theme.colors.foreground),
             )),
-            None => spans.push(Span::styled("Working", bold.fg(theme.colors.foreground))),
+            None => spans.push(Span::styled("Working", lit)),
         }
         spans.push(Span::styled(
             format!(" on {count}"),
             Style::default().fg(theme.colors.secondary),
         ));
     } else {
-        spans.push(Span::styled(count, bold.fg(theme.colors.foreground)));
+        spans.push(Span::styled(count, lit));
     }
     let muted = Style::default().fg(theme.colors.muted);
     if done > 0 {
@@ -132,81 +180,78 @@ pub(super) fn count_spans(
     spans
 }
 
-/// The line of `entry`, `room` columns wide.
-pub(super) fn entry_line(app: &App, entry: Entry<'_>, room: usize, theme: &Theme) -> Line<'static> {
+/// The rows of `entry`, each at most `room` columns wide.
+pub(super) fn entry_lines(
+    app: &App,
+    entry: Entry<'_>,
+    room: usize,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
     match entry {
-        Entry::Open(todo) => open_line(todo, app.todo_agent(todo).as_ref(), room, theme),
-        Entry::Closed(todo) => closed_line(todo, app.todo_agent(todo).as_ref(), room, theme),
-        Entry::History(open) => history_line(app, open, theme),
+        Entry::Open(todo) | Entry::Closed(todo) => {
+            item_lines(todo, app.todo_agent(todo).as_ref(), room, theme).into()
+        }
+        Entry::History(open) => vec![history_line(app, open, theme)],
     }
 }
 
-/// `◐ Fix the redirect  → FEN6 · working 4m`: an item still open, with
-/// the agent it was given to.
-pub(super) fn open_line(
+/// An item's two rows: `◐ Fix the redirect`, then under its text and in
+/// `muted`, [`detail`]: `FEN6 · working 4m`.
+pub(super) fn item_lines(
     todo: &TodoView,
     agent: Option<&TodoAgent>,
     room: usize,
     theme: &Theme,
-) -> Line<'static> {
-    let status = agent
-        .map(|agent| agent_status(agent, todo.state))
-        .unwrap_or_default();
-    let suffix = agent
-        .map(|agent| suffix(&agent.label, &status, room))
-        .unwrap_or_default();
-    item_line(todo, suffix, room, theme)
-}
-
-/// `✓ Read the parser  → FEN6 · done`: a closed item, with its outcome.
-pub(super) fn closed_line(
-    todo: &TodoView,
-    agent: Option<&TodoAgent>,
-    room: usize,
-    theme: &Theme,
-) -> Line<'static> {
-    let outcome = if todo.state == TodoState::Cancelled {
-        "cancelled"
-    } else {
-        "done"
-    };
-    let suffix = match agent {
-        Some(agent) => suffix(&agent.label, outcome, room),
-        None => format!("  {outcome}"),
-    };
-    item_line(todo, suffix, room, theme)
-}
-
-/// A marker, the item's text cut to leave room for `suffix`, then
-/// `suffix` in `faint`.
-fn item_line(todo: &TodoView, suffix: String, room: usize, theme: &Theme) -> Line<'static> {
+) -> [Line<'static>; ITEM_ROWS] {
     let mark = marker(todo.state);
-    let text_room = room.saturating_sub(display_width(mark) + 1 + display_width(&suffix));
-    Line::from(vec![
+    let indent = display_width(mark) + 1;
+    let text_room = room.saturating_sub(indent).max(1);
+    let text = Line::from(vec![
         Span::styled(
             format!("{mark} "),
             Style::default().fg(marker_color(todo.state, theme)),
         ),
         Span::styled(
-            truncate(&todo.content.replace('\n', " "), text_room.max(1)),
-            todo_style(todo.state, theme),
+            truncate(&todo.content.replace('\n', " "), text_room),
+            name_style(Tone::active_if(!todo.state.is_closed()), theme),
         ),
-        Span::styled(suffix, Style::default().fg(theme.colors.faint)),
-    ])
+    ]);
+    let detail = Line::from(vec![
+        Span::raw(" ".repeat(indent)),
+        Span::styled(
+            truncate(&detail(todo, agent), text_room),
+            Style::default().fg(theme.colors.muted),
+        ),
+    ]);
+    [text, detail]
 }
 
-/// `  → CODE · status` when the item's text keeps [`MIN_TEXT`] columns
-/// of `room` beside it, else `  → CODE`.
-fn suffix(label: &str, status: &str, room: usize) -> String {
-    let short = format!("  → {label}");
+/// What an item's second row says: the agent it was given to and how that
+/// agent is doing, `FEN6 · working 4m`, or how the item ended,
+/// `FEN6 · done`; for an item given to no agent, its state alone.
+fn detail(todo: &TodoView, agent: Option<&TodoAgent>) -> String {
+    let Some(agent) = agent else {
+        return state_name(todo.state).to_string();
+    };
+    let status = match todo.state {
+        TodoState::Completed => "done".to_string(),
+        TodoState::Cancelled => "cancelled".to_string(),
+        state => agent_status(agent, state),
+    };
     if status.is_empty() {
-        return short;
-    }
-    let full = format!("{short} · {status}");
-    if display_width(&full) + MIN_TEXT + 2 <= room {
-        full
+        agent.label.clone()
     } else {
-        short
+        format!("{} · {status}", agent.label)
+    }
+}
+
+/// An item's state, said on its own row.
+const fn state_name(state: TodoState) -> &'static str {
+    match state {
+        TodoState::Pending => "Pending",
+        TodoState::InProgress => "In progress",
+        TodoState::Completed => "Done",
+        TodoState::Cancelled => "Cancelled",
     }
 }
 
@@ -262,6 +307,7 @@ fn history_line(app: &App, open: bool, theme: &Theme) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::style::Modifier;
 
     fn todo(state: TodoState) -> TodoView {
         TodoView {
@@ -280,39 +326,87 @@ mod tests {
         }
     }
 
-    fn text(line: &Line<'_>) -> String {
-        line.spans.iter().map(|s| &*s.content).collect()
+    fn texts(lines: &[Line<'_>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| line.spans.iter().map(|s| &*s.content).collect())
+            .collect()
     }
 
     #[test]
-    fn an_item_in_progress_names_its_agent_its_status_and_time() {
+    fn an_item_takes_two_rows_its_text_then_its_agent_and_status() {
         let theme = Theme::default();
         let busy = agent(Some(true), Some(250));
-        let line = open_line(&todo(TodoState::InProgress), Some(&busy), 60, &theme);
-        assert_eq!(text(&line), "◐ Fix the redirect  → FEN6 · working 4m");
+        let lines = item_lines(&todo(TodoState::InProgress), Some(&busy), 60, &theme);
+        assert_eq!(texts(&lines), ["◐ Fix the redirect", "  FEN6 · working 4m"]);
         let idle = agent(Some(false), None);
-        let line = open_line(&todo(TodoState::Pending), Some(&idle), 60, &theme);
-        assert_eq!(text(&line), "☐ Fix the redirect  → FEN6 · idle");
+        let lines = item_lines(&todo(TodoState::Pending), Some(&idle), 60, &theme);
+        assert_eq!(texts(&lines), ["☐ Fix the redirect", "  FEN6 · idle"]);
+        let unlisted = agent(None, None);
+        let lines = item_lines(&todo(TodoState::Pending), Some(&unlisted), 60, &theme);
+        assert_eq!(texts(&lines)[1], "  FEN6");
     }
 
     #[test]
-    fn a_narrow_row_keeps_the_agent_and_cuts_the_text() {
+    fn an_item_given_to_no_agent_says_its_state() {
         let theme = Theme::default();
+        let doing = item_lines(&todo(TodoState::InProgress), None, 60, &theme);
+        assert_eq!(texts(&doing)[1], "  In progress");
+        let waiting = item_lines(&todo(TodoState::Pending), None, 60, &theme);
+        assert_eq!(texts(&waiting)[1], "  Pending");
+    }
+
+    #[test]
+    fn nothing_is_bold_and_only_the_marker_has_the_state_color() {
+        let theme = Theme::default();
+        let colors = &theme.colors;
         let busy = agent(Some(true), Some(5));
-        let line = open_line(&todo(TodoState::InProgress), Some(&busy), 18, &theme);
-        let row = text(&line);
-        assert!(row.ends_with("→ FEN6"), "{row}");
-        assert!(row.contains('…'), "{row}");
+        for state in [TodoState::Pending, TodoState::InProgress] {
+            let [text, detail] = item_lines(&todo(state), Some(&busy), 60, &theme);
+            let mut spans = text.spans.iter().chain(&detail.spans);
+            assert!(spans.all(|s| !s.style.add_modifier.contains(Modifier::BOLD)));
+            assert_eq!(text.spans[0].style.fg, Some(marker_color(state, &theme)));
+            assert_eq!(text.spans[1].style.fg, Some(colors.foreground), "{state:?}");
+            assert_eq!(detail.spans[1].style.fg, Some(colors.muted));
+        }
+        let [dropped, _] = item_lines(&todo(TodoState::Cancelled), None, 60, &theme);
+        assert_eq!(dropped.spans[1].style, name_style(Tone::Settled, &theme));
+    }
+
+    #[test]
+    fn the_count_is_not_bold_either() {
+        let theme = Theme::default();
+        let mut app = App::new();
+        app.process_command(crate::events::UiCommand::SetTodos(vec![todo(
+            TodoState::InProgress,
+        )]));
+        for (working, frame) in [(false, None), (true, None), (true, Some(3))] {
+            let spans = count_spans(&app, &theme, working, frame);
+            assert!(
+                spans
+                    .iter()
+                    .all(|s| !s.style.add_modifier.contains(Modifier::BOLD)),
+                "{spans:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_narrow_drawer_cuts_each_row_on_its_own() {
+        let theme = Theme::default();
+        let busy = agent(Some(true), Some(250));
+        let lines = item_lines(&todo(TodoState::InProgress), Some(&busy), 12, &theme);
+        assert_eq!(texts(&lines), ["◐ Fix the r…", "  FEN6 · wo…"]);
     }
 
     #[test]
     fn a_closed_item_says_how_it_ended() {
         let theme = Theme::default();
         let by = agent(Some(false), None);
-        let done = closed_line(&todo(TodoState::Completed), Some(&by), 60, &theme);
-        assert_eq!(text(&done), "✓ Fix the redirect  → FEN6 · done");
-        let dropped = closed_line(&todo(TodoState::Cancelled), None, 60, &theme);
-        assert_eq!(text(&dropped), "⊘ Fix the redirect  cancelled");
+        let done = item_lines(&todo(TodoState::Completed), Some(&by), 60, &theme);
+        assert_eq!(texts(&done), ["✓ Fix the redirect", "  FEN6 · done"]);
+        let dropped = item_lines(&todo(TodoState::Cancelled), None, 60, &theme);
+        assert_eq!(texts(&dropped), ["⊘ Fix the redirect", "  Cancelled"]);
     }
 
     #[test]
@@ -329,13 +423,31 @@ mod tests {
         let mut entries: Vec<Entry<'_>> = vec![Entry::Open(&pending); 6];
         entries[3] = Entry::Open(&current);
         entries.push(Entry::History(false));
-        assert_eq!(fit(&entries, 10), ((0..7).collect(), false));
-        let (shown, more) = fit(&entries, 4);
-        assert!(more);
+        // Six items of two rows, and the history row.
+        assert_eq!(fit(&entries, 13), ((0..7).collect(), false));
         assert_eq!(
-            shown,
-            [3, 4, 6],
+            fit(&entries, 6),
+            (vec![3, 4, 6], true),
             "from the current item, with the history row"
+        );
+        assert_eq!(
+            fit(&entries, 5),
+            (vec![3, 6], true),
+            "the history row takes the place of an item"
+        );
+        assert_eq!(
+            fit(&entries, 2),
+            (vec![3], true),
+            "the current item, cut short"
+        );
+
+        let mut late: Vec<Entry<'_>> = vec![Entry::Open(&pending); 6];
+        late[5] = Entry::Open(&current);
+        late.push(Entry::History(false));
+        assert_eq!(
+            fit(&late, 6),
+            (vec![4, 5, 6], true),
+            "rows left at the end go to the items before"
         );
     }
 }

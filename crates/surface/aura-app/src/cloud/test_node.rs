@@ -38,10 +38,18 @@ impl TestNode {
 
     /// [`Self::serve`], its model taking `latency_ms` over each answer.
     pub(crate) async fn serve_slow(dir: &Path, reply: &str, latency_ms: u64) -> Self {
+        let model = MockProvider::simple_response(reply).with_latency(latency_ms);
+        Self::serve_with(dir, Arc::new(model)).await
+    }
+
+    /// An unclaimed cloud node over a store in `dir`, its model being
+    /// `provider`.
+    pub(crate) async fn serve_with(
+        dir: &Path,
+        provider: Arc<dyn ModelProvider + Send + Sync>,
+    ) -> Self {
         let store: Arc<dyn Store> =
             Arc::new(RocksStore::open(dir.join("db"), false).expect("store"));
-        let provider: Arc<dyn ModelProvider + Send + Sync> =
-            Arc::new(MockProvider::simple_response(reply).with_latency(latency_ms));
         let scheduler = Arc::new(Scheduler::new(
             Arc::clone(&store),
             Arc::clone(&provider),
@@ -145,5 +153,32 @@ impl TestNode {
             }
             output
         })
+    }
+}
+
+/// A model that answers `reply` once `gate` lets each call through, so a
+/// test can hold a node's turn in the middle.
+pub(crate) struct GatedModel {
+    pub(crate) reply: MockProvider,
+    pub(crate) gate: Arc<tokio::sync::Semaphore>,
+}
+
+#[async_trait::async_trait]
+impl ModelProvider for GatedModel {
+    fn name(&self) -> &'static str {
+        "mock"
+    }
+
+    async fn complete(
+        &self,
+        request: aura_model::ModelRequest,
+    ) -> Result<aura_model::ModelResponse, aura_model::ReasonerError> {
+        let permit = self.gate.acquire().await;
+        drop(permit);
+        self.reply.complete(request).await
+    }
+
+    async fn health_check(&self) -> bool {
+        true
     }
 }
