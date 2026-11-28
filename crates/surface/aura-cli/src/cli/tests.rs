@@ -281,3 +281,21 @@ fn run_subcommand_still_owns_its_dir_flag() {
     assert_eq!(args.dir.as_deref(), Some(std::path::Path::new("/data")));
     assert!(cli.print.is_none());
 }
+
+#[test]
+fn changelog_previews_unless_asked_to_write() {
+    match parse(&["changelog"]).unwrap().command {
+        Some(Commands::Changelog(args)) => {
+            assert!(!args.write);
+            assert!(args.repo.is_none());
+        }
+        _ => panic!("not the changelog command"),
+    }
+    match parse(&["changelog", "--write", "--repo", "/r"]).unwrap().command {
+        Some(Commands::Changelog(args)) => {
+            assert!(args.write);
+            assert_eq!(args.repo, Some(PathBuf::from("/r")));
+        }
+        _ => panic!("not the changelog command"),
+    }
+}

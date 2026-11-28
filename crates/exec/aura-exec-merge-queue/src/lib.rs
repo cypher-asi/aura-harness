@@ -23,8 +23,12 @@
 //! - [`config`]: the checks, and the config file's target.
 //! - [`target`]: the target branch, as committed on `main`.
 //! - [`integrate`]: landing one entry with git.
+//! - [`resolve`]: settling a merge that conflicted only in generated files.
+//! - [`changelog`]: changelog fragments, assembled at release time.
+//! - [`overlap`]: the files the work in flight changes, and where it overlaps.
 //! - [`processor`]: the queue at work.
 
+pub mod changelog;
 mod checks;
 mod config;
 mod entry;
@@ -33,13 +37,15 @@ mod git;
 mod history;
 mod integrate;
 mod lock;
+pub mod overlap;
 mod processor;
 mod repo;
+mod resolve;
 mod state;
 mod store;
 mod target;
 
-pub use config::{target_in, QueueConfig, CONFIG_PATH, DEFAULT_TARGET};
+pub use config::{target_in, QueueConfig, CONFIG_PATH, DEFAULT_TARGET, GIT_TIMEOUT};
 pub use entry::{
     short_sha, EntryId, MergeEntry, MergeRequest, MergeStatus, Origin, QueuedPush, MERGE_QUEUE_KEY,
 };

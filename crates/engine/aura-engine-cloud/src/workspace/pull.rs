@@ -61,6 +61,31 @@ pub fn pull_latest(target: &str) -> CloudResult<String> {
     ))
 }
 
+/// Shell, run in the workspace, that fetches `origin/<target>` and moves
+/// the branch `name`, already checked out, to it, dropping what the
+/// workspace had on top: a channel member starts from what is shipped,
+/// not from the hub's checkout. Prints one [`PULLED`] line and always
+/// exits 0; when the fetch fails the branch stays where it was.
+///
+/// # Errors
+///
+/// When `target` or `name` is not a safe branch name.
+pub fn start_from_latest(target: &str, name: &str) -> CloudResult<String> {
+    let target = branch(target)?;
+    let name = branch(name)?;
+    let remote = format!("refs/remotes/origin/{target}");
+    Ok(format!(
+        "export GIT_TERMINAL_PROMPT=0; \
+         to=''; if command -v timeout >/dev/null 2>&1; then to='timeout {FETCH_TIMEOUT_SECS}'; fi; \
+         if ! git remote get-url origin >/dev/null 2>&1; then echo '{PULLED}skipped: no origin'; \
+         elif ! $to git fetch -q --no-tags origin '+refs/heads/{target}:{remote}' >{LOG} 2>&1; then \
+         echo \"{PULLED}skipped: could not fetch origin/{target}: $(tail -c 300 {LOG} | tr '\\n' ' ')\"; \
+         else git checkout -q -f -B '{name}' '{remote}'; git clean -q -fd; \
+         echo \"{PULLED}started from origin/{target} at $(git rev-parse --short '{remote}')\"; \
+         fi; rm -f {LOG}; "
+    ))
+}
+
 /// What [`pull_latest`] reported, from a script's output.
 #[must_use]
 pub fn parse_pulled(stdout: &str) -> Option<&str> {

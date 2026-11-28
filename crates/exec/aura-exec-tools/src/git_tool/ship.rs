@@ -30,6 +30,9 @@ use super::push::{
 };
 use super::{GitToolError, PushPolicy, PushTarget, Pushed};
 
+/// How [`Shipped::pulled`] starts when nothing was pulled.
+const SKIPPED: &str = "skipped:";
+
 /// What a `git_ship` call asks for.
 #[derive(Debug, Clone, Copy)]
 pub struct ShipRequest<'a> {
@@ -96,7 +99,9 @@ impl Shipped {
 ///
 /// Fails before committing when the branch is protected, pinned away or
 /// detached; fails with [`GitToolError::MergeConflict`] (after aborting
-/// the merge) when the target conflicts with the branch.
+/// the merge) when the target conflicts with the branch, and with
+/// [`GitToolError::ChangelogEdited`] before pushing when the branch edits
+/// the changelog of a repo that keeps fragments ([`super::fragments`]).
 #[instrument(skip_all, fields(op = "ship", target = %request.target))]
 pub async fn git_ship_impl(
     workspace: &Path,
@@ -130,6 +135,9 @@ pub async fn git_ship_impl(
     }
 
     let pulled = pull_target(workspace, &request).await?;
+    if !pulled.starts_with(SKIPPED) {
+        super::fragments::check_changelog(workspace, &branch, request.timeout).await?;
+    }
     let pushed = git_push_impl(workspace, request.push, request.push_policy).await?;
     info!(branch = %pushed.branch, head = %pushed.head, %pulled, "shipped");
     Ok(Shipped {
@@ -184,7 +192,7 @@ async fn pull_target(workspace: &Path, request: &ShipRequest<'_>) -> Result<Stri
             .contains("couldn't find remote ref")
         {
             info!(%target, "origin has no target branch; not pulling");
-            return Ok(format!("skipped: origin has no branch `{target}`"));
+            return Ok(format!("{SKIPPED} origin has no branch `{target}`"));
         }
         return Err(GitToolError::NonZeroExit {
             op: "fetch",
