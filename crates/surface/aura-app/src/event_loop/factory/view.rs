@@ -30,6 +30,7 @@ pub(crate) fn queue_view(
         entries,
         older,
         web,
+        broken: None,
     }
 }
 
@@ -49,7 +50,22 @@ fn entry_view(entry: &MergeEntry) -> MergeEntryView {
             .as_deref()
             .map(|sha| short_sha(sha).to_string()),
         overlaps: Vec::new(),
+        failing_tests: entry
+            .failure
+            .as_ref()
+            .map(|failure| failure.tests.clone())
+            .unwrap_or_default(),
+        failure_excerpt: entry.failure.as_ref().and_then(failure_excerpt),
+        pr: entry.pr.as_ref().map(|pr| pr.url.clone()),
     }
+}
+
+/// What a failure's QUEUE block shows under its tests: their output, or
+/// the files that conflicted.
+fn failure_excerpt(failure: &aura_exec_merge_queue::Failure) -> Option<String> {
+    failure.excerpt.clone().or_else(|| {
+        (!failure.files.is_empty()).then(|| format!("Conflicts in {}", failure.files.join(", ")))
+    })
 }
 
 const fn state_view(status: MergeStatus) -> MergeStateView {

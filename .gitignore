@@ -22,6 +22,10 @@ workspaces/
 # Logs
 *.log
 
+# Snapshots a failed insta run proposes; never committed by `git_ship`
+*.snap.new
+*.pending-snap
+
 # Cargo scratch output captures
 *_output.txt
 check_output.txt

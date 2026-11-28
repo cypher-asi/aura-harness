@@ -55,6 +55,7 @@ fn zode_queue() -> crate::events::MergeQueueView {
             },
         ],
         older: 0,
+        broken: None,
         web: None,
     }
 }
@@ -442,4 +443,55 @@ fn test_queue_tab_lists_an_entrys_overlaps_under_it() {
     assert!(rows[first].contains("Overlaps"), "{}", rows[first]);
     assert!(!rows[second].contains("Overlaps"), "{}", rows[second]);
     assert_eq!(rows.iter().filter(|r| r.contains("Overlaps")).count(), 1);
+}
+
+#[test]
+fn test_queue_tab_shows_a_failures_tests_and_diff_first_and_a_broken_target_on_top() {
+    use crate::events::{MergeEntryView, MergeStateView};
+    let mut queue = zode_queue();
+    queue.broken = Some("main at 1234abcd fails cli_golden_top_level_help on its own".to_string());
+    queue.entries[1] = MergeEntryView {
+        failing_tests: vec!["cli_golden_top_level_help".to_string()],
+        failure_excerpt: Some(
+            "---- cli_golden_top_level_help stdout ----\n+  changelog".to_string(),
+        ),
+        pr: Some("https://github.com/o/r/pull/12".to_string()),
+        ..queue.entries[1].clone()
+    };
+    assert_eq!(queue.entries[1].state, MergeStateView::Failed);
+    let lines = super::super::channel_queue::queue_lines(Some(&queue), 60, &test_theme());
+    let rows: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect()
+        })
+        .collect();
+    let find_after = |from: usize, text: &str| {
+        rows.iter()
+            .skip(from)
+            .position(|row| row.contains(text))
+            .map_or_else(|| panic!("{text} in {rows:#?}"), |at| at + from)
+    };
+    let find = |text: &str| find_after(0, text);
+    let broken = find("main is broken");
+    let failed = find("FAILED");
+    let failing = find_after(failed, "cli_golden_top_level_help");
+    let diff = find_after(failed, "+  changelog");
+    let agent = rows
+        .iter()
+        .enumerate()
+        .skip(failed)
+        .find(|(_, row)| row.contains("Agent"))
+        .map(|(at, _)| at)
+        .unwrap_or_default();
+    assert!(broken < find("RUNNING"), "the broken target comes first");
+    assert!(
+        failed < failing && failing < diff && diff < agent,
+        "{rows:#?}"
+    );
+    assert!(rows[failing].contains("Failing"), "{}", rows[failing]);
+    assert!(find("pull/12") > agent);
 }

@@ -10,6 +10,7 @@
 
 use super::{GitIntegrator, Step, Stop};
 use crate::git;
+use crate::report::FailureKind;
 use std::path::PathBuf;
 
 impl GitIntegrator {
@@ -69,7 +70,7 @@ impl GitIntegrator {
         let removed = git::run(top, &["worktree", "remove", "--force", &path], timeout).await;
         if !removed.as_ref().is_ok_and(|out| out.ok) || legacy.exists() {
             if let Err(Stop::Fail(why)) = remove_folder(legacy.clone()).await {
-                tracing::warn!(path = %path, %why, "Could not remove the old merge worktree");
+                tracing::warn!(path = %path, why = %why.reason, "Could not remove the old merge worktree");
                 return;
             }
             if let Err(error) = git::run(top, &["worktree", "prune"], timeout).await {
@@ -101,6 +102,6 @@ async fn create_folder(folder: PathBuf) -> Step<()> {
 async fn blocking(work: impl FnOnce() -> Result<(), String> + Send + 'static) -> Step<()> {
     tokio::task::spawn_blocking(work)
         .await
-        .map_err(|e| Stop::Fail(format!("file work stopped: {e}")))?
-        .map_err(Stop::Fail)
+        .map_err(|e| Stop::fail(FailureKind::Other, format!("file work stopped: {e}")))?
+        .map_err(|why| Stop::fail(FailureKind::Other, why))
 }

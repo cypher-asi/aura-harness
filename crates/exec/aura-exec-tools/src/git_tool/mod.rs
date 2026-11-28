@@ -69,6 +69,7 @@ use thiserror::Error;
 
 use crate::error::ToolError;
 
+mod branches;
 mod commit;
 mod commit_push;
 mod executor;
@@ -80,16 +81,19 @@ mod seed;
 mod ship;
 mod tools;
 mod tools_ship;
+mod tools_start;
 
 #[cfg(test)]
 mod tests;
 
+pub use branches::{agent_code, allowed_by_pin, start_task_branch, task_branch, Started};
 pub use commit::git_commit_impl;
 pub use commit_push::git_commit_push_impl;
 pub use push::git_push_impl;
 pub use ship::{git_ship_impl, ShipRequest, Shipped};
 pub use tools::{GitCommitPushTool, GitCommitTool, GitPushTool};
 pub use tools_ship::GitShipTool;
+pub use tools_start::GitStartTaskTool;
 
 // -----------------------------------------------------------------------
 // Error type
@@ -137,8 +141,16 @@ pub enum GitToolError {
 
     /// The runtime pinned this workspace to one branch
     /// ([`crate::ToolConfig::push_branch`]) and the push named another.
-    #[error("this machine pushes only its own branch `{allowed}`; pushing `{branch}` is refused")]
+    #[error(
+        "this machine pushes only its own agent's branches (`{allowed}`, or another \
+         `aura/<task>-<code>` with the same code; git_start_task makes one); pushing \
+         `{branch}` is refused"
+    )]
     BranchNotAllowed { branch: String, allowed: String },
+
+    /// Starting a task's branch would leave work behind.
+    #[error("not starting a new branch: {0}")]
+    WorkLeftBehind(String),
 
     /// The push named a [`PROTECTED_BRANCHES`] branch, which only the
     /// merge queue updates.
@@ -237,6 +249,7 @@ impl From<GitToolError> for ToolError {
             err @ (GitToolError::NoOrigin
             | GitToolError::Unauthorized { .. }
             | GitToolError::MergeConflict { .. }
+            | GitToolError::WorkLeftBehind(_)
             | GitToolError::ChangelogEdited { .. }
             | GitToolError::SeededHubChanges { .. }) => Self::CommandFailed(err.to_string()),
             GitToolError::RemoteStorageExhausted { op, stderr } => Self::CommandFailed(format!(
@@ -424,4 +437,10 @@ pub const GIT_LOCAL_TOOL_NAMES: &[&str] = &["git_commit"];
 pub const GIT_REMOTE_TOOL_NAMES: &[&str] = &["git_push", "git_commit_push", "git_ship"];
 
 /// The full set of git tool names registered by this module.
-pub const GIT_TOOL_NAMES: &[&str] = &["git_commit", "git_push", "git_commit_push", "git_ship"];
+pub const GIT_TOOL_NAMES: &[&str] = &[
+    "git_commit",
+    "git_push",
+    "git_commit_push",
+    "git_ship",
+    "git_start_task",
+];

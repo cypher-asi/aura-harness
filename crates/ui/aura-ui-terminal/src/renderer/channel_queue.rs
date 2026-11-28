@@ -16,6 +16,9 @@
 //!
 //! ● FAILED  a1b2c3d
 //!   feat/parser
+//!   Failing   parser::escapes
+//!   ---- parser::escapes stdout ----
+//!   assertion `left == right` failed
 //!   Agent     RE36
 //!   Queued    11-27 20:31
 //!   Finished  11-27 20:33
@@ -24,8 +27,13 @@
 //!   cargo test failed: parser::escapes
 //! ```
 //!
-//! Only the dot is colored, and nothing is bold: the text is
-//! `foreground`, or `muted` for ids, shas and what happened.
+//! A failed merge shows the tests that failed it and their output (or the
+//! files that conflicted) right under its branch, before its other facts.
+//! When the queue found the target failing its own checks, a `BROKEN`
+//! section with a failed dot says why, above every merge.
+//!
+//! Only the dots are colored, and nothing is bold: the text is
+//! `foreground`, or `muted` for ids, shas, output and what happened.
 //!
 //! Without a queue, or with nothing in it, a note says where merges come
 //! from. The session sends the newest merges a page at a time: under the
@@ -34,11 +42,11 @@
 
 use super::chrome::{pad_sides, Body};
 use crate::app::PanelFocus;
-use crate::components::{Info, StatusDot, Value};
+use crate::components::{truncate_line, Info, StatusDot, Value};
 use crate::events::{MergeEntryView, MergeQueueView, MergeStateView};
 use crate::{App, Theme};
 use chrono::{DateTime, Local};
-use ratatui::{layout::Rect, text::Line, Frame};
+use ratatui::{layout::Rect, style::Style, text::Line, Frame};
 
 /// What QUEUE says while no merge has been queued into `target`, the
 /// queue's target branch; the branch goes unnamed while unknown.
@@ -136,7 +144,7 @@ pub(super) fn queue_doc(queue: Option<&MergeQueueView>, width: usize, theme: &Th
     }
     let mut links = Vec::new();
     for entry in entries {
-        if let Some(link) = entry_lines(&mut info, queue, entry) {
+        if let Some(link) = entry_lines(&mut info, queue, entry, theme) {
             links.push(link);
         }
     }
@@ -161,6 +169,10 @@ fn target_section(info: &mut Info<'_>, queue: &MergeQueueView) {
     if !queue.repo.trim().is_empty() {
         info.item(queue.repo.trim(), None);
     }
+    if let Some(broken) = queue.broken.as_deref().filter(|b| !b.trim().is_empty()) {
+        info.marked_section(StatusDot::Failed, "BROKEN", Some(target));
+        info.text(&format!("{target} is broken: {broken}"), Value::Plain);
+    }
 }
 
 /// The line under the merges shown while older ones are not: scrolling
@@ -179,6 +191,7 @@ fn entry_lines(
     info: &mut Info<'_>,
     queue: Option<&MergeQueueView>,
     entry: &MergeEntryView,
+    theme: &Theme,
 ) -> Option<(usize, String)> {
     let head = entry.head.trim();
     let note = (!head.is_empty()).then_some(head);
@@ -193,9 +206,37 @@ fn entry_lines(
             None
         }
     };
+    failure_first(info, entry, theme);
     entry_facts(info, entry);
     link
 }
+
+/// A failed merge's failing tests and their output, before anything else
+/// about it: what to fix is what its agent and the user look for first.
+fn failure_first(info: &mut Info<'_>, entry: &MergeEntryView, theme: &Theme) {
+    if entry.state != MergeStateView::Failed {
+        return;
+    }
+    for (at, test) in entry.failing_tests.iter().enumerate() {
+        let label = if at == 0 { "Failing" } else { "" };
+        info.fact(label, test, Value::Plain);
+    }
+    if let Some(excerpt) = entry.failure_excerpt.as_deref() {
+        // Kept as printed, spaces and all: a snapshot diff reads by its
+        // columns. Cut to the column, not wrapped.
+        let room = info.indented_width();
+        let style = Style::default().fg(theme.colors.muted);
+        let lines = excerpt
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .take(EXCERPT_LINES)
+            .map(|line| Line::styled(truncate_line(line, room), style));
+        info.indented(lines);
+    }
+}
+
+/// Most lines of a failure's output a QUEUE block shows.
+const EXCERPT_LINES: usize = 24;
 
 /// An entry's facts under its branch: who pushed it, when it was queued
 /// and finished, its attempts when it ran more than once, what the
@@ -214,6 +255,9 @@ fn entry_facts(info: &mut Info<'_>, entry: &MergeEntryView) {
     }
     if let Some(merged) = entry.merged.as_deref().filter(|sha| !sha.is_empty()) {
         info.fact("Merged", merged, Value::Quiet);
+    }
+    if let Some(pr) = entry.pr.as_deref().filter(|pr| !pr.is_empty()) {
+        info.fact("PR", pr, Value::Quiet);
     }
     for (at, overlap) in entry.overlaps.iter().enumerate() {
         let label = if at == 0 { "Overlaps" } else { "" };

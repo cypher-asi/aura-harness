@@ -62,6 +62,16 @@ pub struct MergeEntryView {
     /// `q12 aura/x (RUS1): src/a.rs, src/b.rs`
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub overlaps: Vec<String>,
+    /// The tests that failed it, shown first
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failing_tests: Vec<String>,
+    /// What the failure printed: a test's assertion or snapshot diff, or
+    /// the conflicting files
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_excerpt: Option<String>,
+    /// The PR it lands through
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr: Option<String>,
 }
 
 /// A repo's merge queue.
@@ -78,6 +88,10 @@ pub struct MergeQueueView {
     /// `UiEvent::LoadOlderMerges` asks for a page at a time
     #[serde(default)]
     pub older: u64,
+    /// Why the target is broken, when the queue found it failing its own
+    /// checks: shown above every entry
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub broken: Option<String>,
     /// The repo's page on github.com (`https://github.com/owner/repo`),
     /// when its remote is there: QUEUE links each branch under it
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -84,6 +84,10 @@ async fn spawn(dir: &Path, command: &str, log: &Path) -> std::io::Result<Child> 
         .arg("-c")
         .arg(command)
         .current_dir(dir)
+        // A stale snapshot fails the check instead of writing a new one
+        // (`.snap.new`) and passing.
+        .env("INSTA_UPDATE", "no")
+        .env("CI", "true")
         .stdin(Stdio::null())
         .stdout(Stdio::from(out))
         .stderr(Stdio::from(err))

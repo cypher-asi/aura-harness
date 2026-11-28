@@ -17,10 +17,15 @@
 //!   landed before its time ran out ([`Integrator::landed`]); one whose
 //!   branch waits past [`Limits::queued_ttl`] since its last push
 //!   expires.
+//! - An entry that ran into a hold ([`RunOutcome::Held`]) goes back to
+//!   its place uncharged and is announced as [`QueueEvent::Held`]; the
+//!   queue starts nothing until the hold's retry time, or until the
+//!   target moves when the hold waits for that.
 
 use crate::entry::{EntryId, MergeEntry, MergeRequest};
 use crate::error::QueueError;
 use crate::integrate::{Integrator, RepoPaths};
+use crate::report::Hold;
 use crate::state::{Enqueued, QueueState, RunOutcome};
 use crate::store::{ProcessorLock, QueueStore};
 use chrono::Utc;
@@ -69,6 +74,14 @@ pub enum QueueEvent {
     Changed,
     /// An entry was merged or failed.
     Finished(Box<MergeEntry>),
+    /// An entry ran into a problem that isn't its own, and the queue
+    /// holds: the entry is back in its place.
+    Held {
+        /// The entry, queued again
+        entry: Box<MergeEntry>,
+        /// Why the queue holds
+        hold: Hold,
+    },
 }
 
 /// A repo's merge queue. Clones share it.
@@ -175,9 +188,14 @@ impl MergeQueue {
         let store = self.inner.store.clone();
         let read = blocking(move || {
             let (state, _) = store.load()?;
-            let page = page_of(&state, finished, |skip, take| {
+            let mut page = page_of(&state, finished, |skip, take| {
                 store.history().newest(state.history, skip, take)
             })?;
+            page.held = state
+                .broken
+                .as_ref()
+                .or(state.hold.as_ref())
+                .map(|hold| hold.reason.clone());
             Ok((state, page))
         })
         .await;
@@ -234,6 +252,7 @@ impl MergeQueue {
         }
         loop {
             processor.expire().await;
+            processor.release_hold().await;
             let step = tokio::select! {
                 () = cancel.cancelled() => return,
                 step = processor.process_next() => step,
@@ -303,6 +322,8 @@ pub struct QueuePage {
     pub entries: Vec<MergeEntry>,
     /// Finished entries older than these
     pub older: u64,
+    /// Why the queue holds or the target is broken, when it is
+    pub held: Option<String>,
 }
 
 /// The page of `state` with its newest `finished` finished entries,
@@ -339,6 +360,7 @@ fn page_of(
     Ok(QueuePage {
         entries: archived,
         older,
+        held: None,
     })
 }
 
@@ -383,9 +405,21 @@ impl Processor {
                 Err(_) => self.timed_out(&entry, limit).await,
             };
         let id = entry.id.clone();
+        let held = match &outcome {
+            RunOutcome::Held(hold) => Some(hold.clone()),
+            _ => None,
+        };
         let finished = queue
             .change(move |state| state.finish(&id, outcome, Utc::now()))
             .await?;
+        if let (Some(hold), Some(entry)) = (held, &finished) {
+            tracing::warn!(entry = %entry.id, reason = %hold.reason, "The merge queue holds");
+            queue.announce(QueueEvent::Held {
+                entry: Box::new(entry.clone()),
+                hold,
+            });
+            return Ok(finished);
+        }
         if let Some(finished) = &finished {
             tracing::info!(entry = %finished.id, status = finished.status.label(), "Merge ended");
             queue.announce_finished(vec![finished.clone()]);
@@ -402,8 +436,37 @@ impl Processor {
             Ok(Some(merged)) => RunOutcome::Merged {
                 merged,
                 note: format!("landed; the run then passed its {minutes} minute limit"),
+                pr: entry.pr.clone(),
             },
-            _ => RunOutcome::Failed(format!("took longer than {minutes} minutes")),
+            _ => RunOutcome::Failed(format!("took longer than {minutes} minutes").into()),
+        }
+    }
+
+    /// End a hold that waits for the target to move, once it moved.
+    pub async fn release_hold(&self) {
+        let queue = &self.queue;
+        let held = queue.inner.seen.lock().await.clone();
+        if !held.waits_on_target() {
+            return;
+        }
+        let remote = held
+            .entries
+            .iter()
+            .find(|entry| entry.status == crate::entry::MergeStatus::Queued)
+            .and_then(|entry| entry.remote.clone());
+        let Some(tip) = queue.inner.integrator.target_tip(remote.as_deref()).await else {
+            return;
+        };
+        match queue
+            .change(move |state| state.release_hold(&tip, Utc::now()))
+            .await
+        {
+            Ok(true) => {
+                tracing::info!("The target moved; the merge queue goes on");
+                queue.announce(QueueEvent::Changed);
+            }
+            Ok(false) => {}
+            Err(error) => tracing::warn!(%error, "Could not end the merge queue's hold"),
         }
     }
 

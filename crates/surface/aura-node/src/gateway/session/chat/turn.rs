@@ -452,9 +452,12 @@ pub(super) fn cloud_git_note(branch: &str) -> String {
         "\n\n<cloud_git>\nYou work on branch `{branch}` of a clone of this project's repository. \
          When your task is done, call git_ship: it commits every change, pulls the merge \
          queue's target branch (main unless the repo's committed .aura/merge-queue.toml names \
-         another), pushes this branch and puts it in the merge queue, which merges it into that \
-         branch once the build and tests pass. git_commit and git_push also work, and only push this branch; every \
-         push goes into the merge queue. Never push other branches. If the repo has a \
+         another), pushes this branch and puts it in the merge queue, which opens or updates its \
+         PR and merges it into that branch once the build and tests pass. Start each new task \
+         with git_start_task: it makes a fresh branch of yours off the latest target, and you \
+         may push any branch of yours (`aura/<task>-<your code>`). git_commit and git_push also \
+         work; every push goes into the merge queue. Never push other agents' branches or the \
+         target, and never merge a PR yourself. If the repo has a \
          `changelog.d/` folder, write your changelog entry as a new file there, named after \
          your branch; never edit CHANGELOG.md.\n</cloud_git>"
     )
