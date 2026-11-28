@@ -304,8 +304,9 @@ async fn run(n: usize, span: Duration) -> Measured {
         stop: Arc::clone(&stop),
     };
     let flags = (Arc::clone(&stop), Arc::clone(&measuring));
+    let mut started = startup::Startup::finished();
     let ((), (), kept) = tokio::join!(
-        run::run_loop(&mut state, &mut inbox),
+        run::run_loop(&mut state, &mut inbox, &mut started),
         driver.run(),
         clock(Arc::clone(&hub), flags, quit, span)
     );

@@ -75,6 +75,20 @@ impl Default for DesktopOptions {
     }
 }
 
+/// Point `options` at the chat the window was last in, read from its
+/// saved selection before the session starts, so that chat comes first
+/// and once. Returns the selection file.
+fn open_on_last(options: &mut SessionOptions) -> std::path::PathBuf {
+    let file = aura_ui_terminal::LastSelection::file_in(&aura_app::session::data_dir(options));
+    let saved = aura_ui_terminal::LastSelection::load(&file);
+    options.open_on = aura_app::session::OpenOn::from_last(
+        saved.channels_in_front,
+        saved.channel.as_deref(),
+        saved.latest_agent(),
+    );
+    file
+}
+
 /// Open the desktop window with `args`, starting the agent session in
 /// `mode` (or `AURA_DEFAULT_MODE`), and return once the window closes
 /// and the session has shut down. Must run on the main thread.
@@ -108,14 +122,16 @@ pub fn run(args: DesktopOptions, mode: Option<AgentMode>) -> anyhow::Result<()> 
     let (handles, task) = if args.demo {
         (demo::start(&runtime), None)
     } else {
-        let options = SessionOptions {
+        let mut options = SessionOptions {
             dir: args.dir,
             provider: args.provider,
             allow_unrestricted_full_access: args.allow_unrestricted_full_access,
             approval: args.approval,
+            open_on: None,
         };
+        let file = open_on_last(&mut options);
         let session = runtime.block_on(aura_app::session::start(&options, mode))?;
-        selection_file = Some(aura_ui_terminal::LastSelection::file_in(&session.data_dir));
+        selection_file = Some(file);
         let handles = shell::Handles {
             events: session.events,
             commands: session.commands,

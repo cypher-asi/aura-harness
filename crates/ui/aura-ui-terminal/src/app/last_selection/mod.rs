@@ -58,6 +58,12 @@ pub struct ProjectPick {
 }
 
 impl LastSelection {
+    /// The agent PROJECTS was on last, in any project.
+    #[must_use]
+    pub fn latest_agent(&self) -> Option<&str> {
+        self.projects.first().map(|pick| pick.agent.as_str())
+    }
+
     /// Where the selection is kept for the data directory `data_dir`.
     #[must_use]
     pub fn file_in(data_dir: &Path) -> PathBuf {
