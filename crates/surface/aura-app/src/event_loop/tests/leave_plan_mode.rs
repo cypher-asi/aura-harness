@@ -42,12 +42,12 @@ fn rows_mark_plan(commands: &mut mpsc::Receiver<UiCommand>, agent: AgentId) -> O
     };
     drain(commands)
         .into_iter()
-        .filter_map(|(_, command)| match command {
+        .rev()
+        .find_map(|(_, command)| match command {
             UiCommand::SetAgents(list) => rows(&list),
             UiCommand::SetChannels(channels) => channels.iter().find_map(|c| rows(&c.members)),
             _ => None,
         })
-        .last()
 }
 
 #[tokio::test]
