@@ -3,6 +3,7 @@
 //! | Route | Caller | Purpose |
 //! |---|---|---|
 //! | `GET /v1/host` | hub | this machine's [`HostStats`] |
+//! | `GET /v1/cloud/processes` | hub | what the hosted agents have under way, asked before a restart |
 //! | `POST /v1/sync/import` | hub | seed an agent's record before it runs here |
 //! | `POST /v1/sync/seal/:agent_id` | hub | stop writing for an agent, report its final head |
 //! | `PUT /v1/sync/session/:agent_id` | hub | the conversation the agent's first run here continues |
@@ -61,6 +62,7 @@ pub(in crate::gateway) use sync::{
     host_handler, sync_import_handler, sync_seal_handler, sync_session_get_handler,
     sync_session_new_handler, sync_session_put_handler, sync_traces_handler,
 };
+pub(in crate::gateway) use watch::processes_handler;
 
 /// Largest patch served.
 const MAX_PATCH_BYTES: usize = 64 * 1024 * 1024;

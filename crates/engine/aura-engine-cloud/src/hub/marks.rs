@@ -82,8 +82,15 @@ impl CloudHub {
     }
 
     /// `agent`'s turn on run `run_id` was seen to end. The mark of a turn
-    /// asked for since stays.
+    /// asked for since stays, and so does one of a run the hub stopped
+    /// watching without knowing it ended ([`Self::unsettled_run`]): it may
+    /// still run on its machine, and the mark keeps the node from being
+    /// restarted under it until a later turn's mark replaces it.
     pub(super) fn end_turn_mark(&self, agent: AgentId, run_id: &str) {
+        if self.unsettled.lock().remove(run_id) {
+            tracing::info!(%agent, run = run_id, "kept the mark of a cloud turn that may still run");
+            return;
+        }
         let cleared = self
             .placements
             .lock()
@@ -100,6 +107,12 @@ impl CloudHub {
         if cleared {
             self.save_placements();
         }
+    }
+
+    /// The hub stops watching run `run_id` without knowing its turn
+    /// ended: its mark stays when the turn is finished here.
+    pub(super) fn unsettled_run(&self, run_id: &str) {
+        self.unsettled.lock().insert(run_id.to_string());
     }
 
     /// Whether `hex` has a turn marked under way: one no hub saw end,

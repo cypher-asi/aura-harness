@@ -385,8 +385,8 @@ pub struct IdleMachine {
 
 /// Keeps a machine awake while work runs on it.
 pub struct WorkGuard {
-    fleet: Arc<VmFleet>,
-    agent: String,
+    pub(super) fleet: Arc<VmFleet>,
+    pub(super) agent: String,
 }
 
 impl Drop for WorkGuard {

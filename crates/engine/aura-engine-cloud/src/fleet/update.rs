@@ -10,13 +10,19 @@
 //!
 //! ## Invariants
 //!
-//! - Never while the machine does work (`busy > 0`): a running turn is
-//!   never cut off. The update waits for the next turn.
+//! - Never while the machine does work this hub counts (`busy > 0`),
+//!   and the check and the update's own busy count are taken under one
+//!   lock, so nothing this hub starts can begin meanwhile. The update
+//!   counts as work on the machine until it is done.
+//! - Work the hub doesn't count (a turn the node started itself, mail
+//!   for an idle agent) is the caller's to rule out first, by asking the
+//!   node (`CloudHub::current_node`): the fleet can't see it.
 //! - The new binary is installed only once it starts on the machine
 //!   (`--help`); the old one stays in place otherwise.
 //! - A failed update leaves the old node running. Its agents get the
 //!   fallback ship prompt, and the hub queues their pushes itself.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::claim::Accept;
@@ -64,12 +70,20 @@ impl VmFleet {
         })
     }
 
-    /// Whether `agent`'s machine does work right now.
-    fn is_busy(&self, agent: &str) -> bool {
-        self.machines
+    /// Count the update as work on `agent`'s machine, unless other work
+    /// runs there: the check and the count under one lock.
+    fn begin_update(self: &Arc<Self>, agent: &str) -> Option<super::WorkGuard> {
+        let idle = self
+            .machines
             .lock()
-            .get(agent)
-            .is_some_and(|entry| entry.busy > 0)
+            .get_mut(agent)
+            .filter(|entry| entry.busy == 0)
+            .map(|entry| entry.busy += 1)
+            .is_some();
+        idle.then(|| super::WorkGuard {
+            fleet: Arc::clone(self),
+            agent: agent.to_string(),
+        })
     }
 
     /// Put `binary`, the hub's cloud build, on `agent`'s machine and
@@ -81,7 +95,7 @@ impl VmFleet {
     /// When uploading, installing, restarting or claiming fails; the old
     /// node is left as it was where the install didn't happen.
     pub async fn update_node(
-        &self,
+        self: &Arc<Self>,
         agent: &str,
         binary: Vec<u8>,
         boot: &BootReporter,
@@ -89,9 +103,11 @@ impl VmFleet {
         if !self.needs_update(agent) {
             return Ok(NodeUpdate::Current);
         }
-        if self.is_busy(agent) {
+        // Held until the update is done: nothing this hub starts there
+        // meanwhile, and the machine doesn't sleep under it.
+        let Some(_updating) = self.begin_update(agent) else {
             return Ok(NodeUpdate::Busy);
-        }
+        };
         let machine = self
             .view(agent)
             .ok_or_else(|| CloudError::NotFound {

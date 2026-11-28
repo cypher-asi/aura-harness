@@ -70,6 +70,7 @@ mod machines;
 mod marks;
 mod mirror;
 pub mod node_client;
+mod node_update;
 mod outcomes;
 mod persist;
 mod place;
@@ -342,6 +343,11 @@ pub struct CloudHub {
     work: Mutex<HashMap<String, machine_work::MachineWork>>,
     /// The chat run each agent's turn is streamed from, by agent hex.
     streaming: Mutex<HashMap<String, String>>,
+    /// One update of a node at a time, by agent hex.
+    updates: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Runs whose turn the hub stopped watching without knowing it ended:
+    /// their marks stay ([`Self::end_turn_mark`]).
+    unsettled: Mutex<HashSet<String>>,
     stop: CancellationToken,
 }
 
