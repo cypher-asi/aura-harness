@@ -164,6 +164,22 @@ impl Metrics {
         (self.cell.height / 2.0).round()
     }
 
+    /// Height of a single-line list's row, in pixels: 1.3 rows.
+    pub fn list_row(&self) -> f32 {
+        theme::list_row_height(self.cell.height)
+    }
+
+    /// How tall cells and list rows are, for the terminal UI to lay its
+    /// lists out by.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub fn list_pitch(&self) -> aura_ui_terminal::ListPitch {
+        let pixels = |height: f32| height.clamp(1.0, f32::from(u16::MAX)) as u16;
+        aura_ui_terminal::ListPitch {
+            cell: pixels(self.cell.height),
+            tall: pixels(self.list_row()),
+        }
+    }
+
     /// Top-left corner of a `cols` × `rows` grid centered across the
     /// window and [`Self::top`] down it, on a whole pixel.
     pub fn origin(&self, window: Size, cols: u16) -> Point {

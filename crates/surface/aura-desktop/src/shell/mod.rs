@@ -376,6 +376,7 @@ impl Shell {
             rows: self.rows,
             prose: &self.prose,
             panes: &self.panes,
+            bands: self.tabs.front().tui.list_bands(),
             cursor: self.cursor.filter(|_| cursor_on),
             metrics: self.metrics,
             palette: self.palette,
@@ -384,8 +385,7 @@ impl Shell {
             slide: self.glide.slide(&self.tabs.front().tui),
             canvas: refresh::canvas_of(self.tabs.front(), &self.tui_theme, self.palette),
         };
-        // After the UI is rendered: it measures prose with the same
-        // fonts.
+        // After the UI is rendered: it measures prose with these fonts.
         self.painter.paint(&view);
         let painted = started.elapsed().saturating_sub(rendered);
         self.stats.frame(rendered, painted, self.painter.built());

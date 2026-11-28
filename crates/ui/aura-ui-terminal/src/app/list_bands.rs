@@ -79,6 +79,19 @@ pub struct ListBand {
 }
 
 impl ListBand {
+    /// A band over grid `columns` and `rows`, the list drawn in the first
+    /// `shown` of them, with no copy of its cells yet ([`Self::capture`]).
+    #[must_use]
+    pub const fn new(columns: Range<u16>, rows: Range<u16>, shown: u16) -> Self {
+        Self {
+            columns,
+            rows,
+            shown,
+            cells: Vec::new(),
+            covered: Vec::new(),
+        }
+    }
+
     /// The band's row `y` (a grid row) as the panels drew it, across
     /// [`Self::columns`]; empty before the copy is taken.
     #[must_use]
@@ -106,8 +119,8 @@ impl ListBand {
         self.covered(y).any(|columns| columns.contains(&x))
     }
 
-    /// Copy the band's cells from `buffer`.
-    fn capture(&mut self, buffer: &Buffer) {
+    /// Copy the band's cells from `buffer`, as the panels drew them.
+    pub fn capture(&mut self, buffer: &Buffer) {
         self.cells.clear();
         for y in self.rows.clone() {
             for x in self.columns.clone() {
@@ -119,7 +132,7 @@ impl ListBand {
 
     /// Record the runs of the band's cells that `buffer` no longer holds
     /// as they were copied.
-    fn cover(&mut self, buffer: &Buffer) {
+    pub fn cover(&mut self, buffer: &Buffer) {
         self.covered.clear();
         let width = usize::from(self.columns.end - self.columns.start);
         for (index, y) in self.rows.clone().enumerate() {
@@ -169,13 +182,9 @@ impl App {
         let shown = pitch.fit(rows.height);
         let left = panel.x.min(rows.x);
         let right = panel.right().max(rows.right());
-        self.list_bands.bands.push(ListBand {
-            columns: left..right,
-            rows: rows.y..rows.bottom(),
-            shown,
-            cells: Vec::new(),
-            covered: Vec::new(),
-        });
+        self.list_bands
+            .bands
+            .push(ListBand::new(left..right, rows.y..rows.bottom(), shown));
         Rect {
             height: shown,
             ..rows
