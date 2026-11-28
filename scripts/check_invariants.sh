@@ -83,10 +83,16 @@ run_band() {
 #   - the trace `ReplayProvider` (`aura-agent-trace/src/replay.rs`), a
 #     provider decorator handed to `Kernel::new`, so its hand-off to the
 #     live provider is still recorded by the kernel
+#   - the app's titles and post summaries (`event_loop/titles/`), whose
+#     every caller hands them a `KernelModelGateway`, so the call is
+#     recorded by the kernel all the same
+#   - the gate replay (`headless/gate_replay/`), an offline evaluation
+#     that asks a judge about recorded runs and writes its answers to its
+#     own log; it runs no agent and records nothing for one
 #   - any *test* file (unit, integration, harness shims)
 run_band "§1/§3" "direct ModelProvider::complete call outside the recording seam" \
     '\.complete\(' \
-    '^(crates/agent/aura-agent-kernel/|crates/agent/aura-agent/src/kernel_gateway\.rs|crates/agent/aura-agent/src/recording_stream\.rs|crates/agent/aura-agent/src/agent_loop/|crates/agent/aura-agent/src/event_sequence_tests\.rs|crates/model/aura-model/|crates/engine/aura-engine-automaton/|crates/context/aura-context-memory/|crates/agent/aura-agent-trace/src/replay\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/surface/aura-app/src/event_loop/titles/|crates/surface/aura-app/src/headless/gate_replay/|crates/agent/aura-agent-kernel/|crates/agent/aura-agent/src/kernel_gateway\.rs|crates/agent/aura-agent/src/recording_stream\.rs|crates/agent/aura-agent/src/agent_loop/|crates/agent/aura-agent/src/event_sequence_tests\.rs|crates/model/aura-model/|crates/engine/aura-engine-automaton/|crates/context/aura-context-memory/|crates/agent/aura-agent-trace/src/replay\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §2 — direct store append functions bypass the per-agent kernel's
 # seq/context-hash pipeline unless they are inside:
@@ -158,6 +164,14 @@ run_band "§2" "append_entry_* used outside the kernel / store crates / tests" \
 #     machine's workspace for that patch, staging it in a scratch
 #     `GIT_INDEX_FILE` (`add`, `write-tree`). No commit, push, or call to
 #     a remote.
+#   * `crates/engine/aura-engine-cloud/src/delta/source.rs` (the snapshot's
+#     source, split out of `delta.rs`) also runs `show` of a lockfile at a
+#     commit and a `fetch` of origin's merge target into the project's own
+#     remote-tracking ref, so snapshots build from origin's latest; no push.
+#   * `crates/surface/aura-cli/src/changelog_commands.rs` — `aura
+#     changelog`: `rev-parse --show-toplevel` and `log` to date the
+#     fragments. Read-only; it writes only `CHANGELOG.md` and the
+#     fragments' deletion, as files, with `--write`.
 #   * `crates/exec/aura-exec-merge-queue/src/git.rs` — the merge queue
 #     landing pushes in a worktree of its own: fetch into private refs,
 #     rebase, non-forced push of the checked result to the target branch.
@@ -165,7 +179,7 @@ run_band "§2" "append_entry_* used outside the kernel / store crates / tests" \
 #   * Test files.
 run_band "§1" "Command::new(\"git\") outside the GitExecutor / declared exceptions" \
     'Command::new\("git"\)' \
-    '^(crates/exec/aura-exec-tools/src/git_tool/|crates/exec/aura-exec-merge-queue/src/git\.rs|crates/agent/aura-agent/src/git\.rs|crates/surface/aura-app/src/isolation/mod\.rs|crates/surface/aura-app/src/isolation/member\.rs|crates/surface/aura-app/src/isolation/changes/mod\.rs|crates/surface/aura-node/src/gateway/handlers/safe_workspace/git\.rs|crates/engine/aura-engine-cloud/src/delta\.rs|crates/engine/aura-engine-cloud/src/hub/pull\.rs|crates/surface/aura-node/src/gateway/handlers/cloud/patch\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/exec/aura-exec-tools/src/git_tool/|crates/exec/aura-exec-merge-queue/src/git\.rs|crates/agent/aura-agent/src/git\.rs|crates/surface/aura-app/src/isolation/mod\.rs|crates/surface/aura-app/src/isolation/member\.rs|crates/surface/aura-app/src/isolation/changes/mod\.rs|crates/surface/aura-node/src/gateway/handlers/safe_workspace/git\.rs|crates/engine/aura-engine-cloud/src/delta(\.rs|/)|crates/surface/aura-cli/src/changelog_commands\.rs|crates/engine/aura-engine-cloud/src/hub/pull\.rs|crates/surface/aura-node/src/gateway/handlers/cloud/patch\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §1 — `sh -c` processes run only where a command is the point: the
 # command tool (`fs_tools/cmd/spawn.rs`, `confine.rs`), the verify runner,
@@ -182,7 +196,7 @@ run_band "§1" "Command::new(\"sh\") outside the declared command runners" \
 changes_file='crates/surface/aura-app/src/isolation/changes/mod.rs'
 changes_allowed='^(rev-parse|diff|apply|ls-files|init|add|write-tree|diff-index|diff-tree|read-tree|checkout-index)$'
 changes_subcommands=$(sed '/^#\[cfg(test)\]/,$d' "$changes_file" \
-    | rg -U -o -r '$1' '\.args?\(\[?\s*"([^"]+)"' || true)
+    | rg -U -o -r '$1' '\.args?\(\[?\s*"([^"-][^"]*)"' || true)
 if [[ -z "$changes_subcommands" ]]; then
     report "§1" "no git subcommands found to check in ${changes_file}" "$changes_file"
 fi
@@ -290,7 +304,7 @@ done <<<"$forge_subcommands"
 #   - crates/engine/aura-engine/src/worker.rs
 run_band "§10" "Arc<dyn Store> outside the kernel / store crates" \
     'Arc<dyn (aura_store(_db)?::)?Store>' \
-    '^(crates/agent/aura-agent-kernel/|crates/store/aura-store-db/|crates/store/aura-store-record/|crates/surface/aura-node/src/gateway/state\.rs|crates/surface/aura-node/src/gateway/session/mod\.rs|crates/surface/aura-node/src/gateway/session/cross_agent_hook/mod\.rs|crates/surface/aura-node/src/gateway/session/child_kernel\.rs|crates/engine/aura-engine/src/scheduler/mod\.rs|crates/engine/aura-engine/src/automaton/|crates/engine/aura-engine/src/agents/host/mod\.rs|crates/engine/aura-engine/src/worker\.rs|crates/surface/aura-node/src/node/mod\.rs|crates/surface/aura-node/src/tool_permissions\.rs|crates/surface/aura-app/src/harness/|crates/surface/aura-app/src/session/mod\.rs|crates/surface/aura-app/src/event_loop/(mod|cloud/mod)\.rs|crates/engine/aura-engine-cloud/src/hub/|crates/agent/aura-agent/src/kernel_gateway\.rs|crates/agent/aura-agent/src/kernel_domain_gateway/|crates/agent/aura-agent/src/recording_stream\.rs|crates/agent/aura-agent/src/agent_loop/|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/agent/aura-agent-kernel/|crates/store/aura-store-db/|crates/store/aura-store-record/|crates/surface/aura-node/src/gateway/state\.rs|crates/surface/aura-node/src/gateway/session/mod\.rs|crates/surface/aura-node/src/gateway/session/cross_agent_hook/mod\.rs|crates/surface/aura-node/src/gateway/session/child_kernel\.rs|crates/engine/aura-engine/src/scheduler/mod\.rs|crates/engine/aura-engine/src/automaton/|crates/engine/aura-engine/src/agents/host/mod\.rs|crates/engine/aura-engine/src/worker\.rs|crates/surface/aura-node/src/node/mod\.rs|crates/surface/aura-node/src/tool_permissions\.rs|crates/surface/aura-app/src/harness/|crates/surface/aura-app/src/session/mod\.rs|crates/surface/aura-app/src/event_loop/(mod|cloud/mod)\.rs|crates/engine/aura-engine-cloud/src/hub/|crates/agent/aura-agent/src/kernel_gateway\.rs|crates/agent/aura-agent/src/kernel_domain_gateway/|crates/agent/aura-agent/src/recording_stream\.rs|crates/agent/aura-agent/src/agent_loop/|crates/surface/aura-app/examples/|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §9 — the agent loop must not reach into the store crates directly. Any
 # code that needs persistence goes through the per-agent kernel. Test files

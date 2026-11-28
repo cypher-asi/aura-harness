@@ -417,9 +417,19 @@ retrieval live in the surface-layer [`aura-auth`](../crates/auth/aura-auth/)
 crate, not inside any agent kernel.
 
 The trace [`ReplayProvider`](../crates/agent/aura-agent-trace/src/replay.rs)
-is the one `.complete(` caller outside these crates. It wraps a provider and
+calls `.complete(` outside these crates. It wraps a provider and
 is itself passed to `Kernel::new`, so the kernel still records every call,
 including the hand-off to the live provider after the replayed prefix.
+
+Two app call sites are declared too:
+
+- [`event_loop/titles/`](../crates/surface/aura-app/src/event_loop/titles/)
+  writes chat titles, subagent subjects and channel post summaries. Every
+  caller hands it a `KernelModelGateway`, so the kernel records the call.
+- [`headless/gate_replay/`](../crates/surface/aura-app/src/headless/gate_replay/)
+  is an offline evaluation: it asks a judge model about recorded runs and
+  writes the answers to its own log. It runs no agent, so there is no
+  agent record to keep.
 
 ### Type-level enforcement: sealed `RecordingModelProvider`
 
@@ -467,6 +477,8 @@ Sanctioned `Command::new(...)` call sites:
 | [`crates/agent/aura-agent/src/git.rs`](../crates/agent/aura-agent/src/git.rs) | Read-only helpers: `is_git_repo`, `list_unpushed_commits` (`git log`), and `read_only`, which runs only the subcommands in its `READ_ONLY` list (`rev-parse`, `status`, `log`, `rev-list`, `diff`, `show`, `ls-files`, `for-each-ref`, `merge-base`, `stash list` / `show`, `worktree list`, `remote get-url`) for the REPO tab | No external side effect; `read_only` refuses `--output`, and the repo's config can't make it run a program (fsmonitor, external diff and textconv are off); nothing prompts and `status` takes no lock; declared exception. |
 | [`crates/surface/aura-app/src/event_loop/repo/github.rs`](../crates/surface/aura-app/src/event_loop/repo/github.rs) | `gh pr list` / `gh pr diff` for the REPO tab's PRs | Read-only; always given `--repo`, so `gh` reads no repo's git config; prompts off. Pinned to those two subcommands by the `Command::new("gh")` band and the check after it in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh); declared exception. |
 | [`crates/exec/aura-exec-merge-queue/src/forge/gh.rs`](../crates/exec/aura-exec-merge-queue/src/forge/gh.rs) | The merge queue's PRs on GitHub: reads with `gh pr list` / `gh pr view`; writes with `gh pr create` (a branch's PR), `gh pr comment` (why it didn't merge, flaky tests), `gh pr close` (a PR whose head is on the target already) and `gh api --method POST .../statuses/<sha>` (the `aura/merge-queue` status). `gh pr merge` exists for the `Forge` trait but the landing path doesn't call it | Always `--repo owner/name`, prompts off, a 60-second limit, the token only in the child's `GH_TOKEN`. No branch is written through `gh`: the target moves only by the queue's own non-forced git push of a tested commit. The program lives in a field named `gh`; the `"gh" as a program` band in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh) catches `gh` run through a variable anywhere else, and the check after it pins this file's subcommands. Declared exception. |
+| [`crates/engine/aura-engine-cloud/src/delta/source.rs`](../crates/engine/aura-engine-cloud/src/delta/source.rs) | A snapshot's source: `git -C <project> show <commit>:<lockfile>` and `fetch -q --no-tags origin` of the merge target into the project's remote-tracking ref | The snapshot builds from origin's latest target, not the hub's checkout. A fetch into a remote-tracking ref only; no push. Declared exception. |
+| [`crates/surface/aura-cli/src/changelog_commands.rs`](../crates/surface/aura-cli/src/changelog_commands.rs) | `aura changelog`: `rev-parse --show-toplevel`, and `log` to date each fragment | Read-only git; the command writes only `CHANGELOG.md` and removes fragments, as files, with `--write`. Declared exception. |
 | [`crates/surface/aura-app/src/isolation/mod.rs`](../crates/surface/aura-app/src/isolation/mod.rs) | `git worktree add` / `worktree remove` for the workspace copies `/compare` runs in | Isolation infrastructure, not a mutating commit/push; declared exception. |
 | [`crates/surface/aura-app/src/isolation/changes/mod.rs`](../crates/surface/aura-app/src/isolation/changes/mod.rs) | `/compare` workspace copies: carry uncommitted work into a worktree (`diff`, `apply`, `ls-files`), record a baseline tree (`init`, `add`, `write-tree`), diff a run (`diff-index`), apply the chosen run's patch back (`apply`). Escalated subtasks: snapshot the workspace into a scratch index (`rev-parse`, `add`, `write-tree`, `ls-files`) and restore it (`diff-tree`, `read-tree`, `checkout-index`) | Isolation infrastructure, local subcommands only, terminal prompting disabled; no commit/fetch/push; the user's index, `HEAD`, refs and stash are never written; declared exception. Its subcommands are pinned to exactly this list by a check after the `Command::new("git")` band in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh). |
 | [`crates/exec/aura-exec-merge-queue/src/git.rs`](../crates/exec/aura-exec-merge-queue/src/git.rs) | The merge queue landing pushes: `fetch` of the target and an entry's branch into private `refs/aura-queue/*` refs, `worktree add`/`checkout`/`reset`/`clean`/`merge` in the queue's own worktree, `show` of the target's config file under the repo's common git dir, non-forced `push` of the checked result to the target branch (or a compare-and-swap `update-ref` / `merge --ff-only` of a clean checkout for a local repo) | Integration infrastructure for pushes the `GitExecutor` already made; it never touches an agent's workspace. A closed subcommand allowlist (`ALLOWED_SUBCOMMANDS`), a timeout on every call and `GIT_TERMINAL_PROMPT=0`; the target only fast-forwards. Declared exception; see `docs/software-factory.md`. |
