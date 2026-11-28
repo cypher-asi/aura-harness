@@ -113,7 +113,7 @@ pub(in crate::event_loop) use saved::Resume;
 pub(super) use saved::SAVED_FILE;
 #[cfg(test)]
 pub(super) use saved::{delivered, keep_saved};
-pub(super) use saved::{flush_saved, restore_saved, resume_saved, save_now};
+pub(super) use saved::{flush_saved, restore_saved, resume_prompt_for, resume_saved, save_now};
 pub(super) use starts::give_up_unstarted;
 pub(super) use withdraw::take_withdrawn;
 

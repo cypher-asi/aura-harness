@@ -50,8 +50,11 @@ async fn follow(state: &LoopState<'_>, hub: &Arc<CloudHub>, agent: AgentId, mark
         reload: Some(chat_reload(Arc::clone(&state.hub), ui.clone(), agent)),
         from_record: true,
         waiting: None,
-        // Its run is known already; the save after this event keeps it.
-        run_started: None,
+        cut_short: Some(super::forward::CutShort {
+            notices: state.hub.notices.clone(),
+            agent,
+            resume: crate::event_loop::inbox::resume_prompt_for(state, agent, true),
+        }),
     };
     ui.send(UiCommand::ShowMessage(MessageData::new(
         MessageRole::System,
@@ -60,4 +63,41 @@ async fn follow(state: &LoopState<'_>, hub: &Arc<CloudHub>, agent: AgentId, mark
     .await;
     let rx = hub.follow_turn(agent, mark, cancel.clone());
     watch_turn(state, agent, ui, rx, extras, cancel);
+}
+
+/// [`follow`] of `agent`'s turn, its events coming from `rx` instead of
+/// its machine, with `resume` as its carry-on prompt.
+#[cfg(test)]
+pub(in crate::event_loop) async fn follow_events(
+    state: &LoopState<'_>,
+    agent: AgentId,
+    rx: tokio::sync::mpsc::Receiver<RemoteEvent>,
+    resume: String,
+) {
+    let cancel = CancellationToken::new();
+    let row = crate::event_loop::handlers::turn_summary(agent, "Followed turn", "");
+    note_turn(state, agent, row, &cancel).await;
+    let ui = AgentUi::new(state.commands.clone(), agent);
+    let extras = TurnExtras {
+        from_record: true,
+        cut_short: Some(super::forward::CutShort {
+            notices: state.hub.notices.clone(),
+            agent,
+            resume,
+        }),
+        ..TurnExtras::default()
+    };
+    watch_turn(state, agent, ui, rx, extras, cancel);
+}
+
+/// Note `agent` as having a cloud turn under way, as a turn started from
+/// here or followed does, so a save keeps it as running.
+#[cfg(test)]
+pub(in crate::event_loop) fn mark_running(state: &LoopState<'_>, agent: AgentId, on: bool) {
+    let mut running = state.cloud.shared.running.lock();
+    if on {
+        running.insert(agent, CancellationToken::new());
+    } else {
+        running.remove(&agent);
+    }
 }

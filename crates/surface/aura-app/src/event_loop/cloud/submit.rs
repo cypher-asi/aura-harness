@@ -192,7 +192,7 @@ async fn run_prompt(
             hub: Arc::clone(&state.hub),
             agent,
         }),
-        run_started: Some(state.hub.inbox.save_poke()),
+        cut_short: None,
     };
     crate::event_loop::factory::hooks::plan_first_in_cloud(state, agent, &prompt).await;
     state.hub.factory_flows.note_prompt(agent, &prompt.text);
@@ -287,6 +287,16 @@ pub(super) fn watch_turn(
             TurnEnd::Done => None,
             TurnEnd::Failed(why) => Some(why),
         };
+        // A turn an earlier run asked for that was cut short carries on;
+        // what it owes waits for that turn.
+        if let (Some(why), Some(cut)) = (&failure, extras.cut_short.as_ref()) {
+            if !stopped {
+                info!(%agent, %why, "A followed cloud turn was cut short; asking it to carry on");
+                cut.carry_on();
+                shared.end_turn(agent, None);
+                return;
+            }
+        }
         let messages = copied.map(|checkpoint| checkpoint.messages);
         shared.end_turn(agent, Some(TurnOutcome { failure, messages }));
     });
