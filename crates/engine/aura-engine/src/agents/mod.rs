@@ -27,6 +27,7 @@ mod host;
 mod inbox;
 mod mail;
 mod observer;
+mod peer_names;
 mod remote;
 mod setup;
 
@@ -41,4 +42,5 @@ pub use host::{
 pub use inbox::{InboxMessage, MessageKind, ParentInbox};
 pub use mail::{MailMessage, MailObserver, ThreadId};
 pub use observer::{HostedTurn, TurnObserver};
+pub use peer_names::code_in_name;
 pub use remote::{RemoteMail, RemoteRouter};

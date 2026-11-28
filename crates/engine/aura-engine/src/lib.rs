@@ -51,9 +51,10 @@ pub mod scheduler;
 pub mod worker;
 
 pub use agents::{
-    AgentEnv, AgentHooks, AgentHost, AgentHostConfig, AgentInfo, AgentState, ChildKernel,
-    ChildKernelFactory, ChildKernelRequest, HostedTurn, InboxMessage, MailMessage, MailObserver,
-    MessageKind, ParentInbox, RemoteMail, RemoteRouter, RootAgent, ThreadId, TurnObserver,
+    code_in_name, AgentEnv, AgentHooks, AgentHost, AgentHostConfig, AgentInfo, AgentState,
+    ChildKernel, ChildKernelFactory, ChildKernelRequest, HostedTurn, InboxMessage, MailMessage,
+    MailObserver, MessageKind, ParentInbox, RemoteMail, RemoteRouter, RootAgent, ThreadId,
+    TurnObserver,
 };
 pub use automaton::{AutomatonBridge, EventSubscription};
 pub use memory_observer::{turn_summary_from_result, MemoryTurnObserver};

@@ -53,7 +53,10 @@ pub(crate) fn channel_prompt(hub: &AgentHub, agent_id: AgentId) -> Option<String
             let registry = lock(&hub.registry);
             if channel.coordinator == agent_id {
                 Some(render(&registry, &channel, &members, &working))
-            } else if registry.find(agent_id).is_some() && registry.is_top_level_agent(agent_id) {
+            } else if members
+                .iter()
+                .any(|member| member.agent_id == agent_id && is_channel_agent(&registry, member))
+            {
                 Some(render_member(&registry, agent_id, &channel, &members))
             } else {
                 None
@@ -182,17 +185,25 @@ fn write_about(out: &mut String, registry: &AgentRegistry, channel: &ChannelReco
     }
 }
 
-/// The members of `members` no registered agent spawned: the coordinator
-/// and its agents, not their subagents.
+/// Whether `member` is one of its channel's own agents: the coordinator
+/// or a full member, registered here, however it joined. A member the
+/// coordinator spawned has the coordinator as its registry parent but is
+/// a full member all the same; only a member's own subagents are not.
+/// Peers, the roster and the member block all go by this, never by the
+/// registry's spawn tree.
+pub(crate) fn is_channel_agent(registry: &AgentRegistry, member: &MemberRecord) -> bool {
+    member.role != MemberRole::Subagent && registry.find(member.agent_id).is_some()
+}
+
+/// The channel's own agents among `members` ([`is_channel_agent`]): the
+/// coordinator and its agents, not their subagents.
 fn top_level_members<'m>(
     registry: &'m AgentRegistry,
     members: &'m [MemberRecord],
 ) -> impl Iterator<Item = &'m MemberRecord> {
-    members.iter().filter(|member| {
-        member.role != MemberRole::Subagent
-            && registry.find(member.agent_id).is_some()
-            && registry.is_top_level_agent(member.agent_id)
-    })
+    members
+        .iter()
+        .filter(|member| is_channel_agent(registry, member))
 }
 
 /// `REN4 rust-engineer #4`: an agent's code and name, as the blocks name

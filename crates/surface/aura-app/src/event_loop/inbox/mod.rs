@@ -4,8 +4,8 @@
 //! and `get_agent_state` ([`PeerHooks`]), and a channel's coordinator
 //! hands them work with `assign` ([`AssignTool`]). An agent's peers:
 //!
-//! - a coordinator's are the other top-level members of its channel;
-//! - a channel member's are the other top-level members of its channel,
+//! - a coordinator's are the other members of its channel;
+//! - a channel member's are the other members of its channel,
 //!   the coordinator among them, and the top-level agents of its project;
 //! - any other top-level agent's are the top-level agents of its project.
 //!
@@ -74,7 +74,7 @@ use aura_exec_tools::{
     AgentControlHook, AgentMessage, AgentReadHook, Tool, ToolContext, ToolError,
 };
 use aura_model::{Message, Role};
-use aura_store_db::{ChannelRecord, MemberRecord, MemberRole};
+use aura_store_db::{ChannelRecord, MemberRecord};
 use aura_ui::events::MailView;
 use aura_ui::inbox::{self, InboxKind};
 use serde::Deserialize;
