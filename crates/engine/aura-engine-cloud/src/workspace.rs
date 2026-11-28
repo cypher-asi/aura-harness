@@ -11,10 +11,11 @@
 //!   [`BASE_REF`].
 //! - **A fork** ([`fork_branch`]) keeps its parent's disk and moves to a
 //!   branch of its own.
-//! - **Latest code** ([`pull::pull_latest`]): either way, the machine then
-//!   pulls `origin`'s main from GitHub into the agent's branch, so it
-//!   starts on the code the merge queue landed, not only on what the hub
-//!   had.
+//! - **Latest code** ([`pull_latest`]): either way, the machine then
+//!   pulls `origin`'s merge queue target (main unless the repo's committed
+//!   `.aura/merge-queue.toml` names another) from GitHub into the agent's
+//!   branch, so it starts on the code the merge queue landed, not only on
+//!   what the hub had.
 //! - **Pull** ([`mark_pulled`]) moves [`BASE_REF`] to the tree the hub
 //!   took, and [`bundle_branch`] packs the branch's commits the hub
 //!   doesn't have.
@@ -32,7 +33,7 @@
 use crate::error::{CloudError, CloudResult};
 use crate::names;
 
-pub mod pull;
+mod pull;
 pub use pull::{parse_pulled, pull_latest, start_from_latest, PULLED, PULL_BRANCH};
 
 /// Where a snapshot build's bundle is uploaded.
@@ -181,6 +182,8 @@ pub struct BranchStart<'a> {
     pub branch: &'a str,
     /// The hub's HEAD, where the branch starts.
     pub head: &'a str,
+    /// The merge queue's target, pulled from `origin` on top.
+    pub target: &'a str,
     /// `origin` from now on; `None` leaves the machine without one.
     pub remote_url: Option<&'a str>,
     /// Whether [`HEAD_BUNDLE`] was uploaded (the hub has commits the
@@ -189,7 +192,7 @@ pub struct BranchStart<'a> {
     /// Whether [`DELTA_ARCHIVE`] was uploaded (the hub has uncommitted
     /// changes).
     pub delta: bool,
-    /// Start the branch from `origin`'s latest [`PULL_BRANCH`] instead of
+    /// Start the branch from `origin`'s latest `target` instead of
     /// the hub's HEAD, leaving out the hub's unpushed commits and its
     /// uncommitted changes ([`start_from_latest`]). Without `origin`, or
     /// when it can't be fetched, the branch starts at the hub's HEAD,
@@ -200,7 +203,7 @@ pub struct BranchStart<'a> {
 /// Shell run in a new agent's machine: fetch the hub's newer commits,
 /// check the agent's branch out at the hub's HEAD, unpack the hub's
 /// uncommitted changes (left uncommitted), pull the latest
-/// [`PULL_BRANCH`] from GitHub on top ([`pull_latest`]) and mark it all
+/// [`BranchStart::target`] from GitHub on top ([`pull_latest`]) and mark it all
 /// as [`BASE_REF`].
 ///
 /// # Errors
@@ -232,8 +235,8 @@ pub fn start_branch(start: &BranchStart<'_>) -> CloudResult<String> {
         String::new()
     };
     let pull = match (start.remote_url.is_some(), start.clean) {
-        (true, true) => start_from_latest(PULL_BRANCH, name)?,
-        (true, false) => pull_latest(PULL_BRANCH)?,
+        (true, true) => start_from_latest(start.target, name)?,
+        (true, false) => pull_latest(start.target)?,
         (false, _) => String::new(),
     };
     Ok(format!(
@@ -244,17 +247,17 @@ pub fn start_branch(start: &BranchStart<'_>) -> CloudResult<String> {
 }
 
 /// Shell run in a fork: the parent's disk, on the child's own branch,
-/// with the latest [`PULL_BRANCH`] pulled from GitHub on top
+/// with the latest `target` (the merge queue's) pulled from GitHub on top
 /// ([`pull_latest`]).
 ///
 /// # Errors
 ///
-/// When `name` is not a safe branch name.
-pub fn fork_branch(name: &str) -> CloudResult<String> {
+/// When `name` or `target` is not a safe branch name.
+pub fn fork_branch(name: &str, target: &str) -> CloudResult<String> {
     let name = branch(name)?;
     Ok(format!(
         "set -e; cd \"$AURA_WORKSPACE\"; git checkout -q -B '{name}'; {}",
-        pull_latest(PULL_BRANCH)?
+        pull_latest(target)?
     ))
 }
 
@@ -378,7 +381,7 @@ mod tests {
             "a\nb",
         ] {
             assert!(!is_branch_name(evil), "{evil:?}");
-            assert!(fork_branch(evil).is_err(), "{evil:?}");
+            assert!(fork_branch(evil, "main").is_err(), "{evil:?}");
         }
         assert!(mark_pulled("HEAD").is_err());
         assert!(mark_pulled(&format!("{SHA}; id")).is_err());
@@ -387,6 +390,7 @@ mod tests {
         let start = BranchStart {
             branch: "aura/a-b",
             head: SHA,
+            target: "main",
             remote_url: Some("https://github.com/a/b.git'; id; '"),
             bundle: false,
             delta: false,

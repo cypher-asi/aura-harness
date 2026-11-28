@@ -18,6 +18,9 @@ aura-core-auth = { path = "../../core/aura-core-auth" }
 aura-core-protocol = { path = "../../core/aura-core-protocol" }
 aura-engine = { path = "../aura-engine" }
 aura-exec-tools = { path = "../../exec/aura-exec-tools" }
+# The merge queue target a new machine pulls (`resolve_target`); already in
+# the tree through aura-exec-tools.
+aura-exec-merge-queue = { path = "../../exec/aura-exec-merge-queue" }
 aura-store-db = { path = "../../store/aura-store-db" }
 async-trait = { workspace = true }
 blake3 = { workspace = true }

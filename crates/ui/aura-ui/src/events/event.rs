@@ -400,6 +400,13 @@ pub enum UiEvent {
     /// User left the channel that was open
     CloseChannel,
 
+    /// The QUEUE tab of a channel reached its end with older merges not
+    /// shown: send it another page of them
+    LoadOlderMerges {
+        /// Channel id
+        channel_id: String,
+    },
+
     /// User edited a channel: title, description and project
     UpdateChannel {
         /// Channel id

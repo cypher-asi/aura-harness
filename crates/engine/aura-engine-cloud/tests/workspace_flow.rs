@@ -155,6 +155,7 @@ fn place(s: &Setup, snapshot: &str, branch: &str) -> String {
     let start = BranchStart {
         branch,
         head: &head,
+        target: "main",
         remote_url: Some("https://github.com/acme/app.git"),
         bundle: newer.is_some(),
         delta: !changes.is_empty(),
@@ -343,7 +344,7 @@ fn check_fork_gets_its_own_branch(s: &Setup) {
     sh(
         &s.root,
         m,
-        &workspace::fork_branch("aura/helper-hp1").expect("script"),
+        &workspace::fork_branch("aura/helper-hp1", "main").expect("script"),
     );
     assert_eq!(git(m, &["branch", "--show-current"]), "aura/helper-hp1");
     assert_eq!(git(m, &["rev-parse", "HEAD"]), parent_tip);

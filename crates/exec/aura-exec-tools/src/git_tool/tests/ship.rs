@@ -218,3 +218,63 @@ async fn a_push_result_carries_the_queue_marker() {
     assert_eq!(marker.branch, "work");
     assert_eq!(marker.head, git(&repo, &["rev-parse", "HEAD"]).await);
 }
+
+/// [`repo_with_bare_origin`] whose `main`, on origin and fetched into the
+/// repo, has a committed queue config naming `trunk`, and whose origin
+/// has a `trunk` that moved on with `t.txt`.
+async fn repo_targeting_trunk() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let (parent, repo, origin) = repo_with_bare_origin().await;
+    git(&repo, &["checkout", "-q", "-b", "main"]).await;
+    std::fs::create_dir_all(repo.join(".aura")).unwrap();
+    std::fs::write(repo.join(".aura/merge-queue.toml"), "target = \"trunk\"\n").unwrap();
+    git(&repo, &["add", "-A"]).await;
+    git(&repo, &["commit", "-qm", "queue into trunk"]).await;
+    git(&repo, &["push", "-q", "origin", "main", "main:trunk"]).await;
+    git(&repo, &["checkout", "-q", "-b", "trunk-ahead"]).await;
+    std::fs::write(repo.join("t.txt"), b"t").unwrap();
+    git(&repo, &["add", "-A"]).await;
+    git(&repo, &["commit", "-qm", "trunk moves"]).await;
+    git(&repo, &["push", "-q", "origin", "trunk-ahead:trunk"]).await;
+    git(&repo, &["checkout", "-q", "work"]).await;
+    git(&repo, &["merge", "-q", "main"]).await;
+    (parent, repo, origin)
+}
+
+#[tokio::test]
+async fn ship_without_a_target_pulls_the_committed_queue_target() {
+    if !git_available() {
+        return;
+    }
+    let (_parent, repo, origin) = repo_targeting_trunk().await;
+    std::fs::write(repo.join("b.txt"), b"b").unwrap();
+    let sandbox = crate::sandbox::Sandbox::new(&repo).unwrap();
+    let ctx = ToolContext::new(sandbox, crate::ToolConfig::default());
+    let result = crate::git_tool::GitShipTool
+        .execute(&ctx, serde_json::json!({"message": "ship to trunk"}))
+        .await
+        .unwrap();
+    let output = String::from_utf8_lossy(&result.stdout).to_string();
+    assert!(output.contains("origin/trunk"), "{output}");
+    let files = git(&origin, &["ls-tree", "--name-only", "refs/heads/work"]).await;
+    assert!(files.contains("t.txt"), "trunk was pulled: {files}");
+}
+
+#[tokio::test]
+async fn the_committed_queue_target_is_protected_without_a_working_config() {
+    if !git_available() {
+        return;
+    }
+    let (_parent, repo, _origin) = repo_targeting_trunk().await;
+    std::fs::remove_file(repo.join(".aura/merge-queue.toml")).unwrap();
+    let err = git_push_impl(
+        &repo,
+        to_branch("trunk"),
+        PushPolicy::single(Duration::from_secs(5)),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, GitToolError::ProtectedBranch { branch } if branch == "trunk"),
+        "{err:?}"
+    );
+}

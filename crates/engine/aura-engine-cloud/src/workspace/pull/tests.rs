@@ -243,7 +243,7 @@ fn a_fork_pulls_the_latest_main_onto_its_new_branch() {
     }
     let repos = repos();
     repos.main_moves("theirs.txt", "x\n");
-    let said = repos.run(&fork_branch("aura/child-ch01").unwrap());
+    let said = repos.run(&fork_branch("aura/child-ch01", "main").unwrap());
     assert!(said.starts_with("merged origin/main"), "{said}");
     assert_eq!(
         git(&repos.machine, &["branch", "--show-current"]),
@@ -258,6 +258,7 @@ fn a_new_machine_pulls_after_the_hubs_changes_and_before_marking_its_base() {
     let start = BranchStart {
         branch: "aura/a-b",
         head: sha,
+        target: "main",
         remote_url: Some("https://github.com/a/b.git"),
         bundle: false,
         delta: true,
@@ -276,6 +277,63 @@ fn a_new_machine_pulls_after_the_hubs_changes_and_before_marking_its_base() {
     })
     .unwrap();
     assert!(!without_origin.contains(PULLED), "nothing to pull from");
+}
+
+#[test]
+fn a_fork_pulls_the_queue_target_not_main() {
+    if !has_git() {
+        return;
+    }
+    let repos = repos();
+    commit(&repos.other, "trunk.txt", "t\n");
+    git(
+        &repos.other,
+        &["push", "-q", "origin", "HEAD:refs/heads/trunk"],
+    );
+    repos.main_moves("main.txt", "m\n");
+    let said = repos.run(&fork_branch("aura/child-ch01", "trunk").unwrap());
+    assert!(said.starts_with("merged origin/trunk"), "{said}");
+    assert!(repos.machine.join("trunk.txt").exists());
+    assert!(
+        !repos.machine.join("main.txt").exists(),
+        "main is not pulled"
+    );
+}
+
+#[test]
+fn a_new_machine_fetches_its_queue_target() {
+    let start = BranchStart {
+        branch: "aura/a-b",
+        head: "e91dfbe90eb7b51f7b0459ce0c829d439a150396",
+        target: "trunk",
+        remote_url: Some("https://github.com/a/b.git"),
+        bundle: false,
+        delta: false,
+        clean: false,
+    };
+    let script = start_branch(&start).unwrap();
+    assert!(
+        script.contains("+refs/heads/trunk:refs/remotes/origin/trunk"),
+        "{script}"
+    );
+    assert!(!script.contains("refs/heads/main"), "{script}");
+    let evil = BranchStart {
+        target: "a'b",
+        ..start
+    };
+    assert!(start_branch(&evil).is_err());
+}
+
+#[test]
+fn only_a_plain_branch_is_pulled() {
+    for evil in ["", "a'b", "$(id)", "-x"] {
+        assert!(pull_latest(evil).is_err(), "{evil:?}");
+    }
+    assert_eq!(
+        parse_pulled("noise\naura-pull: up to date\n"),
+        Some("up to date")
+    );
+    assert_eq!(parse_pulled("nothing"), None);
 }
 
 #[test]
@@ -329,6 +387,7 @@ fn a_clean_new_machine_gets_no_uncommitted_changes_and_starts_from_main() {
     let start = BranchStart {
         branch: "aura/a-b",
         head: "e91dfbe90eb7b51f7b0459ce0c829d439a150396",
+        target: PULL_BRANCH,
         remote_url: Some("https://github.com/a/b.git"),
         bundle: false,
         delta: true,
@@ -345,16 +404,4 @@ fn a_clean_new_machine_gets_no_uncommitted_changes_and_starts_from_main() {
         !script.contains("merge -q --no-edit"),
         "no merge onto the hub's HEAD"
     );
-}
-
-#[test]
-fn only_a_plain_branch_is_pulled() {
-    for evil in ["", "a'b", "$(id)", "-x"] {
-        assert!(pull_latest(evil).is_err(), "{evil:?}");
-    }
-    assert_eq!(
-        parse_pulled("noise\naura-pull: up to date\n"),
-        Some("up to date")
-    );
-    assert_eq!(parse_pulled("nothing"), None);
 }
