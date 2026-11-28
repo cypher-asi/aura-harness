@@ -15,7 +15,19 @@ use aura_store_db::{MemberRole, NewChannel, WriteStore};
 async fn spawned_on_machine(
     fixture: &Fixture,
     parent: AgentId,
+    spawned_as: (&str, &str),
+    prompt: &str,
+) -> AgentId {
+    spawned_described(fixture, parent, spawned_as, None, prompt).await
+}
+
+/// [`spawned_on_machine`], its `task` call having described it as
+/// `description`.
+async fn spawned_described(
+    fixture: &Fixture,
+    parent: AgentId,
     (name, role): (&str, &str),
+    description: Option<&str>,
     prompt: &str,
 ) -> AgentId {
     let child = AgentId::generate();
@@ -32,6 +44,7 @@ async fn spawned_on_machine(
                 system_prompt_override: None,
                 preassigned_agent_id: Some(child),
                 initial_prompt: None,
+                description: description.map(str::to_string),
             },
         )
         .await
@@ -217,4 +230,42 @@ async fn an_archived_spawn_stays_archived_when_its_machine_is_copied_again() {
 
     assert!(!adopt_machine_spawns(&fixture.hub, &[(member, explorer)]));
     assert!(lock(&fixture.hub.registry).find(explorer).unwrap().archived);
+}
+
+#[tokio::test]
+async fn a_spawn_is_titled_by_its_description_else_by_the_work_its_brief_names() {
+    let fixture = fixture("unused");
+    let dir = tempfile::TempDir::new().unwrap();
+    let (member, _, _) = channel_member(&fixture, dir.path()).await;
+    let brief = "In the Rust workspace at /workspace, find where subagent titles are set.";
+    let explore = ("explore", "subagent:explore");
+    let described = spawned_described(
+        &fixture,
+        member,
+        explore,
+        Some("Subagent title source"),
+        brief,
+    )
+    .await;
+    let undescribed = spawned_on_machine(&fixture, member, explore, brief).await;
+    assert!(adopt_machine_spawns(
+        &fixture.hub,
+        &[(member, described), (member, undescribed)]
+    ));
+
+    let registry = lock(&fixture.hub.registry);
+    let subtitle = |agent| registry.find(agent).unwrap().subtitle.clone();
+    assert_eq!(
+        subtitle(described).as_deref(),
+        Some("Subagent title source")
+    );
+    assert_eq!(
+        subtitle(undescribed).as_deref(),
+        Some("Find where subagent titles")
+    );
+    let code = registry.find(described).unwrap().code.clone().unwrap();
+    assert_eq!(
+        registry.find(described).unwrap().display_name(),
+        format!("{code}: Subagent title source")
+    );
 }

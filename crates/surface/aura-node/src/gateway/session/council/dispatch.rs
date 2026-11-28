@@ -138,6 +138,7 @@ fn member_request(
         council_parent_tool_use_id: Some(group_id.to_string()),
         check: None,
         todo_id: None,
+        description: None,
     }
 }
 

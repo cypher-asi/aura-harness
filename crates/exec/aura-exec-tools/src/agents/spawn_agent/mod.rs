@@ -222,6 +222,7 @@ impl SpawnAgentTool {
             system_prompt_override: input.system_prompt.clone(),
             preassigned_agent_id: preassigned,
             initial_prompt: input.prompt.clone(),
+            description: None,
         }
     }
 }

@@ -241,6 +241,7 @@ fn task_request(root: AgentId, prompt: &str) -> SubagentDispatchRequest {
         council_parent_tool_use_id: None,
         check: None,
         todo_id: None,
+        description: None,
     }
 }
 
@@ -254,6 +255,7 @@ fn helper_spec(name: &str, prompt: Option<&str>) -> ChildAgentSpec {
         system_prompt_override: None,
         preassigned_agent_id: None,
         initial_prompt: prompt.map(ToString::to_string),
+        description: None,
     }
 }
 
