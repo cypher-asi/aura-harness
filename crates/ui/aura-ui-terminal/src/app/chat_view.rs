@@ -55,6 +55,8 @@ pub(crate) struct ChatView {
     /// Policy decisions of calls the turn in flight has not shown yet,
     /// until it shows them or ends
     pub(crate) early_policies: Vec<EarlyPolicy>,
+    /// A jump to one of the chat's blocks, and the block it lit
+    pub(crate) jump: super::chat_jump::ChatJump,
 }
 
 /// A tool call's policy decision that came before the call: a cloud turn's
@@ -92,6 +94,7 @@ impl Default for ChatView {
             detail_image_rect: None,
             queued_images: VecDeque::new(),
             early_policies: Vec::new(),
+            jump: super::chat_jump::ChatJump::default(),
         }
     }
 }

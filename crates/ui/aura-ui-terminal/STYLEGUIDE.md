@@ -224,6 +224,18 @@ What the rows are depends on what the tab shows:
   a channel's MEMBERS) draw one `components::list_row` row per thing: its
   status glyph, its name and its details on the right. ↑↓ move the
   selection and ⏎ opens it.
+- **A channel's HISTORY** (its tabs: MEMBERS, INFO, QUEUE, TASKS,
+  HISTORY) lists every message the user posted in the channel, newest
+  first, under a `muted` bold `Your messages` heading with a `faint`
+  `· N`. Each takes two rows: the message on one line in `foreground`,
+  line breaks folded into spaces, then its local time in `muted` (`20:31`
+  today, `11-27 20:31` before). A message over 80 characters shows its
+  one-line model summary once it comes, until then the message cut at a
+  word with `…`. The highlight and the pointer light the item as a
+  `list_row` does. ⏎ or a click jumps the chat back to the message: it
+  scrolls so the message starts a row below the top and lights its rows
+  in `selection` on `on_selection` for 1.2 seconds; the focus stays on
+  the list. The wheel scrolls the list only, never the highlight.
 - **Info bodies** (POLICIES, HOST, a channel's INFO, the RECORD and
   PROCESS views, a project's info box) describe one thing as a document
   built with `components::Info`. The whole document scrolls with ↑↓,
@@ -297,7 +309,7 @@ under a fold arrow, then the timeline, newest first.
 ├──────────────────────────────────────────────┤
 │  ⬢ Working on 1 active · 1 done           —  │
 │ ◐ Fix the redirect     → FEN6 · working 4m   │
-│ ▸ Task history  1                            │
+│ ▸ Finished to-dos  1                            │
 ├──────────────────────────────────────────────┤
 │  →  Add a follow-up                          │
 └──────────────────────────────────────────────┘
@@ -382,7 +394,7 @@ under a fold arrow, then the timeline, newest first.
   to: its code, whether it works, and how long the item has been in
   progress. The item's text is cut before the agent is; a narrow row
   keeps `→ CODE`. Done and cancelled items sit under a `muted`
-  `▸ Task history  N` row, folded by default; a click on it, `Alt+H` or
+  `▸ Finished to-dos  N` row, folded by default; a click on it, `Alt+H` or
   `/todos history` opens it (`▾`), listing each with its agent and
   `done` or `cancelled`. Up to ten rows show, starting at the item in
   progress so it stays in view and keeping the history row, with a
@@ -449,6 +461,10 @@ under a fold arrow, then the timeline, newest first.
 
 - **Selected item**: `selection` fill, `on_selection` text
 - **Hover state**: `surface_hover` fill
+- **The wheel** scrolls a list's rows and never moves its highlight, so it
+  never opens a channel or an agent; keys and clicks do. A list scrolled
+  past its highlight stays put until the highlight moves or a key is
+  pressed, then shows the highlight again.
 - **Clickable text** (records link, collapsed steps): `muted`
 - **Links** in the chat: `muted`, with the ` (url)` after a label, and
   not underlined at rest. The pointer over a link underlines every row of

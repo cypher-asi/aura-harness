@@ -22,6 +22,8 @@ pub(crate) struct PanelLayout {
     /// channel's right column ignores the agent panels' flags, so it
     /// keeps its own.
     pub(crate) channel_side_hidden: bool,
+    /// The lists the wheel scrolled off their highlight
+    pub(crate) wheel: super::wheel_views::WheelViews,
 }
 
 impl Default for PanelLayout {
@@ -35,6 +37,7 @@ impl Default for PanelLayout {
             side_expanded: false,
             side_column_hidden: None,
             channel_side_hidden: false,
+            wheel: super::wheel_views::WheelViews::default(),
         }
     }
 }

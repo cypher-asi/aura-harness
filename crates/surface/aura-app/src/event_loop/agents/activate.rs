@@ -243,7 +243,11 @@ pub(super) async fn show_active_agent(
         // A coordinator's chat shows its channel's posts among its
         // messages. They go first, so the chat shows with them instead of
         // reflowing a moment later when they come.
-        super::super::channels::send_posts_of(state.commands, &state.hub, agent_id).await;
+        let mine =
+            super::super::channels::send_posts_of(state.commands, &state.hub, agent_id).await;
+        if let Some((channel_id, posts)) = mine {
+            super::super::channels::summaries::spawn_for(state, agent_id, &channel_id, posts);
+        }
         let ui = AgentUi::new(state.commands.clone(), agent_id);
         match history {
             Some(history) => {

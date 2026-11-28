@@ -81,7 +81,7 @@ pub struct BenchState {
     /// Benchmarks unfolded over their agents in the list, by id
     unfolded: HashSet<String>,
     /// First visible row of the list
-    list_scroll: usize,
+    pub(in crate::app) list_scroll: usize,
     /// Where the list's rows were drawn this frame
     rows_area: Option<Rect>,
     /// Where "+ New bench" was drawn this frame
