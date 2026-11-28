@@ -24,6 +24,7 @@ pub(super) fn to_new(agent: &str, subject: &str, prompt: &str) -> AssignArgs {
         subject: subject.to_string(),
         prompt: prompt.to_string(),
         todo_id: None,
+        withdraw: false,
     }
 }
 
@@ -35,6 +36,7 @@ pub(super) fn to_member(to: &str, prompt: &str) -> AssignArgs {
         subject: String::new(),
         prompt: prompt.to_string(),
         todo_id: None,
+        withdraw: false,
     }
 }
 

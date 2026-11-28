@@ -219,12 +219,31 @@ impl App {
         }
     }
 
-    /// Move the model selector's highlight a row down, or up.
-    pub(in crate::app) fn move_model_selector(&mut self, down: bool) {
-        let step = if down { 1 } else { -1 };
-        self.account
-            .model_picker
-            .move_by(&self.account.models, step);
+    /// The model selector list's first row, at most `last`: where the
+    /// wheel left it while the cursor is still on row `cursor_row`, else
+    /// `follow`, the window that shows the cursor. Drawing reads it with
+    /// the list borrowed; [`Self::keep_model_picker_scroll`] keeps it.
+    pub(crate) fn model_picker_first(
+        &self,
+        (cursor_row, last): (usize, usize),
+        follow: usize,
+    ) -> usize {
+        let list = crate::app::wheel_views::WheelList::ModelPicker;
+        let first = if self.panels.wheel.holds(list, cursor_row) {
+            self.account.model_picker.scroll()
+        } else {
+            follow
+        };
+        first.min(last)
+    }
+
+    /// Keep `first`, from [`Self::model_picker_first`], as the model
+    /// selector list's first row for the wheel's next notch, the cursor
+    /// on row `cursor_row`.
+    pub(crate) fn keep_model_picker_scroll(&mut self, cursor_row: usize, first: usize) {
+        let list = crate::app::wheel_views::WheelList::ModelPicker;
+        self.panels.wheel.held(list, cursor_row);
+        self.account.model_picker.set_scroll(first);
     }
 }
 

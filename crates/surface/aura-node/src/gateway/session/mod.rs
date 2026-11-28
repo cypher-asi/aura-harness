@@ -36,7 +36,7 @@ mod execution_profile_tests;
 mod tool_approval;
 mod tool_policy;
 
-pub(crate) use chat_run::{handle_chat_ws_attach, spawn_chat_run};
+pub(crate) use chat_run::{busy_run_of, handle_chat_ws_attach, spawn_chat_run};
 pub(crate) use council::start_council_run;
 pub(crate) use helpers::{prepare_chat_session, ChatRequestError};
 pub(crate) use state::agent_permissions_from_wire;

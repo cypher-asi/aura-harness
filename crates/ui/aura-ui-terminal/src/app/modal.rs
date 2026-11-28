@@ -13,12 +13,17 @@
 //! the folder browser cancelled (back to the channel form, when the form
 //! opened it), any other dialog closed.
 
+use super::wheel_views::{wheeled, WheelList};
 use super::{contains, App, AppState};
 use crate::components::ModalArea;
 use crossterm::event::{KeyCode, KeyEvent, MouseEvent, MouseEventKind};
 
 /// Lines the help dialog scrolls by for a notch of the wheel.
 const WHEEL_LINES: usize = 3;
+
+/// [`WHEEL_LINES`] as a signed step, for the pickers' lists.
+#[allow(clippy::cast_possible_wrap)] // 3 fits
+const WHEEL_DELTA: isize = WHEEL_LINES as isize;
 
 /// Lines it scrolls by for PgUp and PgDn.
 const PAGE_LINES: usize = 10;
@@ -142,8 +147,34 @@ impl App {
         }
         self.modals.dialog = Some(dialog);
         self.modals.help_scroll = 0;
+        // A picker opens on its highlight, wherever the wheel left the last.
+        self.panels.wheel.release(WheelList::ModelPicker);
+        self.panels.wheel.release(WheelList::FolderPicker);
         self.release_pointer();
         self.clear_selection();
+    }
+
+    /// The wheel over a picker scrolls its list [`WHEEL_LINES`] rows down,
+    /// or up, and leaves its highlight where it is, as over the panels'
+    /// lists (see `wheel_views`). A key or a click moves it as before.
+    fn wheel_picker(&mut self, dialog: Dialog, down: bool) {
+        let delta = if down { WHEEL_DELTA } else { -WHEEL_DELTA };
+        let list = match dialog {
+            Dialog::ModelSelector => {
+                let picker = &mut self.account.model_picker;
+                picker.set_scroll(wheeled(picker.scroll(), delta));
+                WheelList::ModelPicker
+            }
+            Dialog::FolderPicker => {
+                let Some(picker) = self.project_list.folder_picker.as_mut() else {
+                    return;
+                };
+                picker.set_scroll(wheeled(picker.scroll(), delta));
+                WheelList::FolderPicker
+            }
+            Dialog::Help | Dialog::ProjectInfo | Dialog::ChannelForm => return,
+        };
+        self.panels.wheel.detach(list);
     }
 
     /// Close the open dialog, dropping what it was editing. The chat is
@@ -233,12 +264,7 @@ impl App {
                     scroll.saturating_sub(WHEEL_LINES)
                 };
             }
-            Dialog::ModelSelector => self.move_model_selector(down),
-            Dialog::FolderPicker => {
-                if let Some(picker) = self.project_list.folder_picker.as_mut() {
-                    picker.move_by(if down { 1 } else { -1 });
-                }
-            }
+            Dialog::ModelSelector | Dialog::FolderPicker => self.wheel_picker(dialog, down),
             Dialog::ProjectInfo | Dialog::ChannelForm => {}
         }
     }

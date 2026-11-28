@@ -21,6 +21,7 @@ mod agent_failures;
 mod agents_header;
 mod bench_icon;
 mod channel_history;
+mod channel_history_typed;
 mod channel_info;
 mod channel_member_chat;
 mod channel_member_folds;

@@ -23,7 +23,7 @@ use crate::event_loop::LoopState;
 use aura_core_types::time::now_ms;
 use aura_core_types::AgentId;
 use aura_store_db::{ChannelPost, ChannelRecord, MemberRecord, NewPost, PostAuthor};
-use aura_ui::events::{ChannelPostAuthor, ChannelPostView, ImageAttachment};
+use aura_ui::events::{prompt_key, ChannelPostAuthor, ChannelPostView, ImageAttachment};
 use aura_ui::UiCommand;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
@@ -142,9 +142,9 @@ async fn coordinated_channel(
 /// `UiEvent::UserMessage` to the coordinator `coordinator`: when `text`
 /// mentions members of its channel, post it to the channel and give it
 /// to each of them, and to the coordinator only when it is mentioned
-/// too. Returns `false`, having done nothing, when it mentions no member
-/// (or `coordinator` coordinates no channel): the coordinator takes the
-/// message as usual.
+/// too. Returns `false` when it mentions no member (or `coordinator`
+/// coordinates no channel): the coordinator takes the message as usual,
+/// and in a channel only its HISTORY summary is asked for.
 pub(crate) async fn route_user_message(
     state: &mut LoopState<'_>,
     coordinator: AgentId,
@@ -162,6 +162,10 @@ pub(crate) async fn route_user_message(
         to_coordinator = true;
     }
     if mentioned.is_empty() {
+        // The coordinator takes it, and it stays in its conversation;
+        // HISTORY lists it from there, summarized like a post.
+        let typed = vec![(prompt_key(text), text.to_string())];
+        super::summaries::spawn_for(state, coordinator, &channel.id, typed);
         return false;
     }
     let seq = post_from_user(state, &channel, text, &mentioned).await;

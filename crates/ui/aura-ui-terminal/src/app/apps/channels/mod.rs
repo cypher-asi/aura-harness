@@ -48,6 +48,8 @@ mod list;
 mod side;
 mod welcome;
 
+#[cfg(test)]
+pub(crate) use history::HistoryKind;
 pub(crate) use history::{HistoryItem, HISTORY_ROWS};
 pub(crate) use side::CHANNEL_MEMBER_ROWS;
 pub(crate) use welcome::ChannelWelcome;

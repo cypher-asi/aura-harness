@@ -116,12 +116,18 @@ impl App {
     }
 
     /// Keep the folder browser's highlight inside a list `visible_rows`
-    /// tall, returning the first row to show.
+    /// tall, unless the wheel scrolled it, returning the first row to show.
     pub fn sync_folder_picker_scroll(&mut self, visible_rows: usize) -> usize {
-        self.project_list
-            .folder_picker
-            .as_mut()
-            .map_or(0, |picker| picker.sync_scroll(visible_rows))
+        let Some(picker) = self.project_list.folder_picker.as_mut() else {
+            return 0;
+        };
+        let scroll = self.panels.wheel.place(
+            crate::app::wheel_views::WheelList::FolderPicker,
+            (picker.scroll(), picker.selected()),
+            (visible_rows, picker.rows().len()),
+        );
+        picker.set_scroll(scroll);
+        scroll
     }
 
     /// Listed projects, in list order.

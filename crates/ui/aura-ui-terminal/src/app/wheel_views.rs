@@ -8,6 +8,9 @@
 //! another agent) or any key is pressed; then the list follows its
 //! highlight again.
 //!
+//! The model selector and the folder browser, lists in dialogs, are
+//! scrolled the same way (see `modal`).
+//!
 //! PROJECTS and a channel's HISTORY keep their own flag for this
 //! (`ProjectList::scroll_detached`, `HistoryState::follow`);
 //! the documents that scroll by lines (POLICIES, HOST, a channel's INFO
@@ -31,6 +34,10 @@ pub(crate) enum WheelList {
     Trace,
     Tasks,
     ChannelMembers,
+    /// The model selector's list, in its dialog
+    ModelPicker,
+    /// The folder browser's list, in its dialog
+    FolderPicker,
 }
 
 /// A list the wheel scrolled, and where its highlight was when it was
@@ -49,7 +56,7 @@ pub(crate) struct WheelViews {
 
 impl WheelViews {
     /// Leave `list` where the wheel puts it until its highlight moves.
-    fn detach(&mut self, list: WheelList) {
+    pub(crate) fn detach(&mut self, list: WheelList) {
         if !self.detached.iter().any(|d| d.list == list) {
             self.detached.push(Detached {
                 list,
@@ -91,18 +98,41 @@ impl WheelViews {
         (scroll, selected): (usize, usize),
         (visible, total): (usize, usize),
     ) -> usize {
+        if self.held(list, key) {
+            return scroll.min(total.saturating_sub(visible.max(1)));
+        }
+        follow_selection(scroll, selected, visible, total)
+    }
+
+    /// Whether `list` stays where the wheel left it: it was scrolled, and
+    /// its highlight is still at `key`, where it was when first drawn so.
+    /// A list whose highlight moved follows it again. For a list that
+    /// keeps its highlight in view its own way rather than with
+    /// [`follow_selection`], as the model selector does.
+    pub(crate) fn held(&mut self, list: WheelList, key: usize) -> bool {
         let at = self.detached.iter().position(|d| d.list == list);
         let kept = at.is_some_and(|at| {
             let detached = &mut self.detached[at];
             *detached.highlight.get_or_insert(key) == key
         });
-        if kept {
-            return scroll.min(total.saturating_sub(visible.max(1)));
-        }
-        if let Some(at) = at {
+        if let Some(at) = at.filter(|_| !kept) {
             self.detached.remove(at);
         }
-        follow_selection(scroll, selected, visible, total)
+        kept
+    }
+
+    /// Whether [`Self::held`] would keep `list` where the wheel left it,
+    /// without recording anything: for a frame that draws the list before
+    /// it can tell.
+    pub(crate) fn holds(&self, list: WheelList, key: usize) -> bool {
+        self.detached
+            .iter()
+            .any(|d| d.list == list && d.highlight.is_none_or(|at| at == key))
+    }
+
+    /// `list` follows its highlight again, as a list shown afresh does.
+    pub(crate) fn release(&mut self, list: WheelList) {
+        self.detached.retain(|d| d.list != list);
     }
 }
 

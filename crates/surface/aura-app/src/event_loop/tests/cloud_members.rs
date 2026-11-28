@@ -34,6 +34,7 @@ fn footer_for_new_reviewer() -> AssignArgs {
         subject: "Footer".to_string(),
         prompt: "Make the footer links work.".to_string(),
         todo_id: Some("5".to_string()),
+        withdraw: false,
     }
 }
 
