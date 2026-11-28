@@ -48,12 +48,15 @@ An integration is two things:
     - `CliLogin { program, login, token }`, a CLI sign-in such as
       `gh auth login`, optionally also taking a token;
     - `OAuth { authorize_url, scopes }`, declared only for now.
-  - `config: Vec<ConfigField { key, label, kind, required, default }>`,
-    where `kind` is `Text`, `Url`, `Bool` or `Choice(..)`. Values are
-    checked against their kind when set.
+  - `config: Vec<ConfigField { key, label, kind, required, default, advanced }>`
+    (`ConfigField::new` sets the common defaults), where `kind` is `Text`,
+    `Url`, `Bool`, `Choice(..)` or `Number { min, max, integer }`. Values
+    are checked against their kind when set. An `advanced` field (an API
+    URL override, say) is hidden in the panel until it is set.
   - `tools: Vec<ToolSpec { name, description, input_schema, effect, timeout }>`,
-    where `effect` is `Read`, `Write`, `Spend` (can spend the user's
-    money) or `Destroy` (deletes something for good).
+    where `effect` is `Read`, `Write`, `Spends` or `Destroys`. `timeout`
+    replaces the registry's limit for that tool (a job that waits for its
+    result).
   - `cloud: CloudDelivery`, either `Never` (the default) or
     `HostBound { env }` (see below).
 - **An [`Integration`]** (`src/integration.rs`), a trait:
@@ -62,7 +65,7 @@ An integration is two things:
     or `Misconfigured { why }`. It is local and quick, with no network.
     The default, `default_status`, is "connected when a credential is
     there", and says where the credential came from;
-  - `health(&ctx) -> Result<HealthReport>`: one real call that proves the
+  - `health(&ctx) -> Result<HealthReport { summary, detail }>`: one real call that proves the
     credential and config work. It is the panel's **Test**, and what
     **Connect** runs before storing anything;
   - `call_tool(&ctx, tool, args) -> Result<Value>`: runs a tool by its
@@ -117,7 +120,7 @@ the integration id. Variants include `NotConnected`, `Timeout { after }`,
   and `modes::user_defaults`):
   - `Read` tools are invocations, like `web_search`: they run in agent,
     plan and ask mode, and don't ask at any approval level.
-  - `Write`, `Spend` and `Destroy` tools are network calls: agent mode
+  - `Write`, `Spends` and `Destroys` tools are network calls: agent mode
     only, and they ask under `ask` and `strict`.
   - A built-in tool's own class always wins; a name in neither is a
     network call.

@@ -89,6 +89,15 @@ pub enum IntegrationError {
         /// The integration
         id: IntegrationId,
     },
+    /// The integration refused the call itself, before anything was sent
+    /// (a spending limit, say).
+    #[error("{id} refused: {reason}")]
+    Refused {
+        /// The integration
+        id: IntegrationId,
+        /// Why, for the agent and the panel
+        reason: String,
+    },
     /// The credential or settings store failed.
     #[error("integration store: {0}")]
     Store(String),

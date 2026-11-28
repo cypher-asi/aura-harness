@@ -37,6 +37,8 @@ pub(crate) struct InputView {
 /// Screen areas of the content panels from the last rendered frame.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PanelAreas {
+    /// The context ring and its share in the footer, as last drawn
+    pub context_ring: Option<Rect>,
     /// Agents panel (including border)
     pub swarm: Option<Rect>,
     /// Rows of the agents list inside the panel

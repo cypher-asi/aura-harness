@@ -110,3 +110,30 @@ pub(in crate::event_loop) fn mark_running(state: &LoopState<'_>, agent: AgentId,
         running.remove(&agent);
     }
 }
+
+/// A live cloud turn of `agent`, as one asked from here streams: its
+/// events come from `rx` instead of its machine (the load harness).
+#[cfg(test)]
+pub(in crate::event_loop) async fn stream_events(
+    state: &LoopState<'_>,
+    agent: AgentId,
+    rx: tokio::sync::mpsc::Receiver<RemoteEvent>,
+) {
+    let cancel = CancellationToken::new();
+    let row = crate::event_loop::handlers::turn_summary(agent, "Streamed turn", "");
+    note_turn(state, agent, row, &cancel).await;
+    let ui = AgentUi::new(state.commands.clone(), agent);
+    let extras = TurnExtras {
+        reload: Some(super::forward::chat_reload(
+            Arc::clone(&state.hub),
+            ui.clone(),
+            agent,
+        )),
+        waiting: Some(super::forward::WaitingMark {
+            hub: Arc::clone(&state.hub),
+            agent,
+        }),
+        ..TurnExtras::default()
+    };
+    watch_turn(state, agent, ui, rx, extras, cancel);
+}

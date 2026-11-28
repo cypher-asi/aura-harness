@@ -121,7 +121,7 @@ pub struct KeyAuth {
 }
 
 /// A setting of an integration.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConfigField {
     /// Key it is stored under
     pub key: String,
@@ -133,10 +133,29 @@ pub struct ConfigField {
     pub required: bool,
     /// Value when unset
     pub default: Option<String>,
+    /// Hidden in the panel until it is set (an override for tests or
+    /// self-hosting, such as an API base URL)
+    pub advanced: bool,
+}
+
+impl ConfigField {
+    /// A field `key` labelled `label` taking `kind`: optional, no
+    /// default, not advanced. Set the rest on it.
+    #[must_use]
+    pub fn new(key: impl Into<String>, label: impl Into<String>, kind: FieldKind) -> Self {
+        Self {
+            key: key.into(),
+            label: label.into(),
+            kind,
+            required: false,
+            default: None,
+            advanced: false,
+        }
+    }
 }
 
 /// The values a config field takes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum FieldKind {
     /// Any text
     Text,
@@ -146,6 +165,15 @@ pub enum FieldKind {
     Bool,
     /// One of these
     Choice(Vec<String>),
+    /// A number, within the bounds given; a whole one when `integer`
+    Number {
+        /// Lowest allowed
+        min: Option<f64>,
+        /// Highest allowed
+        max: Option<f64>,
+        /// Whether it must be a whole number
+        integer: bool,
+    },
 }
 
 impl FieldKind {
@@ -161,8 +189,29 @@ impl FieldKind {
             }
             Self::Choice(choices) => (!choices.iter().any(|choice| choice == value))
                 .then(|| format!("must be one of {}", choices.join(", "))),
+            Self::Number { min, max, integer } => reject_number(value, *min, *max, *integer),
         }
     }
+}
+
+/// Why `value` isn't a number within `min` and `max` (whole when
+/// `integer`), if it isn't.
+fn reject_number(value: &str, min: Option<f64>, max: Option<f64>, integer: bool) -> Option<String> {
+    let Ok(number) = value.trim().parse::<f64>() else {
+        return Some("must be a number".to_string());
+    };
+    if !number.is_finite() || (integer && number.fract() != 0.0) {
+        return Some(if integer {
+            "must be a whole number".to_string()
+        } else {
+            "must be a number".to_string()
+        });
+    }
+    if let Some(min) = min.filter(|min| number < *min) {
+        return Some(format!("must be at least {min}"));
+    }
+    max.filter(|max| number > *max)
+        .map(|max| format!("must be at most {max}"))
 }
 
 /// A tool an integration gives agents.
@@ -181,37 +230,34 @@ pub struct ToolSpec {
     pub timeout: Option<Duration>,
 }
 
-/// What a tool does to the service. The kernel's mode gate and the
-/// approval prompts follow it: `Read` tools run in plan and ask mode and
-/// don't ask under the `ask` approval level; the others run in agent
-/// mode only and ask unless the level is `yolo`.
+/// What a tool does to the service.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolEffect {
     /// Only reads
     Read,
-    /// Creates, changes or deletes something
+    /// Creates or changes something
     Write,
-    /// Can spend the user's money (starts paid compute)
-    Spend,
-    /// Destroys something for good (and its data)
-    Destroy,
+    /// Costs money (starts a machine, runs a paid job)
+    Spends,
+    /// Deletes or ends something for good
+    Destroys,
 }
 
 impl ToolEffect {
-    /// Whether calls only read.
+    /// Whether it only reads.
     #[must_use]
     pub const fn is_read(self) -> bool {
         matches!(self, Self::Read)
     }
 
-    /// A short word for the panel.
+    /// One word for the panel and approval prompts.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Read => "read",
-            Self::Write => "write",
-            Self::Spend => "spends money",
-            Self::Destroy => "destroys",
+            Self::Read => "reads",
+            Self::Write => "changes",
+            Self::Spends => "spends money",
+            Self::Destroys => "destroys",
         }
     }
 }
@@ -243,6 +289,35 @@ mod tests {
         let choice = FieldKind::Choice(vec!["a".to_string(), "b".to_string()]);
         assert!(choice.reject("b").is_none());
         assert_eq!(choice.reject("c").unwrap(), "must be one of a, b");
+    }
+
+    #[test]
+    fn a_new_field_is_optional_plain_and_shown() {
+        let field = ConfigField::new("max_gpu_count", "Max GPUs", FieldKind::Text);
+        assert!(!field.required && !field.advanced && field.default.is_none());
+        assert!(ToolEffect::Read.is_read() && !ToolEffect::Spends.is_read());
+        assert_eq!(ToolEffect::Destroys.label(), "destroys");
+    }
+
+    #[test]
+    fn numbers_are_checked_against_their_bounds() {
+        let usd = FieldKind::Number {
+            min: Some(0.0),
+            max: Some(50.0),
+            integer: false,
+        };
+        assert!(usd.reject("1.00").is_none());
+        assert_eq!(usd.reject("abc").unwrap(), "must be a number");
+        assert_eq!(usd.reject("-1").unwrap(), "must be at least 0");
+        assert_eq!(usd.reject("51").unwrap(), "must be at most 50");
+        let count = FieldKind::Number {
+            min: Some(1.0),
+            max: None,
+            integer: true,
+        };
+        assert!(count.reject("2").is_none());
+        assert_eq!(count.reject("1.5").unwrap(), "must be a whole number");
+        assert_eq!(count.reject("NaN").unwrap(), "must be a whole number");
     }
 
     #[test]

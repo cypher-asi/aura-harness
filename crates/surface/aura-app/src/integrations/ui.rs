@@ -101,9 +101,12 @@ fn view(model: &Model, note: Option<(bool, String)>) -> IntegrationView {
         takes_key: manifest.auth.key().map(|key| key.label.clone()),
         login,
         stored: model.stored,
+        // An advanced field (an API URL override) shows once it is set
+        // to something other than its default.
         config: model
             .config
             .iter()
+            .filter(|(field, value)| !field.advanced || *value != field.default)
             .map(|(field, value)| IntegrationFieldView {
                 key: field.key.clone(),
                 label: field.label.clone(),

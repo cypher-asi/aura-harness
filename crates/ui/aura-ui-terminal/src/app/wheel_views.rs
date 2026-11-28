@@ -39,6 +39,8 @@ pub(crate) enum WheelList {
     Tasks,
     ChannelMembers,
     ChannelHistory,
+    /// The Integrations panel's list, in the agents panel
+    Integrations,
     /// The model selector's list, in its dialog
     ModelPicker,
     /// The folder browser's list, in its dialog
@@ -188,8 +190,10 @@ impl App {
                 let scroll = self.archived.scroll;
                 self.archived.scroll = self.wheel_list(WheelList::Archive, scroll, delta);
             }
-            // Its few rows always fit; the wheel moves no highlight.
-            AgentsTab::Integrations => {}
+            AgentsTab::Integrations => {
+                let scroll = self.integrations.scroll;
+                self.integrations.scroll = self.wheel_list(WheelList::Integrations, scroll, delta);
+            }
         }
     }
 

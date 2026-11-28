@@ -152,9 +152,9 @@ fn the_manifest_lists_ten_tools_with_their_effects_and_limits() {
         assert_eq!(effect(read), ToolEffect::Read, "{read}");
     }
     for spend in ["create_pod", "pod_action", "run_job"] {
-        assert_eq!(effect(spend), ToolEffect::Spend, "{spend}");
+        assert_eq!(effect(spend), ToolEffect::Spends, "{spend}");
     }
-    assert_eq!(effect("terminate_pod"), ToolEffect::Destroy);
+    assert_eq!(effect("terminate_pod"), ToolEffect::Destroys);
     assert!(manifest.tool("run_job").unwrap().timeout.unwrap() > Duration::from_secs(60));
     assert_eq!(manifest.auth.key().unwrap().env, ["RUNPOD_API_KEY"]);
     let default = |key: &str| manifest.field(key).unwrap().default.clone().unwrap();
@@ -162,6 +162,8 @@ fn the_manifest_lists_ten_tools_with_their_effects_and_limits() {
     assert_eq!(default("max_gpu_count"), "1");
     assert_eq!(default("max_running_pods"), "2");
     assert_eq!(default("max_job_seconds"), "300");
+    assert!(manifest.field("api_base").unwrap().advanced);
+    assert!(!manifest.field("max_hourly_usd").unwrap().advanced);
 }
 
 #[tokio::test]
@@ -175,6 +177,7 @@ async fn connect_refuses_a_bad_key_and_keeps_a_good_one() {
     );
     let report = registry.connect("runpod", Secret::new(KEY)).await.unwrap();
     assert_eq!(report.summary, "account user_2abc");
+    assert_eq!(report.detail.as_deref(), Some("d***@x.io"));
     assert!(registry.status("runpod").await.unwrap().is_connected());
 }
 
@@ -220,7 +223,11 @@ async fn the_spending_limit_holds_through_the_registry() {
     registry.connect("runpod", Secret::new(KEY)).await.unwrap();
     let args = json!({"name": "big", "gpu_type_id": "H100", "image": "x"});
     let refused = registry.call("runpod", "create_pod", args, AGENT).await;
-    let message = refused.unwrap_err().to_string();
+    let message = refused.as_ref().unwrap_err().to_string();
+    assert!(
+        matches!(refused, Err(IntegrationError::Refused { .. })),
+        "{refused:?}"
+    );
     assert!(message.contains("spending limit"), "{message}");
     assert!(!message.contains(KEY));
     let posted = seen
@@ -232,23 +239,36 @@ async fn the_spending_limit_holds_through_the_registry() {
 }
 
 #[tokio::test]
-async fn a_bad_limit_shows_as_misconfigured_and_access_is_honoured() {
+async fn bad_limits_are_refused_or_shown_as_misconfigured_and_access_is_honoured() {
     let (url, _) = stub(vec![account()]).await;
     let registry = registry(&url).await;
     registry.connect("runpod", Secret::new(KEY)).await.unwrap();
+    for (key, bad) in [
+        ("max_hourly_usd", "lots"),
+        ("max_gpu_count", "1.5"),
+        ("max_job_seconds", "-3"),
+    ] {
+        assert!(
+            registry.configure("runpod", key, bad).await.is_err(),
+            "{key}={bad}"
+        );
+    }
     registry
-        .configure("runpod", "max_hourly_usd", "lots")
+        .configure("runpod", "max_gpu_count", "2")
         .await
         .unwrap();
-    let status = registry.status("runpod").await.unwrap();
+
+    // A value edited into the settings file by hand still shows.
+    let ctx = registry
+        .context("runpod")
+        .await
+        .unwrap()
+        .with_config([("max_hourly_usd".to_string(), "lots".to_string())].into());
+    let status = crate::Integration::status(&Runpod::new(), &ctx).await;
     assert!(
         matches!(&status, Status::Misconfigured { why } if why.contains("max_hourly_usd")),
         "{status:?}"
     );
-    registry
-        .configure("runpod", "max_hourly_usd", "")
-        .await
-        .unwrap();
 
     registry
         .set_access(

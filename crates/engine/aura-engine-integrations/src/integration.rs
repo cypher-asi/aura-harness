@@ -40,6 +40,8 @@ impl Status {
 pub struct HealthReport {
     /// One line, as the panel shows it (`signed in as octocat`)
     pub summary: String,
+    /// More, when there is any (`d***@example.com`); never a secret
+    pub detail: Option<String>,
 }
 
 impl HealthReport {
@@ -48,7 +50,15 @@ impl HealthReport {
     pub fn new(summary: impl Into<String>) -> Self {
         Self {
             summary: summary.into(),
+            detail: None,
         }
+    }
+
+    /// This report with `detail`.
+    #[must_use]
+    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
     }
 }
 
@@ -126,5 +136,18 @@ pub fn default_status(manifest: &Manifest, ctx: &IntegrationContext) -> Status {
         None => Status::NotConnected {
             hint: format!("add a {}: {}", key.label.to_lowercase(), key.hint),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HealthReport;
+
+    #[test]
+    fn a_report_carries_an_optional_detail() {
+        let report = HealthReport::new("account a1").with_detail("d***@example.com");
+        assert_eq!(report.summary, "account a1");
+        assert_eq!(report.detail.as_deref(), Some("d***@example.com"));
+        assert_eq!(HealthReport::new("ok").detail, None);
     }
 }

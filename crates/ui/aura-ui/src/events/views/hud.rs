@@ -72,8 +72,12 @@ pub struct QueuedItemView {
 pub struct ContextView {
     /// System prompt
     pub system_tokens: u64,
-    /// Tool definitions
+    /// Tool definitions (built-in and plugin tools)
     pub tools_tokens: u64,
+    /// Tool definitions of MCP servers
+    pub mcp_tokens: u64,
+    /// The subagents the agent may start, as its prompt lists them
+    pub subagents_tokens: u64,
     /// Skills
     pub skills_tokens: u64,
     /// The conversation so far

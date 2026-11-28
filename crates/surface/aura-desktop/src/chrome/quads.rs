@@ -139,13 +139,13 @@ impl Chrome {
         let ink = tab_box(&mut out.under, rect, lit, &pen.palette, pen.line);
         // As wide as the window boxes' glyphs: their arm each way.
         let arm = (pen.unit * 0.55).round();
-        if tab == PaneTab::Agents(AgentsTab::Bench) {
-            wrench(&mut out.under, rect, (arm, pen.line), ink);
-        } else if tab == PaneTab::Agents(AgentsTab::Integrations) {
-            plug(&mut out.under, rect, (arm, pen.line), ink);
-        } else {
-            computer(&mut out.under, rect, (arm, pen.line), ink);
-        }
+        let glyph = match tab {
+            PaneTab::Agents(AgentsTab::Bench) => wrench,
+            PaneTab::Agents(AgentsTab::Integrations) => plug,
+            // HOST's computer, the side panel's icon tab.
+            _ => computer,
+        };
+        glyph(&mut out.under, rect, (arm, pen.line), ink);
     }
 
     /// The name of the tab drawn as an icon under the pointer, in a box

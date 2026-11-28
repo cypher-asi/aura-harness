@@ -364,12 +364,13 @@ fn fill_dialog(app: &mut App, dialog: Dialog, dir: &std::path::Path) -> List {
             app.show_project_info("p1");
         }
         Dialog::ChannelForm => app.start_new_channel(),
+        Dialog::Context => drop(app.handle_command("/context")),
     }
     let highlight: fn(&App) -> Option<usize> = match dialog {
         Dialog::ModelSelector => |app| Some(app.model_picker().cursor()),
         Dialog::FolderPicker => |app| app.folder_picker().map(|picker| picker.selected()),
         // A document that scrolls, a page of facts, a form.
-        Dialog::Help | Dialog::ProjectInfo | Dialog::ChannelForm => |_| None,
+        Dialog::Help | Dialog::ProjectInfo | Dialog::ChannelForm | Dialog::Context => |_| None,
     };
     List {
         name: format!("{dialog:?}"),

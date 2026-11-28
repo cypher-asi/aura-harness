@@ -80,11 +80,12 @@ impl Integration for Runpod {
             .get(format!("{base}/v2/account"))
             .bearer_auth(key.expose());
         let account = ctx.send(request).await?;
-        let id = account
-            .get("id")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("?");
-        Ok(HealthReport::new(format!("account {id}")))
+        let field = |name: &str| account.get(name).and_then(serde_json::Value::as_str);
+        let report = HealthReport::new(format!("account {}", field("id").unwrap_or("?")));
+        Ok(match field("email") {
+            Some(email) => report.with_detail(mask_email(email)),
+            None => report,
+        })
     }
 
     async fn call_tool(
@@ -112,6 +113,17 @@ impl Integration for Runpod {
             })
             .await?;
         Ok(bounded(answer))
+    }
+}
+
+/// `d***@example.com`: enough to recognize the account by.
+fn mask_email(email: &str) -> String {
+    match email.split_once('@') {
+        Some((user, domain)) => {
+            let first: String = user.chars().take(1).collect();
+            format!("{first}***@{domain}")
+        }
+        None => "***".to_string(),
     }
 }
 
@@ -149,9 +161,12 @@ fn integration_error(id: &IntegrationId, tool: &str, error: RunpodError) -> Inte
                 message: error.to_string(),
             }
         }
-        other => IntegrationError::BadArgs {
+        RunpodError::Limit { .. } => IntegrationError::Refused {
             id: id.clone(),
-            tool: tool.to_string(),
+            reason: error.to_string(),
+        },
+        other => IntegrationError::Other {
+            id: id.clone(),
             message: other.to_string(),
         },
     }
@@ -178,49 +193,52 @@ fn manifest() -> Manifest {
 
 fn config_fields() -> Vec<ConfigField> {
     let limits = SpendLimits::default();
-    let field = |key: &str, label: &str, kind: FieldKind, default: String| ConfigField {
-        key: key.to_string(),
-        label: label.to_string(),
-        kind,
-        required: false,
-        default: Some(default),
+    let number = |integer: bool| FieldKind::Number {
+        min: Some(0.0),
+        max: None,
+        integer,
+    };
+    let field = |key: &str, label: &str, kind: FieldKind, default: String| {
+        let mut field = ConfigField::new(key, label, kind);
+        field.default = Some(default);
+        field
+    };
+    let url = |key: &str, label: &str, default: &str| {
+        let mut field = field(key, label, FieldKind::Url, default.to_string());
+        // Overrides for tests and proxies, hidden until set.
+        field.advanced = true;
+        field
     };
     vec![
         field(
             "max_hourly_usd",
             "Most a pod may cost per hour (USD)",
-            FieldKind::Text,
+            number(false),
             format!("{:.2}", limits.max_hourly_usd),
         ),
         field(
             "max_gpu_count",
             "Most GPUs in one pod",
-            FieldKind::Text,
+            number(true),
             limits.max_gpu_count.to_string(),
         ),
         field(
             "max_running_pods",
             "Most pods running at once",
-            FieldKind::Text,
+            number(true),
             limits.max_running_pods.to_string(),
         ),
         field(
             "max_job_seconds",
             "Longest a serverless job may run (seconds)",
-            FieldKind::Text,
+            number(true),
             limits.max_job_seconds.to_string(),
         ),
-        field(
-            "api_base",
-            "API URL",
-            FieldKind::Url,
-            DEFAULT_API_BASE.to_string(),
-        ),
-        field(
+        url("api_base", "API URL", DEFAULT_API_BASE),
+        url(
             "serverless_base",
             "Serverless API URL",
-            FieldKind::Url,
-            DEFAULT_SERVERLESS_BASE.to_string(),
+            DEFAULT_SERVERLESS_BASE,
         ),
     ]
 }
@@ -252,8 +270,8 @@ fn tool_specs() -> Vec<ToolSpec> {
 const fn effect(kind: ToolKind) -> ToolEffect {
     match kind {
         ToolKind::Read => ToolEffect::Read,
-        ToolKind::Spends => ToolEffect::Spend,
-        ToolKind::Destroys => ToolEffect::Destroy,
+        ToolKind::Spends => ToolEffect::Spends,
+        ToolKind::Destroys => ToolEffect::Destroys,
     }
 }
 

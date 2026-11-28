@@ -356,8 +356,28 @@ under a fold arrow, then the timeline, newest first.
 ├──────────────────────────────────────────────┤
 │  →  Add a follow-up                          │
 └──────────────────────────────────────────────┘
- qwen3:4b · 23% context used · 2 calls  ● Ready
+ qwen3:4b · ◔ 23% context used · 2 calls  ● Ready
 ```
+
+- **Context ring**: with the model's window known, the footer's context
+  share leads with a ring that fills clockwise by quarters: `○` up to
+  12%, `◔` to 37%, `◑` to 62%, `◕` to 87%, then `●`. It takes the share's
+  colour: `muted`, `warning` from 75%, `error` from 90%. A click on it,
+  or `/context`, opens the **CONTEXT** panel, a modal whose meta line
+  repeats the ring and share (`◔ 25% of 200k`). The panel has three
+  sections:
+  - **USED**: the model's own count of the last call, with a stacked bar
+    as wide as the body.
+  - **PARTS**: one row per part with any tokens: system prompt, tools,
+    MCP tools, subagents, skills, messages, free space. Each row is the
+    part's `■` in its colour, its name, its tokens and its share of the
+    window in `muted`. The bar draws each part's share in the same
+    colour (`secondary`, `primary`, `pending`, `warning`, `text`,
+    `success`), and free space as `░` in `faint`.
+  - **PROJECT INSTRUCTIONS**: the instruction files, when known.
+
+  Before any call has been counted, USED is the loop's estimate, and it
+  says so. `/context text` writes the old report into the chat.
 
 - The conversation is inset two columns, starts a row below the border
   and runs at most 110 columns wide.
