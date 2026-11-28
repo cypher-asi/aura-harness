@@ -84,9 +84,11 @@ use tracing::{info, warn};
 
 mod answers;
 mod assignments;
+mod dropped;
 mod hooks;
 mod messages;
 mod peers;
+mod refusals;
 mod starts;
 #[cfg(test)]
 mod tests;
@@ -98,6 +100,7 @@ pub(super) use answers::{
 pub use assignments::AssignTool;
 #[cfg(test)]
 pub(crate) use assignments::{assign, AssignArgs};
+pub(super) use dropped::{settle_dropped, REMOVED_BY_USER};
 pub use hooks::PeerHooks;
 pub(super) use hooks::{reach_of, refresh_reach, MachineMail};
 pub(super) use messages::deliver;
@@ -114,6 +117,8 @@ pub(crate) const THREAD_REQUESTS: u32 = 8;
 #[derive(Default)]
 pub(crate) struct Inbox {
     state: Mutex<State>,
+    /// The "not delivered" notices told lately ([`refusals`])
+    refusals: refusals::Refusals,
 }
 
 #[derive(Default)]
@@ -175,20 +180,24 @@ impl Inbox {
     }
 
     /// The agents that owe answers, with the subjects and markers of
-    /// what they owe, leaving out those [`Self::park`] parked.
+    /// what they owe, leaving out those [`Self::park`] parked. Work its
+    /// sender took back ([`withdraw`](withdraw::withdraw)) is not owed
+    /// any more, so the stall sweep never asks for it back.
     pub(crate) fn owing(&self) -> Vec<(AgentId, Vec<(String, String)>)> {
         let state = lock(&self.state);
         state
             .owed
             .iter()
-            .filter(|(agent, owed)| !owed.is_empty() && !state.parked.contains(agent))
+            .filter(|(agent, _)| !state.parked.contains(agent))
             .map(|(agent, owed)| {
-                let asks = owed
+                let asks: Vec<(String, String)> = owed
                     .iter()
+                    .filter(|owed| !owed.withdrawn)
                     .map(|owed| (owed.subject.clone(), inbox::marker(owed.kind, &owed.id)))
                     .collect();
                 (*agent, asks)
             })
+            .filter(|(_, asks)| !asks.is_empty())
             .collect()
     }
 }
