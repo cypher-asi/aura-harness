@@ -355,6 +355,38 @@ impl NodeClient {
         .await
     }
 
+    /// What the node has under way, by its own count: every turn of a
+    /// hosted agent and every agent spawned there, whoever started it.
+    /// `None` from a node before `/v1/cloud/processes`.
+    ///
+    /// # Errors
+    ///
+    /// When the node can't be asked or answers something else.
+    pub async fn processes(
+        &self,
+    ) -> CloudResult<Option<Vec<aura_core_protocol::cloud::MeshProcess>>> {
+        let response = self
+            .http
+            .get(format!("{}/v1/cloud/processes", self.base))
+            .bearer_auth(self.token.expose())
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await
+            .map_err(|err| self.fail("processes", err))?;
+        let status = response.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            return Err(self.fail("processes", status));
+        }
+        let rows = response
+            .json()
+            .await
+            .map_err(|err| self.fail("processes", err))?;
+        Ok(Some(rows))
+    }
+
     /// Whether chat run `run_id` is still on the node: `false` once it
     /// stopped and was let go, its turn over.
     ///

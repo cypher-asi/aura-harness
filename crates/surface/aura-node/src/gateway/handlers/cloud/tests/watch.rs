@@ -2,11 +2,12 @@
 //! under way and the spawned agents.
 
 use super::super::watch::{node_processes, spawned_row, watch_heads};
-use super::support::{claim, cloud_state, import};
+use super::support::{call, claim, cloud_state, import, NODE_TOKEN};
 use crate::gateway::RouterState;
 use aura_core_protocol::cloud::MeshFrame;
 use aura_core_types::AgentId;
 use aura_engine::agents::{AgentInfo, AgentState};
+use axum::http::StatusCode;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -144,4 +145,16 @@ fn a_spawned_agent_is_a_row_under_its_parent_dated_when_first_seen() {
     .expect("a row");
     assert!(again.is_running());
     assert_eq!(again.started_ms, 5);
+}
+
+#[tokio::test]
+async fn the_hub_can_ask_a_claimed_node_what_runs_there() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let state = cloud_state(dir.path());
+    claim(&state);
+    let (status, body) = call(&state, "GET", "/v1/cloud/processes", Some(NODE_TOKEN), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body, serde_json::json!([]), "nothing runs on a fresh node");
+    let (status, _) = call(&state, "GET", "/v1/cloud/processes", Some("test"), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "only its hub may ask");
 }

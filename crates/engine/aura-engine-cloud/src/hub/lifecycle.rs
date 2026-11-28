@@ -74,6 +74,8 @@ impl CloudHub {
             current_owner: Mutex::new(Owner::Local),
             work: Mutex::new(HashMap::new()),
             streaming: Mutex::new(HashMap::new()),
+            updates: Mutex::new(HashMap::new()),
+            unsettled: Mutex::new(HashSet::new()),
             stop: CancellationToken::new(),
         });
         hub.save_placements();

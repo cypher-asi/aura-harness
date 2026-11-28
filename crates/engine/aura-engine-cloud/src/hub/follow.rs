@@ -3,6 +3,14 @@
 //! a hub started after a crash or a quit, which finds the turn by the
 //! mark on its placement ([`CloudHub::follow_turn`]). The node runs the
 //! turn whether or not a socket is attached.
+//!
+//! A turn's mark goes only once its run is known to have ended: its end
+//! was seen, the node says the run is gone, or the hub stopped it. When
+//! the hub stops watching for another reason (the machine can't be woken,
+//! the node stopped answering, the turn ran past [`TURN_TIMEOUT`] and
+//! couldn't be stopped), the turn is reported failed and its mark stays
+//! ([`CloudHub::unsettled_run`]), so the node is never restarted under a
+//! turn that may still run. A later turn's mark replaces it.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -96,7 +104,9 @@ impl CloudHub {
             let node = match hub.wake_for_turn(&hex, &tx).await {
                 Ok(node) => node,
                 Err(err) => {
-                    hub.end_turn_mark(agent, &mark.run_id);
+                    // The run may well go on there: its mark stays for
+                    // a later look, and the node isn't restarted under it.
+                    tracing::info!(agent = %hex, run = %mark.run_id, error = %err, "could not reach a marked cloud turn; its mark stays");
                     let _ = tx.send(RemoteEvent::Failed(err.to_string())).await;
                     return;
                 }
@@ -152,11 +162,11 @@ fn deadline_from(started_ms: u64) -> Instant {
     Instant::now() + Duration::from_millis(left)
 }
 
-fn timed_out() -> StreamEnd {
-    StreamEnd::Seen(Err(CloudError::Timeout {
+fn timed_out_error() -> CloudError {
+    CloudError::Timeout {
         op: "turn",
         after: TURN_TIMEOUT,
-    }))
+    }
 }
 
 impl RunWatch<'_> {
@@ -183,7 +193,7 @@ impl RunWatch<'_> {
             let relayed =
                 tokio::time::timeout_at(deadline, self.relay(open, shown, tx, cancel)).await;
             match relayed {
-                Err(_) => return timed_out(),
+                Err(_) => return self.timed_out().await,
                 Ok(Relayed::Ended(end)) => return end,
                 Ok(Relayed::Dropped(err)) => {
                     tracing::info!(agent = %self.agent, run = self.run_id, error = %err, "a cloud turn's stream dropped; attaching to it again");
@@ -210,10 +220,7 @@ impl RunWatch<'_> {
         loop {
             if cancel.is_cancelled() {
                 // No socket to say it on.
-                if let Err(err) = self.node.stop_run(self.run_id).await {
-                    tracing::debug!(run = self.run_id, error = %err, "could not stop a cloud run");
-                }
-                return Err(StreamEnd::Seen(Err(self.stopped())));
+                return Err(self.stop_or_keep(self.stopped()).await);
             }
             match self.node.run_alive(self.run_id).await {
                 Ok(false) => return Err(self.ended_unseen(tx).await),
@@ -233,10 +240,11 @@ impl RunWatch<'_> {
             }
             let next = Instant::now() + wait;
             if next >= deadline {
-                return Err(timed_out());
+                return Err(self.timed_out().await);
             }
             if next >= give_up {
-                return Err(StreamEnd::Seen(Err(self.closed())));
+                // The node stopped answering: the run may go on there.
+                return Err(self.unsettled(self.closed()));
             }
             tokio::select! {
                 () = cancel.cancelled() => {}
@@ -245,6 +253,32 @@ impl RunWatch<'_> {
             }
             wait = (wait * 2).min(LONGEST_RETRY);
         }
+    }
+
+    /// The turn ran past [`TURN_TIMEOUT`]: stop its run, its mark kept
+    /// unless the run is then known to be gone.
+    async fn timed_out(&self) -> StreamEnd {
+        self.stop_or_keep(timed_out_error()).await
+    }
+
+    /// Stop the run and end the turn as `why`. Its mark goes only once
+    /// the node says the run is gone.
+    async fn stop_or_keep(&self, why: CloudError) -> StreamEnd {
+        if let Err(err) = self.node.stop_run(self.run_id).await {
+            tracing::debug!(run = self.run_id, error = %err, "could not stop a cloud run");
+        }
+        match self.node.run_alive(self.run_id).await {
+            Ok(false) => StreamEnd::Seen(Err(why)),
+            _ => self.unsettled(why),
+        }
+    }
+
+    /// End the turn as `why` without knowing its run ended: its mark
+    /// stays ([`CloudHub::unsettled_run`]).
+    fn unsettled(&self, why: CloudError) -> StreamEnd {
+        tracing::warn!(agent = %self.agent, run = self.run_id, error = %why, "stopped watching a cloud turn that may still run; its mark stays");
+        self.hub.unsettled_run(self.run_id);
+        StreamEnd::Seen(Err(why))
     }
 
     /// How the turn ended while no socket watched, its run gone: copy
