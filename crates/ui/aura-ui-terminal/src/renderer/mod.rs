@@ -28,6 +28,7 @@ mod images;
 mod inbox;
 mod input;
 mod markdown;
+mod member_tooltip;
 mod members;
 mod mention_menu;
 mod modals;
