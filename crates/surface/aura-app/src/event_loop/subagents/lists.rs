@@ -268,7 +268,17 @@ impl AgentHub {
     /// Send the projects, the Agents panel rows, the Archive and the
     /// active agent to the UI, then the channels, whose member rows show
     /// the same names and activity.
+    ///
+    /// Paced ([`super::super::pacing`]): asked again within the interval,
+    /// the lists go once it is over, as they are then.
     pub async fn send_agent_list(&self) {
+        if self.loop_work.lists.ask() {
+            self.send_agent_list_now().await;
+        }
+    }
+
+    /// [`Self::send_agent_list`] at once.
+    pub(crate) async fn send_agent_list_now(&self) {
         self.send_lists(self.agent_lists_with_active(), true).await;
     }
 

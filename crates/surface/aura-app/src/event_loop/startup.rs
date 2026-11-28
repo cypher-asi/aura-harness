@@ -65,6 +65,15 @@ impl Startup {
         }
     }
 
+    /// Nothing left to run: a loop past its startup.
+    #[cfg(test)]
+    pub(super) fn finished() -> Self {
+        Self {
+            steps: VecDeque::new(),
+            restored: None,
+        }
+    }
+
     /// Whether the next step may run now: one is left and no UI event
     /// waits, as the user's input always goes first.
     pub(super) fn may_run(&self, state: &LoopState<'_>) -> bool {

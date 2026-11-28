@@ -117,6 +117,8 @@ pub(super) struct BarEnd {
     /// the first button
     pub tabs: u16,
     pub icon: Option<Rect>,
+    /// A second icon tab's cell, left of `icon` (see [`bar_end_led`])
+    pub lead: Option<Rect>,
     pub scope: Option<Rect>,
     pub expand: Option<Rect>,
 }
@@ -138,13 +140,28 @@ pub(super) struct BarEnd {
 /// its tabs; under [`SCOPE_MIN_WIDTH`] it has no buttons.
 pub(super) fn bar_end<T: Copy + PartialEq>(
     bar: Rect,
+    end: (Option<&str>, bool, bool),
+    layout: impl Fn(u16) -> TabLayout<T>,
+) -> BarEnd {
+    bar_end_led(bar, None, end, layout)
+}
+
+/// [`bar_end`] with a second icon tab, `lead`, in a cell of its own left
+/// of the icon's: the agents panel's Integrations plug before BENCH's
+/// wrench.
+pub(super) fn bar_end_led<T: Copy + PartialEq>(
+    bar: Rect,
+    lead: Option<&str>,
     (icon, scope, expand): (Option<&str>, bool, bool),
     layout: impl Fn(u16) -> TabLayout<T>,
 ) -> BarEnd {
     let room = bar.width >= SCOPE_MIN_WIDTH && bar.height > 0;
-    let icon = icon
-        .filter(|_| room)
-        .map(|icon| u16::try_from(display_width(icon)).unwrap_or(u16::MAX));
+    let width_of = |icon: Option<&str>| {
+        icon.filter(|_| room)
+            .map(|icon| u16::try_from(display_width(icon)).unwrap_or(u16::MAX))
+    };
+    let (icon, lead) = (width_of(icon), width_of(lead));
+    let icon = (icon, lead);
     let scope = scope && room;
     let expand = expand && bar.width >= EXPAND_MIN_WIDTH && bar.height > 0;
     // Padded buttons without the expand button leave the tabs about the
@@ -161,7 +178,7 @@ pub(super) fn bar_end<T: Copy + PartialEq>(
 /// `padding` columns wider than its label.
 fn lay_out_end(
     bar: Rect,
-    (icon, scope, expand): (Option<u16>, bool, bool),
+    ((icon, lead), scope, expand): ((Option<u16>, Option<u16>), bool, bool),
     padding: u16,
 ) -> BarEnd {
     let row = label_row(bar);
@@ -178,9 +195,11 @@ fn lay_out_end(
     let expand = place(expand.then_some(1));
     let scope = place(scope.then_some(1));
     let icon = place(icon);
+    let lead = place(lead);
     BarEnd {
         tabs: (right + 1).saturating_sub(bar.x).min(bar.width),
         icon,
+        lead,
         scope,
         expand,
     }
@@ -273,6 +292,8 @@ pub(super) struct PanelHeader<'a, T> {
     pub scope: Option<ScopeButton>,
     /// A tab drawn as its icon, left of any scope button
     pub icon_tab: Option<IconTab<T>>,
+    /// A second tab drawn as its icon, left of `icon_tab`
+    pub lead_icon: Option<IconTab<T>>,
     pub focused: bool,
     /// Whether the front end draws the bar: the grid keeps only its frame
     pub hosted: bool,
@@ -327,6 +348,7 @@ impl<T: HostTab> PanelHeader<'_, T> {
                 .filter_map(|cell| cell.tab.pane_tab())
                 .collect(),
             icon_tab: self.icon_tab.and_then(|icon| icon.tab.pane_tab()),
+            lead_icon_tab: self.lead_icon.and_then(|icon| icon.tab.pane_tab()),
             active: self.active.and_then(HostTab::pane_tab),
             title: self.title.map(str::to_string),
             info: self.info.as_ref().map(|info| info.text.clone()),

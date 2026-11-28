@@ -34,6 +34,7 @@
 //!   says so ([`CloudDelivery::HostBound`]), and then only as boxd's
 //!   placeholder.
 
+pub mod builtin;
 mod context;
 mod error;
 mod id;

@@ -128,6 +128,32 @@ pub(in crate::event_loop) async fn save_now(state: &LoopState<'_>) {
     }
 }
 
+/// After a loop event: save as [`save_now`] does, paced
+/// ([`crate::event_loop::pacing`]): at most once per interval, without
+/// waiting for the write. What the loop changed within the interval is
+/// saved once it is over. Saves something waits on are not paced: mail
+/// filed ([`persist`]) and the loop's last ([`flush_saved`]).
+pub(in crate::event_loop) async fn save_paced(state: &LoopState<'_>) {
+    let pacing = &state.hub.loop_work.saves;
+    if !pacing.ask() {
+        return;
+    }
+    if pacing.is_paced() {
+        // The writes are numbered: one handed out later never loses to
+        // this one, so it needn't be waited for.
+        drop(keep_saved(state));
+    } else {
+        save_now(state).await;
+    }
+}
+
+/// The loop's paced save is due: save, without waiting for the write.
+pub(in crate::event_loop) fn save_due(state: &LoopState<'_>) {
+    if state.hub.loop_work.saves.take_due() {
+        drop(keep_saved(state));
+    }
+}
+
 /// [`save_now`] without waiting: the write's handle, `None` when
 /// nothing changed.
 pub(in crate::event_loop) fn keep_saved(

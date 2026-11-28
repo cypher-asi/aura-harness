@@ -41,6 +41,7 @@ fn fake(id: &str, slow: bool) -> Arc<Fake> {
         kind: FieldKind::Choice(vec!["eu".to_string(), "us".to_string()]),
         required: false,
         default: Some("eu".to_string()),
+        advanced: false,
     }];
     manifest.tools = vec![ToolSpec {
         name: "echo".to_string(),
@@ -370,4 +371,23 @@ async fn views_list_every_integration_with_its_status() {
     assert!(views[1].status.is_connected() && views[1].stored);
     assert_eq!(views[1].config[0].1.as_deref(), Some("eu"));
     assert_eq!(views[1].access, Access::AllAgents);
+}
+
+#[tokio::test]
+async fn tools_where_follows_the_connected_snapshot_and_access() {
+    let registry = Arc::new(registry_with(&[fake("svc", false)]));
+    let svc = IntegrationId::new("svc").unwrap();
+    assert!(registry.tools_where(("a", None), |_| false).is_empty());
+    assert_eq!(registry.tools_where(("a", None), |id| id == &svc).len(), 1);
+    registry
+        .set_access(
+            "svc",
+            Access::Only {
+                agents: Vec::new(),
+                channels: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(registry.tools_where(("a", None), |_| true).is_empty());
 }

@@ -68,6 +68,43 @@ pub(super) fn wrench(out: &mut Vec<Quad>, rect: Rectangle, size: (f32, f32), ink
     fill(out, x, neck, handle, top + height - neck, ink);
 }
 
+/// A plug standing up in the middle of `rect`: two prongs over a body
+/// as wide as [`wrench`]'s head, and a cord under its middle. As wide as
+/// [`computer`]'s screen, `2 * arm + line` pixels, and a third taller;
+/// its width and height take the box's parity, so its margins match.
+pub(super) fn plug(out: &mut Vec<Quad>, rect: Rectangle, size: (f32, f32), ink: Color) {
+    let (arm, line) = size;
+    let mut width = 2.0 * arm + line;
+    if (rect.width - width).rem_euclid(2.0) != 0.0 {
+        width -= 1.0;
+    }
+    let mut height = (width * 4.0 / 3.0).round();
+    if (rect.height - height).rem_euclid(2.0) != 0.0 {
+        height -= 1.0;
+    }
+    let centered = |wanted: f32| wanted + (width - wanted).rem_euclid(2.0);
+    let cord = centered(line);
+    let prong = line.max(1.0);
+    let prongs = (height * 0.3).round().max(2.0 * line);
+    let body = (height * 0.4).round().max(3.0 * line);
+    let left = rect.x + ((rect.width - width) / 2.0).floor();
+    let top = rect.y + ((rect.height - height) / 2.0).floor();
+    // The prongs a third of the way in from each side.
+    let inset = (width / 4.0).round();
+    fill(out, left + inset, top, prong, prongs, ink);
+    fill(out, left + width - inset - prong, top, prong, prongs, ink);
+    fill(out, left, top + prongs, width, body, ink);
+    let neck = top + prongs + body;
+    fill(
+        out,
+        left + (width - cord) / 2.0,
+        neck,
+        cord,
+        top + height - neck,
+        ink,
+    );
+}
+
 /// Three bars centered in `rect`, about `arm` pixels each way from the
 /// middle, strokes `line` pixels thick. The glyph is laid out from the
 /// box's edges rather than from a rounded middle, which lands half a
@@ -205,6 +242,44 @@ mod tests {
                 assert_eq!(top, bottom, "centered down a box of {side}");
                 assert!(left > 0 && top > 0, "inside a box of {side}");
             }
+        }
+    }
+
+    #[test]
+    fn the_plug_sits_in_the_middle_of_its_box_across_and_down() {
+        for side in [22, 23, 24, 25] {
+            for arm in [4.0, 5.0] {
+                let [left, right, top, bottom] = margins_of(side, |out, rect| {
+                    plug(out, rect, (arm, 1.0), ink());
+                    assert_eq!(out.len(), 4, "two prongs, the body, the cord");
+                });
+                assert_eq!(left, right, "centered across a box of {side}");
+                assert_eq!(top, bottom, "centered down a box of {side}");
+                assert!(left > 0 && top > 0, "inside a box of {side}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_plugs_prongs_stand_apart_over_its_cord() {
+        for side in [23_u8, 24] {
+            let rect = Rectangle::new(Point::new(10.0, 20.0), Size::new(f32::from(side), 23.0));
+            let mut out = Vec::new();
+            plug(&mut out, rect, (5.0, 1.0), ink());
+            let [prong, other, body, cord] = [out[0], out[1], out[2], out[3]];
+            assert_eq!((prong.w, prong.h), (other.w, other.h), "prongs alike");
+            assert!(other.x > prong.right(), "a gap between the prongs");
+            let middle = |q: &Quad| 2 * i64::from(q.x) + i64::from(q.w);
+            assert_eq!(middle(&cord), middle(&body), "cord under the body's middle");
+            assert_eq!(
+                i64::from(prong.x) - i64::from(body.x),
+                i64::from(body.right()) - i64::from(other.right()),
+                "prongs as far in from each side"
+            );
+            assert!(
+                prong.y < body.y && cord.y > body.y,
+                "prongs on top, cord below"
+            );
         }
     }
 

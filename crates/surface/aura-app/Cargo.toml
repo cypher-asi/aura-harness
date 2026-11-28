@@ -28,6 +28,7 @@ aura-auth = { path = "../../auth/aura-auth" }
 aura-auth-kit = { path = "../../auth/aura-auth-kit" }
 aura-engine = { path = "../../engine/aura-engine" }
 aura-engine-cloud = { path = "../../engine/aura-engine-cloud" }
+aura-engine-integrations = { path = "../../engine/aura-engine-integrations" }
 aura-engine-registry = { path = "../../engine/aura-engine-registry" }
 aura-core-auth = { path = "../../core/aura-core-auth" }
 aura-core-protocol = { path = "../../core/aura-core-protocol" }
@@ -82,6 +83,9 @@ aura-engine-cloud = { path = "../../engine/aura-engine-cloud", features = ["test
 # client tests.
 aura-node = { path = "../aura-node", features = ["test-support"] }
 tower = { workspace = true }
+# The load harness runs the real terminal UI on a test screen.
+aura-ui-terminal = { path = "../../ui/aura-ui-terminal" }
+ratatui = { workspace = true }
 # `test-util` enables tokio's paused-clock test helpers
 # (`#[tokio::test(start_paused = true)]`), so the shutdown-grace tests of
 # `session::SessionTask::finish` run without real waits. Tests only; the

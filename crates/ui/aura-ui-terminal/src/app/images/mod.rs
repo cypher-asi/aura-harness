@@ -399,7 +399,10 @@ impl App {
         self.clear_selection();
         let prompt = matches!(
             self.chat_state,
-            AppState::LoginEmail | AppState::LoginPassword | AppState::LinkCode
+            AppState::LoginEmail
+                | AppState::LoginPassword
+                | AppState::LinkCode
+                | AppState::IntegrationInput
         );
         if prompt {
             self.insert_text(text.trim().replace(['\r', '\n'], "").as_str());

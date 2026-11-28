@@ -64,6 +64,23 @@ async fn open(dir: &Path, integrator: Arc<dyn Integrator>) -> MergeQueue {
         .unwrap()
 }
 
+/// Whether `queue`'s processor lock can be taken within a few seconds.
+/// It is free the moment its processor drops it, but a child process
+/// another test starts holds a copy of every open file until it execs,
+/// the lock's too, so under load it can look held for a moment after.
+async fn lock_frees(queue: &MergeQueue) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if queue.processor().await.unwrap().is_some() {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 /// `queue`'s processor, recovered; panics when another holds it.
 async fn processor(queue: &MergeQueue) -> (Processor, Vec<MergeEntry>) {
     let processor = queue.processor().await.unwrap().expect("the lock is free");
@@ -219,10 +236,7 @@ async fn the_processor_merges_pushes_as_they_arrive_until_cancelled() {
     assert_eq!(finished, ["a", "b"]);
     cancel.cancel();
     processor.await.unwrap();
-    assert!(
-        queue.processor().await.unwrap().is_some(),
-        "the lock goes with the processor"
-    );
+    assert!(lock_frees(&queue).await, "the lock goes with the processor");
 }
 
 /// Never finishes, but has landed: the merge was pushed when time ran out.

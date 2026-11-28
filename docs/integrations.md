@@ -48,11 +48,15 @@ An integration is two things:
     - `CliLogin { program, login, token }`, a CLI sign-in such as
       `gh auth login`, optionally also taking a token;
     - `OAuth { authorize_url, scopes }`, declared only for now.
-  - `config: Vec<ConfigField { key, label, kind, required, default }>`,
-    where `kind` is `Text`, `Url`, `Bool` or `Choice(..)`. Values are
-    checked against their kind when set.
+  - `config: Vec<ConfigField { key, label, kind, required, default, advanced }>`
+    (`ConfigField::new` sets the common defaults), where `kind` is `Text`,
+    `Url`, `Bool`, `Choice(..)` or `Number { min, max, integer }`. Values
+    are checked against their kind when set. An `advanced` field (an API
+    URL override, say) is hidden in the panel until it is set.
   - `tools: Vec<ToolSpec { name, description, input_schema, effect, timeout }>`,
-    where `effect` is `Read` or `Write`.
+    where `effect` is `Read`, `Write`, `Spends` or `Destroys`. `timeout`
+    replaces the registry's limit for that tool (a job that waits for its
+    result).
   - `cloud: CloudDelivery`, either `Never` (the default) or
     `HostBound { env }` (see below).
 - **An [`Integration`]** (`src/integration.rs`), a trait:
@@ -61,7 +65,7 @@ An integration is two things:
     or `Misconfigured { why }`. It is local and quick, with no network.
     The default, `default_status`, is "connected when a credential is
     there", and says where the credential came from;
-  - `health(&ctx) -> Result<HealthReport>`: one real call that proves the
+  - `health(&ctx) -> Result<HealthReport { summary, detail }>`: one real call that proves the
     credential and config work. It is the panel's **Test**, and what
     **Connect** runs before storing anything;
   - `call_tool(&ctx, tool, args) -> Result<Value>`: runs a tool by its
@@ -155,6 +159,60 @@ hub.
 - A tool can set its own limit (`ToolSpec::timeout`).
 - Running past the limit is `IntegrationError::Timeout`. A status that
   runs past it shows as `Misconfigured` instead of hanging the panel.
+
+## GitHub and boxd
+
+The first two integrations live in `src/builtin/` and are listed by
+`builtin(BuiltinOptions { github_app })`. Neither changes how its service
+works today: each only describes what aura already uses, checks it, and
+adds a sealed place for a token or key entered in the panel.
+
+| | GitHub (`github`) | boxd (`boxd`) |
+|---|---|---|
+| Sign-in | `CliLogin { gh auth login }`, or a token (`GH_TOKEN`, `GITHUB_TOKEN`, or stored) | `ApiKey` (`BOXD_TOKEN`, `BOXD_API_KEY`, which `.env` sets at startup, or stored) |
+| Status (local) | A token (stored, then env), else `gh auth token` succeeding, run with a time limit and its output dropped. It adds "GitHub App set for cloud pushes" when `AURA_GITHUB_APP_*` is set | A key from the store or the environment |
+| Test | `GET <api_url>/user`, else `gh api user` | An API key (`bxd_…`) is exchanged at `<console_url>/api/v1/auth/token`, as cloud mode does; a `BOXD_TOKEN` is used as is |
+| Config | `api_url` (default `https://api.github.com`) | `console_url` (default `https://app.boxd.sh`) |
+| Tools | none yet | none |
+| Cloud | `Never`: the GitHub App's installation tokens still reach machines through `aura-engine-cloud` (host-bound secrets) | `Never`: boxd's key stays on the hub |
+
+### In the app
+
+`aura-app/src/integrations/` owns the process's `Registry`:
+- It opens right after the local store, whose key it seals with. When the
+  key can't be read, credentials are kept in memory for the session, with
+  a WARN; they are never written in plain text.
+- Kernels are built synchronously, so the service keeps a snapshot of
+  which integrations are connected (`refresh`, at startup and after every
+  change). Each agent's executor gets the tools that snapshot and the
+  agent's `Access` allow. Each call checks both again.
+- The REPO tab reads GitHub's stored token after `GH_TOKEN` and
+  `GITHUB_TOKEN`.
+
+## The Integrations panel
+
+The plug icon `🔌` in the agents panel's header, just left of BENCH's
+wrench, opens INTEGRATIONS in the terminal and in the desktop app. It
+uses the same icon cell, tooltip and active state as BENCH.
+
+- **Each row:** a dot for its state (`●` connected in the success colour,
+  `○` not connected, `●` failed in the error colour, `●` busy in the
+  warning colour), then its icon, name and description.
+- **The selected row** adds its status, its last action's result, what it
+  provides, and its actions: **Connect**, **Configure**, **Test** and
+  **Disconnect**. Click one, or press `c` `e` `t` `d`.
+  - Connect asks for the key in the input, masked. A CLI login says what
+    to run instead.
+  - Configure asks for a setting's value (`key=value` when there are
+    several).
+- **The wiring:** `UiCommand::SetIntegrations` carries `IntegrationView`s
+  (`aura-ui` `events/views/integrations.rs`), and `UiEvent::Integration
+  { id, action }` carries the action. `IntegrationAction`'s `Debug` hides
+  a Connect's key. aura-app runs each action off the event loop
+  (`integrations/ui.rs`), refreshes the connected snapshot, and sends the
+  list back.
+- **Code:** terminal `app/apps/integrations.rs`,
+  `renderer/agents/integrations.rs`; desktop `chrome/glyphs.rs` `plug`.
 
 ## How to add an integration
 
@@ -291,7 +349,21 @@ These are not done yet:
   keychain) is still plain `0600` JSON and should be sealed the same way.
 - **aura-os trusted integrations** (`resolver/trusted`) and **plugin
   connectors** should be listed through the same registry.
-- **The mode gate should learn integration tools**, so `Read` tools run
-  in plan and ask mode.
+- **The mode gate and approvals should learn integration tools.** Today
+  the kernel treats any tool it doesn't know as a network call, so every
+  integration tool, a `Read` one included, runs in agent mode only and
+  asks under `ask` and `strict`. The registry should hand each tool's
+  `ToolEffect` to the kernel, so `Read` tools run without asking and
+  `Spends`/`Destroys` ones always ask.
+- **Integration tools in the model's tool list.** The list is built once
+  at startup (`harness::agent_tools`), and executors get the tools from
+  the connected snapshot. Listing them per turn, so that one connected
+  mid-session reaches the model at once, is still to do.
+- **Channel access in the app.** Kernels pass no channel id yet, so
+  `Access::Only { channels }` only applies where a caller passes one.
+- **boxd's sealed key in cloud mode.** Cloud mode still reads its key from
+  the environment and `.env`. A key stored in the panel shows as
+  connected and passes Test, but cloud mode starts with it only once
+  `aura cloud setup` and `CloudConfig` read the sealed store.
 - **OAuth sign-in flows** (`AuthKind::OAuth` is declared only), and
   **GitHub agent tools** (pull requests, issues).

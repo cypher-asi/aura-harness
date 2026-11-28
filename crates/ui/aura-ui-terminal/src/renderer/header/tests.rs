@@ -31,6 +31,7 @@ fn chat_header(width: u16, focused: bool, hovered: Option<usize>) -> PanelHeader
         expand: None,
         scope: None,
         icon_tab: None,
+        lead_icon: None,
         focused,
         hosted: false,
     }
@@ -101,6 +102,7 @@ fn hosted_tabbed_bars_tell_the_front_end_their_tabs() {
         expand: None,
         scope: None,
         icon_tab: None,
+        lead_icon: None,
         focused: true,
         hosted: true,
     };
@@ -134,6 +136,7 @@ fn hosted_titled_bars_tell_the_front_end_their_title_and_info() {
         expand: None,
         scope: None,
         icon_tab: None,
+        lead_icon: None,
         focused: false,
         hosted: true,
     };
@@ -166,6 +169,7 @@ fn untabbed_bars_show_the_title_and_shorten_the_info() {
         expand: None,
         scope: None,
         icon_tab: None,
+        lead_icon: None,
         focused: false,
         hosted: false,
     };
@@ -192,6 +196,7 @@ fn tabs_with_an_info_cell_keep_the_count_on_the_right() {
         expand: None,
         scope: None,
         icon_tab: None,
+        lead_icon: None,
         focused: false,
         hosted: false,
     };
@@ -221,6 +226,7 @@ fn closable_bars_end_in_a_close_button_lit_under_the_pointer() {
         expand: None,
         scope: None,
         icon_tab: None,
+        lead_icon: None,
         focused: true,
         hosted: false,
     };
@@ -299,6 +305,7 @@ fn side_header(
             hovered: false,
             cell: end.scope,
         }),
+        lead_icon: None,
         icon_tab: Some(IconTab {
             tab: SidePanelTab::Host,
             icon: SidePanelTab::Host.icon().unwrap(),
@@ -450,6 +457,7 @@ fn the_expand_button_sits_left_of_a_close_button() {
         }),
         scope: None,
         icon_tab: None,
+        lead_icon: None,
         focused: true,
         hosted: false,
     };
