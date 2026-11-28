@@ -164,3 +164,43 @@ fn project_defaults_persist() {
     .expect("hub");
     assert_eq!(again.project_default("p1"), Placement::Cloud);
 }
+
+#[tokio::test]
+async fn a_turn_is_marked_before_its_prompt_goes_out_and_unmarked_if_it_never_did() {
+    use crate::hub::marks::TurnMark;
+    let (hub, fake, dir) = hub();
+    let agent = AgentId::new([7; 32]);
+    let hex = agent.to_hex();
+    adopt_machine(&hub, &fake, agent, dir.path(), None).await;
+    let mark = |run: &str| TurnMark {
+        run_id: run.into(),
+        started_ms: 0,
+        head: 3,
+        label: "Fix the build".into(),
+        model: None,
+        titled: false,
+    };
+
+    let sent = hub
+        .send_marked(agent, mark("run-1"), async {
+            // A hub that dies here, as the prompt goes out, leaves the
+            // turn marked for the next to follow.
+            assert!(hub.turn_marked(&hex), "marked before the send");
+            Ok::<(), ()>(())
+        })
+        .await;
+    assert!(sent.is_ok());
+    assert!(hub.turn_marked(&hex), "marked while it runs");
+    hub.end_turn_mark(agent, "run-1");
+
+    let failed = hub
+        .send_marked(agent, mark("run-2"), async {
+            Err::<(), _>("socket closed")
+        })
+        .await;
+    assert_eq!(failed, Err("socket closed"));
+    assert!(
+        !hub.turn_marked(&hex),
+        "a prompt never sent started no turn"
+    );
+}
