@@ -11,6 +11,7 @@ fn pane(which: Pane, area: Rect, tabs: Vec<PaneTab>) -> PaneChrome {
         active: tabs.first().copied(),
         tabs,
         icon_tab: None,
+        lead_icon_tab: None,
         title: None,
         info: None,
         info_short: None,
@@ -421,4 +422,24 @@ fn a_dialogs_backdrop_covers_the_bars_and_the_hamburger() {
     assert!(model.covered);
     assert!(model.side_toggle.is_none());
     assert!(Layout::of(&model).bands.is_empty());
+}
+
+#[test]
+fn the_integrations_plug_is_a_box_just_left_of_benchs_wrench() {
+    let (mut model, bench) = agents_with_bench();
+    let integrations = PaneTab::Agents(AgentsTab::Integrations);
+    model.panes[0].lead_icon_tab = Some(integrations);
+    let layout = Layout::of(&model);
+    let bar = &layout.bars[0];
+    let (wrench, _) = bar.icon_tab.expect("room for the wrench");
+    let (plug, tab) = bar.lead_icon_tab.expect("room for the plug");
+    assert_eq!(tab, integrations);
+    assert!((plug.width - wrench.width).abs() < f32::EPSILON, "same box");
+    assert!(plug.x + plug.width < wrench.x, "left of the wrench");
+    let last = bar.boxes.last().expect("the tabs are drawn");
+    assert!(last.rect.x + last.rect.width < plug.x);
+    let middle = Point::new(plug.center_x(), plug.center_y());
+    assert_eq!(layout.hit(middle), Some(Hit::Tab(integrations)));
+    let middle = Point::new(wrench.center_x(), wrench.center_y());
+    assert_eq!(layout.hit(middle), Some(Hit::Tab(bench)));
 }

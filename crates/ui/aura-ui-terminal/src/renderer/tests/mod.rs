@@ -12,6 +12,7 @@ fn test_theme() -> Theme {
     Theme::cyber()
 }
 
+mod integrations_panel;
 mod support;
 use support::*;
 
@@ -21,6 +22,7 @@ mod agent_error_red;
 mod agent_failures;
 mod agents_header;
 mod bench_icon;
+mod big_paste;
 mod channel_history;
 mod channel_history_typed;
 mod channel_info;
@@ -50,6 +52,7 @@ mod plan_badge;
 mod record_info;
 mod reply_footer;
 mod roster;
+mod running_group_fold;
 mod side_panel;
 mod side_panel_tabs;
 mod sign_ins;

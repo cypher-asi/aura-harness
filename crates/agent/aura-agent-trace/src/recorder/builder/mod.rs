@@ -390,6 +390,10 @@ impl StepBuilder {
         self.started.clear();
         self.proposed.clear();
         self.pending_causes.clear();
+        // Tool use ids are the turn's own; a run of many turns would
+        // otherwise keep every one it saw.
+        self.cache_hits.clear();
+        self.blocked.clear();
         step
     }
 }

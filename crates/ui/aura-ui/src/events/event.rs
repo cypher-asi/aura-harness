@@ -400,6 +400,15 @@ pub enum UiEvent {
     /// User left the channel that was open
     CloseChannel,
 
+    /// The user asked something of an integration in the Integrations
+    /// panel; `Refresh` with any id asks for the whole list again
+    Integration {
+        /// Integration id
+        id: String,
+        /// What was asked
+        action: crate::events::IntegrationAction,
+    },
+
     /// The QUEUE tab of a channel reached its end with older merges not
     /// shown: send it another page of them
     LoadOlderMerges {

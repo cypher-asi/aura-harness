@@ -151,6 +151,7 @@ fn render_detail_bar(
         expand,
         scope: None,
         icon_tab: None,
+        lead_icon: None,
         focused,
         hosted,
     };
@@ -200,6 +201,7 @@ fn render_tab_bar(
         expand,
         scope: None,
         icon_tab: None,
+        lead_icon: None,
         focused: is_focused,
         hosted,
     };

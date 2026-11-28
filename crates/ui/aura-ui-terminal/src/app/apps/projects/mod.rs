@@ -6,7 +6,7 @@ mod folders;
 mod mouse;
 mod tree;
 
-use crate::app::{follow_selection, App, ProjectListRow};
+use crate::app::{App, ProjectListRow};
 use crate::terminal::KeyResult;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
@@ -17,7 +17,9 @@ impl App {
     /// and gaps are stepped over in the direction of travel, or the other
     /// way at the end of the list.
     pub(in crate::app) fn select_agent_row(&mut self, row: usize) {
-        self.project_list.scroll_detached = false;
+        self.panels
+            .wheel
+            .release(crate::app::wheel_views::WheelList::Projects);
         let rows = self.project_rows();
         if rows.is_empty() {
             self.project_list.selected = 0;
@@ -53,7 +55,9 @@ impl App {
     /// Act on the highlighted projects-list row: fold a project, switch to
     /// an agent, or create one from "+ New project".
     pub(in crate::app) fn activate_agent_row(&mut self) {
-        self.project_list.scroll_detached = false;
+        self.panels
+            .wheel
+            .release(crate::app::wheel_views::WheelList::Projects);
         match self.project_rows().get(self.project_list.selected).copied() {
             Some(ProjectListRow::Project { root, .. }) => self.toggle_project(root),
             Some(ProjectListRow::Agent { index }) => {
@@ -80,7 +84,9 @@ impl App {
     /// folds over them, any other agent row folds the project that
     /// contains it, as does a project's header.
     pub(in crate::app) fn toggle_selected_fold(&mut self) {
-        self.project_list.scroll_detached = false;
+        self.panels
+            .wheel
+            .release(crate::app::wheel_views::WheelList::Projects);
         let root = match self.project_rows().get(self.project_list.selected).copied() {
             Some(ProjectListRow::Project { root, .. }) => Some(root),
             Some(ProjectListRow::Agent { index }) if self.agent_has_spawns(index) => {
@@ -104,7 +110,9 @@ impl App {
     /// any agent in it or its header, even an agent that could fold over
     /// its own spawns.
     pub(in crate::app) fn toggle_selected_project(&mut self) {
-        self.project_list.scroll_detached = false;
+        self.panels
+            .wheel
+            .release(crate::app::wheel_views::WheelList::Projects);
         let root = match self.project_rows().get(self.project_list.selected).copied() {
             Some(ProjectListRow::Project { root, .. }) => Some(root),
             Some(ProjectListRow::Agent { index }) => self.project_root(index),
@@ -150,16 +158,12 @@ impl App {
     pub fn sync_agents_scroll(&mut self, visible_rows: usize) {
         let total = self.listed_project_rows();
         let visible = visible_rows.max(1);
-        self.project_list.scroll = if self.project_list.scroll_detached {
-            self.project_list.scroll.min(total.saturating_sub(visible))
-        } else {
-            follow_selection(
-                self.project_list.scroll,
-                self.project_list.selected,
-                visible,
-                total,
-            )
-        };
+        let list = &self.project_list;
+        self.project_list.scroll = self.panels.wheel.place(
+            crate::app::wheel_views::WheelList::Projects,
+            (list.scroll, list.selected),
+            (visible, total),
+        );
     }
 
     /// Projects-list rows that scroll: all but the pinned "+ New project".
@@ -205,7 +209,9 @@ impl App {
         } else {
             scroll
         };
-        self.project_list.scroll_detached = true;
+        self.panels
+            .wheel
+            .detach(crate::app::wheel_views::WheelList::Projects);
     }
 
     /// Get the selected agent index.
@@ -233,11 +239,9 @@ impl App {
                 self.input.text.insert(self.input.cursor_pos, c);
                 self.input.cursor_pos += 1;
             }
-            KeyCode::Backspace => {
-                if self.input.cursor_pos > 0 {
-                    self.input.cursor_pos -= 1;
-                    self.input.text.remove(self.input.cursor_pos);
-                }
+            KeyCode::Backspace if self.input.cursor_pos > 0 => {
+                self.input.cursor_pos -= 1;
+                self.input.text.remove(self.input.cursor_pos);
             }
             _ => {}
         }

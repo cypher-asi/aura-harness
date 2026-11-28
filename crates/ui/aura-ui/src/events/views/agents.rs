@@ -87,6 +87,10 @@ pub struct AgentSummary {
     /// machine, which must end before this one starts
     #[serde(default)]
     pub waiting: bool,
+    /// Whether Aura is reconnecting to the turn running on its cloud
+    /// machine, as it does after a restart
+    #[serde(default)]
+    pub reconnecting: bool,
 }
 
 impl AgentSummary {

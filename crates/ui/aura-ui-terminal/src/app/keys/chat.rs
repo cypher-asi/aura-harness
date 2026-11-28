@@ -9,7 +9,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 impl App {
     /// Handle key when chat panel is focused.
     pub(in crate::app) fn handle_chat_key(&mut self, key: KeyEvent) -> KeyResult {
-        if self.chat_scroll_edge_key(key) {
+        if self.chat_scroll_edge_key(key) || self.input_edge_key(key) {
             return KeyResult::continue_running();
         }
         if let Some(edit) = self.edit_input(key) {
@@ -59,15 +59,47 @@ impl App {
         true
     }
 
+    /// Ctrl+Up and Ctrl+Down put the cursor at the input's start or end,
+    /// and the box follows it there. Returns whether the key was used.
+    fn input_edge_key(&mut self, key: KeyEvent) -> bool {
+        if !key.modifiers.contains(KeyModifiers::CONTROL) {
+            return false;
+        }
+        self.input.cursor_pos = match key.code {
+            KeyCode::Up => 0,
+            KeyCode::Down => self.input.text.len(),
+            _ => return false,
+        };
+        // Drop where the wheel left the box, even with the cursor already
+        // at that end, so the box shows it.
+        self.input.input_view = None;
+        true
+    }
+
     /// Up in the prompt: the line above, or the previous history entry.
+    /// A typed draft of several rows is not history: Up on its first row
+    /// only goes to its start, as Down on its last only goes to its end.
     fn chat_up_key(&mut self) {
         if self.move_cursor_line(true) {
+            return;
+        }
+        if !self.history().is_browsing() && self.is_multi_row_input() {
+            self.input.cursor_pos = 0;
             return;
         }
         if let Some(prev) = self.history().previous().map(str::to_string) {
             self.input.text = prev;
             self.input.cursor_pos = self.input.text.len();
             self.input.slash_dismissed = true;
+        }
+    }
+
+    /// Whether the input takes more than one row: wrapped as the box drew
+    /// it last frame, else by its typed lines.
+    fn is_multi_row_input(&self) -> bool {
+        match self.areas.input_wrap {
+            Some(width) => crate::input_wrap::row_starts(&self.input.text, width).len() > 1,
+            None => self.input.text.contains('\n'),
         }
     }
 

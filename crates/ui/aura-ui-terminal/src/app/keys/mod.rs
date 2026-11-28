@@ -77,6 +77,7 @@ impl App {
             AppState::LoginEmail | AppState::LoginPassword | AppState::LinkCode => {
                 self.handle_login_key(key)
             }
+            AppState::IntegrationInput => self.handle_integration_input_key(key),
             _ => self.handle_normal_key(key),
         }
     }

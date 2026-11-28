@@ -28,6 +28,7 @@ aura-auth = { path = "../../auth/aura-auth" }
 aura-auth-kit = { path = "../../auth/aura-auth-kit" }
 aura-engine = { path = "../../engine/aura-engine" }
 aura-engine-cloud = { path = "../../engine/aura-engine-cloud" }
+aura-engine-integrations = { path = "../../engine/aura-engine-integrations" }
 aura-engine-registry = { path = "../../engine/aura-engine-registry" }
 aura-core-auth = { path = "../../core/aura-core-auth" }
 aura-core-protocol = { path = "../../core/aura-core-protocol" }

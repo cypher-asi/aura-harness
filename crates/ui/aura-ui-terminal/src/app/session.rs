@@ -110,6 +110,7 @@ impl App {
                 AppState::LoginEmail
                     | AppState::LoginPassword
                     | AppState::LinkCode
+                    | AppState::IntegrationInput
                     | AppState::SelectingFolder
                     | AppState::ChannelForm
             )

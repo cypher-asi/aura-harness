@@ -47,6 +47,8 @@ pub struct PanelAreas {
     pub agent_tabs: Option<Rect>,
     /// BENCH's icon, at the right end of the agents panel's header bar
     pub agent_icon_tab: Option<Rect>,
+    /// INTEGRATIONS' icon, left of BENCH's
+    pub agent_lead_icon: Option<Rect>,
     /// Rows of the roster inside the agents panel
     pub definition_rows: Option<Rect>,
     /// "+ New agent", pinned to the bottom of the agents panel

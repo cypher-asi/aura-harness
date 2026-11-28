@@ -199,6 +199,8 @@ async fn open_workspace(
     let store = crate::local_store::open(&data_dir, &store_path)
         .await
         .with_context(|| format!("opening {}", store_path.display()))?;
+    // After the store: it made the key the integrations seal with.
+    crate::integrations::open(&data_dir);
     let agents = aura_store_db::AgentStore::for_store(&store);
     let mut registry =
         AgentRegistry::open(agents, &data_dir, &root).context("loading agent registry")?;

@@ -93,7 +93,9 @@ impl App {
         let items = self.with_workspace_item(&target, items);
         self.focus = PanelFocus::Swarm;
         self.project_list.selected = index;
-        self.project_list.scroll_detached = false;
+        self.panels
+            .wheel
+            .release(crate::app::wheel_views::WheelList::Projects);
         self.context_menu = Some(ContextMenu::new(target, items, Position::new(column, row)));
         true
     }

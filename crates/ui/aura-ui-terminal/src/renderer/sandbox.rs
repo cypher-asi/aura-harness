@@ -57,6 +57,7 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
             hovered: app.hover() == Some(HoverTarget::SideScope),
             cell: end.scope,
         }),
+        lead_icon: None,
         icon_tab: icon_tab.zip(icon).map(|(tab, icon)| header::IconTab {
             tab,
             icon,

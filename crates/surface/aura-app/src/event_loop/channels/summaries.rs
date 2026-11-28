@@ -117,6 +117,10 @@ pub(crate) fn prompts_of(history: &[MessageData]) -> Vec<(u64, String)> {
         .collect()
 }
 
+/// Most summaries held in memory beside the store; read again from it
+/// past that.
+const MAX_KEPT: usize = 2_000;
+
 /// The kept summaries and the texts being summarized.
 #[derive(Debug)]
 pub(crate) struct PostSummaries {
@@ -198,14 +202,25 @@ impl PostSummaries {
                 return None;
             }
         };
-        lock(&self.kept).insert(key.to_string(), summary.clone());
+        self.remember(key.to_string(), summary.clone());
         Some(summary)
+    }
+
+    /// Keep `summary` in memory. With a store, which has every summary,
+    /// the memory holds at most [`MAX_KEPT`] and starts over past it;
+    /// without one it is the only copy and keeps them all.
+    fn remember(&self, key: String, summary: String) {
+        let mut kept = lock(&self.kept);
+        if self.store.is_some() && kept.len() >= MAX_KEPT {
+            kept.clear();
+        }
+        kept.insert(key, summary);
     }
 
     /// Keep `summary` of the text keyed `key`.
     pub(crate) async fn put(&self, key: String, summary: String) {
         self.migrate().await;
-        lock(&self.kept).insert(key.clone(), summary.clone());
+        self.remember(key.clone(), summary.clone());
         let Some(store) = self.store.clone() else {
             return;
         };

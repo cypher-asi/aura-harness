@@ -235,6 +235,7 @@ mod boundaries;
 mod github;
 pub(super) mod mail;
 mod mail_acks;
+mod reconnects;
 mod seeding;
 mod spawns;
 mod updates;
