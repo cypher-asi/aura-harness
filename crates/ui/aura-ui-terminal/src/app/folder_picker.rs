@@ -81,11 +81,15 @@ impl FolderPicker {
         self.new_folder.as_deref()
     }
 
-    /// Keep the highlight inside a list `visible` rows tall, returning the
-    /// first row to show.
-    pub fn sync_scroll(&mut self, visible: usize) -> usize {
-        self.scroll = super::follow_selection(self.scroll, self.selected, visible, self.rows.len());
+    /// The first row shown.
+    pub(crate) const fn scroll(&self) -> usize {
         self.scroll
+    }
+
+    /// Show the list from row `scroll`, as the wheel or the next frame
+    /// put it.
+    pub(crate) const fn set_scroll(&mut self, scroll: usize) {
+        self.scroll = scroll;
     }
 
     /// Move the highlight `delta` rows, clamped to the list.
