@@ -55,6 +55,7 @@ pub(crate) use side::CHANNEL_MEMBER_ROWS;
 pub(crate) use welcome::ChannelWelcome;
 
 use crate::app::scroll::{ChatPlace, InfoScroll};
+use crate::app::wheel_views::WheelList;
 use crate::app::{AgentsTab, App, ChatTab, SidePanelTab};
 use crate::events::{ChannelPostView, ChannelSummary, MergeQueueView, UiEvent};
 use ratatui::layout::Rect;
@@ -373,6 +374,8 @@ impl App {
             self.channels.info_scroll = InfoScroll::default();
             self.channels.queue_scroll = InfoScroll::default();
             self.channels.history.reset();
+            self.panels.wheel.release(WheelList::ChannelHistory);
+            self.panels.wheel.release(WheelList::ChannelMembers);
         }
         self.apps.channel = Some(id.to_string());
         self.channels.selected = row;
