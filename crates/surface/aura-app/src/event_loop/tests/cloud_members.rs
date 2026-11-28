@@ -165,8 +165,9 @@ async fn a_member_whose_machine_did_not_start_fails_and_runs_nothing_here() {
     notices::handle_notice(&mut state, notices.try_recv().unwrap()).await;
     assert!(!state.hub.is_working(member));
 
-    // The start fails, or takes too long.
+    // The start fails, or takes too long, past the recovery's retries.
     let why = "the machine did not start within 20 minutes";
+    state.hub.recovery.exhaust_start_retries(member);
     state.cloud.fail_test_start(member, why);
     cloud::handle_ended(&mut state, cloud::Ended::Move(member)).await;
 

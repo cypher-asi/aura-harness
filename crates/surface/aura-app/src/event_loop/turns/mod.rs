@@ -180,6 +180,8 @@ pub(super) struct WorkDone {
     pub unseen: Vec<(SteerSource, String)>,
     /// Models Gate picked whose route refused the user's sign-in or plan.
     pub refused_models: Vec<String>,
+    /// How its turn went, for the recovery
+    pub health: super::recover::TurnHealth,
 }
 
 /// Run `task` on `session` in the background, reporting to `ui`, and send
@@ -214,6 +216,7 @@ pub(super) fn spawn(
                 failure: outcome.failure,
                 unseen: outcome.unseen,
                 refused_models: outcome.refused,
+                health: outcome.health,
             })
             .await;
     });
@@ -225,6 +228,7 @@ struct Outcome {
     failure: Option<String>,
     unseen: Vec<(SteerSource, String)>,
     refused: Vec<String>,
+    health: super::recover::TurnHealth,
 }
 
 async fn run(
@@ -405,6 +409,7 @@ async fn finish(session: &mut AgentSession, ran: Ran, turn: &TurnParts<'_>) -> O
             .await;
     }
     let stopped = cancelled || forwarded.credentials_rejected;
+    let health = turn_health(&result, &forwarded, cancelled);
     let settled = ending.map(|ending| ending.settle(&result, stopped));
     end_request(session, &result, cancelled).await;
     let failure = match result {
@@ -429,6 +434,25 @@ async fn finish(session: &mut AgentSession, ran: Ran, turn: &TurnParts<'_>) -> O
         failure,
         unseen,
         refused,
+        health,
+    }
+}
+
+/// How a turn that ended in `result` went, for the recovery: nothing to
+/// recover from in a turn the user `cancelled`.
+fn turn_health(
+    result: &Result<aura_agent::AgentLoopResult, aura_agent::AgentError>,
+    forwarded: &ForwarderState,
+    cancelled: bool,
+) -> super::recover::TurnHealth {
+    if cancelled {
+        return super::recover::TurnHealth::default();
+    }
+    let ended = result.as_ref().ok();
+    super::recover::TurnHealth {
+        trouble: super::recover::Trouble::of_turn(result, forwarded.credentials_rejected),
+        model_worked: ended.is_some_and(|ended| ended.llm_error.is_none()),
+        llm_error: ended.and_then(|ended| ended.llm_error.clone()),
     }
 }
 

@@ -117,6 +117,10 @@ pub(in crate::event_loop) async fn refused(state: &LoopState<'_>, agent: AgentId
 /// next free to; else the first item on this computer. Nothing starts
 /// while it moves.
 pub(in crate::event_loop) async fn start_queued(state: &mut LoopState<'_>, agent: AgentId) {
+    // A held agent's queue waits for the recovery to let it go.
+    if state.hub.recovery.is_held(agent) {
+        return;
+    }
     while !state.cloud.is_running(agent) && !state.cloud.is_moving(agent) {
         let Some(work) = state.queued.pop_front(agent) else {
             return;

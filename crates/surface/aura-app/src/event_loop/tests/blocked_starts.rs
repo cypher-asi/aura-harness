@@ -16,6 +16,8 @@ const COMPILE: &str = "`cargo test --workspace --no-run` on aura-proj-575d-build
 /// member, and the notices its senders get.
 async fn failed_member(fixture: &Fixture, state: &mut LoopState<'_>, transient: bool) -> AgentId {
     let member = fixture.second;
+    // Past the recovery's retries of its start: what follows them.
+    fixture.hub.recovery.exhaust_start_retries(member);
     subagents::lock(&fixture.hub.cloud_members).insert(member);
     state.cloud.begin_test_move(member);
     state.hub.status.begin_start(member);

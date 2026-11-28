@@ -95,6 +95,10 @@ const RECONNECTING: &str = "Reconnecting…";
 /// Before why a member's work failed.
 const FAILED: &str = "Failed";
 
+/// What a member's second row says while the model refused its sign-in
+/// and it waits, its work kept, for one that works.
+pub(super) const WAITING_FOR_SIGN_IN: &str = "Waiting for sign-in";
+
 /// Draw the open channel's members into `inner`, the body below the tab
 /// bar of the panel bordered by `area`. Without an open channel there is
 /// nothing to draw.
@@ -253,6 +257,9 @@ fn member_status(app: &App, member: &AgentSummary, theme: &Theme) -> (String, Co
             super::member_tooltip::starting_status(member),
             theme.colors.muted,
         );
+    }
+    if member.waiting_for_sign_in {
+        return (WAITING_FOR_SIGN_IN.to_string(), theme.colors.warning);
     }
     if member.waiting {
         return (WAITING.to_string(), theme.colors.muted);

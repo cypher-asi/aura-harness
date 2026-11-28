@@ -49,6 +49,10 @@ pub(in crate::event_loop) async fn start_in_cloud(
     if !may_start(state, agent, cause).await {
         return false;
     }
+    // The user asking for a start gives it its retries afresh.
+    if cause == StartCause::User {
+        crate::event_loop::recover::started(state, agent);
+    }
     // A channel without a project it can use keeps its members in the
     // launch project, whose folder is not theirs to take to a machine.
     if lock(&state.hub.hidden_members).contains(&agent) {
@@ -75,6 +79,8 @@ pub(in crate::event_loop) async fn start_in_cloud(
         },
         Err(why) => why,
     };
+    // No cloud to reach (no sign-in or key for it) is not a start a retry
+    // fixes: it fails as before.
     fail_cloud_start(state, agent, &why, Some(&console)).await;
     false
 }
@@ -86,16 +92,58 @@ pub(in crate::event_loop) async fn settle_start(state: &mut LoopState<'_>, agent
     let failed = state.cloud.shared.failed_starts.lock().remove(&agent);
     let Some(failure) = failed else {
         state.hub.status.unblock_start(agent);
+        crate::event_loop::recover::started(state, agent);
         return false;
     };
-    fail_cloud_start(state, agent, &failure.why, None).await;
     // A start its project failed (it doesn't build) fails again the same
     // way: work sent meanwhile doesn't start it again for nothing.
     if !failure.transient {
         let now = aura_core_types::time::now_ms();
         state.hub.status.block_start(agent, &failure.why, now);
     }
+    if !hold_failed_start(state, agent, &failure.why, !failure.transient, None).await {
+        fail_cloud_start(state, agent, &failure.why, None).await;
+    }
     true
+}
+
+/// Hold `agent`, whose start failed because of `why` (its project's doing
+/// when `blocked`), for a retry with its work kept, telling its chat and
+/// row so. Returns whether it is held: past the retries' cap it is not.
+async fn hold_failed_start(
+    state: &LoopState<'_>,
+    agent: AgentId,
+    why: &str,
+    blocked: bool,
+    console: Option<&BootConsoleUi>,
+) -> bool {
+    let Some(retry) = crate::event_loop::recover::hold_start(state, agent, why, blocked) else {
+        return false;
+    };
+    let note = format!("{} {retry}", failed_start_note(why));
+    state.hub.status.fail(agent, &note);
+    let shown = match console {
+        Some(console) => console.end(false, note.clone()).await,
+        None => false,
+    };
+    if !shown {
+        AgentUi::new(state.commands.clone(), agent)
+            .send(UiCommand::ShowWarning(note))
+            .await;
+    }
+    state.hub.send_agent_list().await;
+    true
+}
+
+/// Start `agent` on a cloud machine again, its last start having failed:
+/// the recovery's retry. A start that can't begin is held again, or fails.
+pub(in crate::event_loop) async fn retry_start(state: &mut LoopState<'_>, agent: AgentId) {
+    if !lock(&state.hub.cloud_members).contains(&agent) || state.cloud.is_cloud(agent) {
+        // It runs somewhere already: its queue goes on there.
+        crate::event_loop::start_next(state, agent).await;
+        return;
+    }
+    start_in_cloud(state, agent, StartCause::Retry).await;
 }
 
 /// `agent`, a new member of a cloud channel, could not start on a cloud

@@ -95,6 +95,18 @@ pub(super) fn prompt_work(source: SteerSource, text: String, shown: bool) -> Wor
 /// Give `work` to `agent_id`: now if it is idle, else once its current
 /// work ends.
 pub(super) async fn submit(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
+    // A held agent keeps its work queued until the recovery lets it go;
+    // work the user sends it lets it go now.
+    if state.hub.recovery.is_held(agent_id) {
+        if is_the_users(&work) {
+            super::recover::release(state, agent_id);
+        } else {
+            info!(%agent_id, "Agent is held for recovery; queueing work");
+            state.queued.push_back(agent_id, work);
+            hud::send_queued(state, agent_id).await;
+            return;
+        }
+    }
     let Some(work) = cloud::submit(state, agent_id, work).await else {
         return;
     };
@@ -105,6 +117,14 @@ pub(super) async fn submit(state: &mut LoopState<'_>, agent_id: AgentId, work: W
         return;
     }
     start_work(state, agent_id, work).await;
+}
+
+/// Whether `work` is the user's own: a typed message or command.
+fn is_the_users(work: &Work) -> bool {
+    match work {
+        Work::Prompt { prompt, .. } => prompt.mentions,
+        Work::Command { .. } | Work::Compact { .. } | Work::Build { .. } => true,
+    }
 }
 
 /// Force the oldest queued work of `agent_id` to run now: the running turn

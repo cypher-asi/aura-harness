@@ -103,6 +103,7 @@ impl AgentHub {
             standing: crate::event_loop::standing::Standings::default(),
             factory_flows: crate::event_loop::factory::Flows::default(),
             status: status::AgentStatus::default(),
+            recovery: crate::event_loop::recover::Recovery::default(),
             post_summaries,
             shown_chats: Mutex::default(),
             shown_records: Mutex::default(),

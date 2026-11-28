@@ -18,6 +18,13 @@ pub(in crate::event_loop) async fn handle_ended(state: &mut LoopState<'_>, ended
     if let Some(outcome) = outcome {
         lock(&state.hub.cloud_turns).remove(&agent);
         let ok = outcome.failure.is_none();
+        if !interrupted && held(state, agent, outcome.failure.as_deref()).await {
+            agents::send_agent_list(state).await;
+            return;
+        }
+        if ok {
+            crate::event_loop::recover::model_worked(state, agent).await;
+        }
         let messages = outcome.messages.as_deref().unwrap_or_default();
         let waits = crate::event_loop::factory::hooks::after_cloud_turn(
             state,
@@ -34,6 +41,19 @@ pub(in crate::event_loop) async fn handle_ended(state: &mut LoopState<'_>, ended
         refresh_machine_plans(state, agent);
     }
     crate::event_loop::start_next(state, agent).await;
+}
+
+/// Whether `agent`'s cloud turn, which failed because of `failure` if at
+/// all, is held for the recovery instead of failed: its trouble a pause
+/// or a retry may get past. A held turn settles nothing; its queue waits.
+async fn held(state: &LoopState<'_>, agent: AgentId, failure: Option<&str>) -> bool {
+    let Some(why) = failure.filter(|why| *why != super::submit::STOPPED) else {
+        return false;
+    };
+    match crate::event_loop::recover::Trouble::of_message(why) {
+        Some(trouble) => crate::event_loop::recover::hold_turn(state, agent, &trouble).await,
+        None => false,
+    }
 }
 
 /// How a cloud turn's asks are settled.
