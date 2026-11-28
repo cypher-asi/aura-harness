@@ -13,7 +13,7 @@
 //!    test is structured so a `cargo test -p aura-prompts` run
 //!    succeeds only when no such dependency was sneaked in.
 //! 3. **Workspace guard** —
-//!    [`tests/prompts_boundary.rs`](../../tests/prompts_boundary.rs)
+//!    [`tests/it/prompts_boundary.rs`](../../tests/it/prompts_boundary.rs)
 //!    re-runs the source-level scan plus a few related invariants
 //!    (the old `aura-agent/src/prompts/` directory must stay deleted,
 //!    no `crate::prompts::` references survive in `aura-agent`).

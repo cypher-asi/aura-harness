@@ -35,7 +35,7 @@
 //!
 //! These names are owned by this crate. No other crate in the workspace
 //! may call `std::env::var(...)` on them — the boundary is enforced by
-//! `tests/config_boundary.rs` at workspace root.
+//! `tests/it/config_boundary.rs` at workspace root.
 //!
 //! | Env var | Type | Default | Field |
 //! | --- | --- | --- | --- |

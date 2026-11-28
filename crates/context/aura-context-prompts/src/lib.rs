@@ -32,7 +32,7 @@
 //!
 //! Cargo.toml forbids `aura-agent`, `aura-engine-automaton`, `aura-node`,
 //! and `aura-reasoner` so the boundary can never regress at compile
-//! time. The workspace-level `tests/prompts_boundary.rs` test does a
+//! time. The workspace-level `tests/it/prompts_boundary.rs` test does a
 //! belt-and-suspenders source-level scan for forbidden imports.
 //!
 //! ## Surface

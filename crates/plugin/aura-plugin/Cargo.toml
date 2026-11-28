@@ -26,7 +26,7 @@ workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 tempfile = { workspace = true }
 
 # Tiny Rust stdio "MCP server" fixture binaries used by the
-# `tests/mcp_echo.rs` integration test. Defining them inside this
+# `tests/it/mcp_echo.rs` integration test. Defining them inside this
 # crate keeps the test portable across Unix and Windows (no per-OS
 # shell script fixtures) and gives the test stable
 # `CARGO_BIN_EXE_<name>` env var paths. They are test fixtures, not

@@ -305,7 +305,7 @@ aura-agent-trace = { path = "crates/agent/aura-agent-trace" }
 chrono = { workspace = true }
 aura-engine-automaton = { path = "crates/engine/aura-engine-automaton" }
 aura-exec-tools = { path = "crates/exec/aura-exec-tools" }
-# `tests/changelog_fragments.rs` checks the repo's changelog fragments.
+# `tests/it/changelog_fragments.rs` checks the repo's changelog fragments.
 aura-exec-merge-queue = { path = "crates/exec/aura-exec-merge-queue" }
 aura-core-protocol = { path = "crates/core/aura-core-protocol" }
 aura-core-modes = { path = "crates/core/aura-core-modes" }
@@ -315,7 +315,7 @@ aura-core-permissions = { path = "crates/core/aura-core-permissions" }
 aura-agent-subagent = { path = "crates/agent/aura-agent-subagent" }
 # The root binary no longer holds these deps directly (its body
 # lives in `aura-cli`), but the legacy
-# `tests/proptest_tests.rs`, `tests/e2e_*.rs` integration tests at
+# `tests/it/proptest_tests/` and `tests/it/e2e_*/` integration tests at
 # the root harness still consume the agent/terminal/auth surfaces
 # directly. Promoting them to dev-deps keeps the binary surface
 # slim without dropping the existing test coverage.
@@ -325,7 +325,7 @@ axum = { workspace = true }
 tokio-util = { workspace = true }
 parking_lot = { workspace = true }
 # Phase 9 golden CLI help-text snapshot test
-# (`tests/cli_golden.rs`) uses `insta` to pin the `--help` output
+# (`tests/it/cli_golden.rs`) uses `insta` to pin the `--help` output
 # of every documented `aura ...` subcommand.
 insta = { workspace = true }
 async-trait = { workspace = true }

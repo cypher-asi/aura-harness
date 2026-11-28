@@ -43,7 +43,7 @@ Within a layer, crates are listed leaves first.
 
 ### Dependency rules
 
-- A crate may depend on crates in the same layer or any lower layer. Upward edges fail CI via [tests/layer_boundary.rs](../tests/layer_boundary.rs); there are no allowlisted exceptions. Dev-dependencies only shape the test graph and are not checked.
+- A crate may depend on crates in the same layer or any lower layer. Upward edges fail CI via [tests/it/layer_boundary.rs](../tests/it/layer_boundary.rs); there are no allowlisted exceptions. Dev-dependencies only shape the test graph and are not checked.
 - A crate's layer comes from its name (`aura-<layer>-…`); only the surface crates are listed in the test's `KNOWN_CRATES` table.
 - Every crate sits in its layer's folder (`every_crate_lives_in_its_layer_folder`) and its `src/lib.rs` carries a matching `//! Layer: <layer>` tag (`every_crate_carries_a_matching_layer_doc_tag`).
 
@@ -243,7 +243,7 @@ A cloud agent's files and plans stay on its machine and are read there (`aura-en
 
 ### External contract
 
-External consumers (`aura-os`, any future client) talk to [`aura-node`](../crates/surface/aura-node) over the wire — `POST /v1/run` for submission, `WS /stream/:run_id` for events, the management endpoints (skills, memory, tool defaults, files, tx) for everything else. Workspace crates are internal packaging; no external `Cargo.toml` depends on them. `aura-os` keeps its own mirror of the `aura-core-protocol` wire types, so a wire change (such as `RuntimeRequest.mode`) has to land in both repositories. `tests/layer_boundary.rs::aura_node_reexports_canonical_wire_types` pins that the `POST /v1/run` + `WS /stream/:run_id` wire types stay reachable through `aura-node`.
+External consumers (`aura-os`, any future client) talk to [`aura-node`](../crates/surface/aura-node) over the wire — `POST /v1/run` for submission, `WS /stream/:run_id` for events, the management endpoints (skills, memory, tool defaults, files, tx) for everything else. Workspace crates are internal packaging; no external `Cargo.toml` depends on them. `aura-os` keeps its own mirror of the `aura-core-protocol` wire types, so a wire change (such as `RuntimeRequest.mode`) has to land in both repositories. `tests/it/layer_boundary.rs::aura_node_reexports_canonical_wire_types` pins that the `POST /v1/run` + `WS /stream/:run_id` wire types stay reachable through `aura-node`.
 
 ---
 
@@ -372,7 +372,7 @@ Declarative manifest schema, install pipeline, cache layout under `AURA_HOME/plu
 
 - [`api`](../crates/plugin/aura-plugin/src/api.rs): in-process contributor trait surface for first-party plugins. `PluginContributor`, `ContributionKind`, `PluginRoot`, `PluginId` (re-exported at the crate root). Not a dynamic loader — plugins are compiled in and registered at startup.
 - [`mcp`](../crates/plugin/aura-plugin/src/mcp): stdio MCP JSON-RPC client and a first-active-wins connection manager keyed by server id. Notable types: `McpClient`, `McpConnectionManager`, `ServerConfig`, `McpError`. The manager clears child environments before spawn and applies a per-request timeout so silent plugin-owned servers cannot pin the pool indefinitely.
-- [`connectors`](../crates/plugin/aura-plugin/src/connectors): thread-safe registry of plugin-contributed external endpoints. `ConnectorRegistry`, `ConnectorEntry`, `ConnectorError`. Last-wins registration semantics covered by [crates/plugin/aura-plugin/tests/connectors_last_wins.rs](../crates/plugin/aura-plugin/tests/connectors_last_wins.rs).
+- [`connectors`](../crates/plugin/aura-plugin/src/connectors): thread-safe registry of plugin-contributed external endpoints. `ConnectorRegistry`, `ConnectorEntry`, `ConnectorError`. Last-wins registration semantics covered by [crates/plugin/aura-plugin/tests/it/connectors_last_wins.rs](../crates/plugin/aura-plugin/tests/it/connectors_last_wins.rs).
 
 ---
 
@@ -615,7 +615,7 @@ Layout:
   - `auth_mw.rs` — bearer-token enforcing axum middleware.
   - `errors.rs` — `ApiError` JSON failure shape.
   - `handlers/` — per-endpoint bundles: `run.rs` (`POST /v1/run` + the lifecycle endpoints), `run_ws.rs` (`WS /stream/:run_id`), `files.rs`, `tx.rs`, `memory/`, `skills.rs`, `tool_permissions.rs`, `util.rs`.
-  - `session/` — per-WebSocket-connection state. `chat/` (bidirectional Chat-run handler), `child_kernel.rs` (session-scoped child-kernel factory), `cross_agent_hook/` (cross-agent callback path), `generation/` (router SSE generation proxy guarded by [`tests/generation_proxy_guard.rs`](../crates/surface/aura-node/tests/generation_proxy_guard.rs)), `helpers/` (session kernel policy, including `PolicyConfig::mode`, and registering the session as a root agent), `agent_inbox.rs` (mailbox for messages from spawned agents), `partial_json.rs`, `state/` (resolved session mode), `tool_approval.rs`.
+  - `session/` — per-WebSocket-connection state. `chat/` (bidirectional Chat-run handler), `child_kernel.rs` (session-scoped child-kernel factory), `cross_agent_hook/` (cross-agent callback path), `generation/` (router SSE generation proxy guarded by [`tests/generation_proxy_guard.rs`](../crates/surface/aura-node/tests/it/generation_proxy_guard.rs)), `helpers/` (session kernel policy, including `PolicyConfig::mode`, and registering the session as a root agent), `agent_inbox.rs` (mailbox for messages from spawned agents), `partial_json.rs`, `state/` (resolved session mode), `tool_approval.rs`.
 
 Backward-compat re-exports preserved at the crate root: `aura_node::scheduler::*` and `aura_node::memory_observer::*` now resolve to thin re-export modules over `aura_engine::*`. Internal callers should reach `aura-engine` directly.
 

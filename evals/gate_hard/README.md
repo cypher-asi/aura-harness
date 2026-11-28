@@ -9,7 +9,7 @@ combining characters, and cursor pagination with tied timestamps.
 this suite is where a cheap first attempt is most likely to be wrong.
 
 The layout is the same as `evals/gate_cost`: `workspace/`, hidden
-`checks/`, a reference `solution/`, and `tests/eval_suite.rs` proves each
+`checks/`, a reference `solution/`, and `tests/it/eval_suite.rs` proves each
 task fails as shipped and passes when solved.
 
 ```sh

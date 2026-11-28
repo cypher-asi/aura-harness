@@ -33,7 +33,7 @@
 //! `agent` (sits BELOW the agent loop). Direct dependencies are
 //! limited to `aura-core`, `aura-config`, `aura-prompts`, and
 //! `aura-reasoner` — no upward edge to `aura-agent`. The advisory
-//! `tests/layer_boundary.rs` check enforces this on every CI run.
+//! `tests/it/layer_boundary.rs` check enforces this on every CI run.
 
 #![forbid(unsafe_code)]
 

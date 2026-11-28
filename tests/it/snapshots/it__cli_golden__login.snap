@@ -1,0 +1,37 @@
+---
+source: tests/it/cli_golden.rs
+expression: help
+---
+Sign in to zOS, or link a Claude / ChatGPT plan
+
+Usage: aura login [OPTIONS] [PROVIDER]
+
+Arguments:
+  [PROVIDER]
+          `zos` (default) for cloud models via aura-router, `claude` / `chatgpt` to use your own plan directly, or `openrouter` for models billed to your OpenRouter credits
+          
+          [default: zos]
+
+Options:
+      --mode <MODE>
+          Session mode for the desktop window or terminal. Overrides the daemon default (`AURA_DEFAULT_MODE`); the kernel denies any tool call the mode does not allow
+
+          Possible values:
+          - agent: Full unrestricted operation subject to user permissions
+          - plan:  Read + markdown writes + read-only subprocesses
+          - ask:   Read-only (the terminal's `read-only` mode)
+          - debug: Read + sandboxed probes only
+
+      --paste
+          Paste the code shown by the provider instead of using a local browser redirect (for SSH and headless machines). For `openrouter`, an existing `sk-or-` API key may be pasted instead
+
+      --approval <APPROVAL>
+          What tool calls ask first: `yolo` runs everything with commands confined to writing inside the working folder, `ask` asks for anything not on the allow list, `strict` asks for everything but reads. Overrides `AURA_TUI_APPROVAL`; `-p` defaults to `yolo` in agent mode
+
+          Possible values:
+          - yolo:   Run everything; commands can write only inside the working folder
+          - ask:    Ask for anything not on the project's allow list
+          - strict: Ask for everything except reads, even what the allow list covers
+
+  -h, --help
+          Print help (see a summary with '-h')

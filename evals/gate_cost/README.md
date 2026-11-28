@@ -3,7 +3,7 @@
 Twenty small tasks for measuring what Gate saves and what it loses.
 Each task has a `workspace/` fixture, hidden `checks/` copied in only
 after the run (the agent never sees them), a `category`, and a reference
-`solution/` that `tests/eval_suite.rs` uses to prove every task fails as
+`solution/` that `tests/it/eval_suite.rs` uses to prove every task fails as
 shipped and passes when solved.
 
 Categories: `bugfix`, `feature`, `refactor`, `tests`, `docs`,

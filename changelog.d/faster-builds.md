@@ -21,3 +21,7 @@
 - `cargo test` runs doctests only in the two crates that have them, and
   links no test binary for the binaries and the libraries without unit
   tests.
+- Each crate's integration tests build as one binary, `tests/it/main.rs`,
+  instead of one per file, so `cargo test --workspace` links 18
+  integration-test binaries where it linked 63. Run one file's tests with
+  `cargo test -p <crate> --test it <file>::`.

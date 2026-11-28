@@ -12,7 +12,7 @@
 //! Each callable here either returns a `&'static str` (when the body
 //! has no runtime inputs) or a `String` produced by a small
 //! formatter. Consumers read through here so the
-//! [`tests/prompts_boundary.rs`] guardrail can hold the line "all
+//! [`tests/it/prompts_boundary.rs`] guardrail can hold the line "all
 //! model-facing strings under `aura-prompts/`".
 
 pub mod auto_build;

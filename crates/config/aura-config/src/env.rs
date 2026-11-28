@@ -1,7 +1,7 @@
 //! Centralized env-var names and parsing primitives.
 //!
 //! This module owns every env-var **name constant** that
-//! `aura-config` parses. The boundary test `tests/config_boundary.rs`
+//! `aura-config` parses. The boundary test `tests/it/config_boundary.rs`
 //! at the workspace root reads [`ENV_VAR_NAMES`] and asserts no crate
 //! other than `aura-config` calls `std::env::var(...)` on any of these
 //! names. Tests that need to mutate one of these vars must do so via
