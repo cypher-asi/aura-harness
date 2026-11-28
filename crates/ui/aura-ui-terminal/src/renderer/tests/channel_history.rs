@@ -136,7 +136,10 @@ fn test_history_rows_read_like_members_rows() {
     for row in y.saturating_sub(4)..y + 2 {
         for column in x - 4..x + 20 {
             let cell = &buffer[(column, row)];
-            assert!(!cell.modifier.contains(Modifier::BOLD), "bold at {column},{row}");
+            assert!(
+                !cell.modifier.contains(Modifier::BOLD),
+                "bold at {column},{row}"
+            );
         }
     }
 }
@@ -155,9 +158,8 @@ fn a_typed_message_and_a_plan_request_say_where_they_went() {
         summary: None,
         at_ms: 0,
     };
-    let detail = |kind, planner| {
-        super::super::channel_history::detail_text(&channel, &item(kind, planner))
-    };
+    let detail =
+        |kind, planner| super::super::channel_history::detail_text(&channel, &item(kind, planner));
     assert!(detail(HistoryKind::Typed, None).ends_with("· to the coordinator"));
     assert!(detail(HistoryKind::Plan, Some(planner)).ends_with("· plan · RUS3"));
     assert!(detail(HistoryKind::Plan, Some("gone".to_string())).ends_with("· plan"));

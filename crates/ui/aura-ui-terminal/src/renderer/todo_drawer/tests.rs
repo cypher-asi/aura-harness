@@ -353,7 +353,10 @@ fn an_opened_history_lists_its_items_even_under_four_open_ones() {
     assert!(row_with(&end, "✓ Step 28 ").is_some(), "{}", end.join("\n"));
     wheel(&mut app, (x, at + 2), MouseEventKind::ScrollUp);
     let back = rows(&mut app);
-    assert!(row_with(&back, "✓ Step 27 ").is_some(), "one notch back from the end");
+    assert!(
+        row_with(&back, "✓ Step 27 ").is_some(),
+        "one notch back from the end"
+    );
 }
 
 #[test]

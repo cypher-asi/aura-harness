@@ -139,6 +139,7 @@ pub use inbox::{InboxRow, ThreadView};
 use input_state::InputState;
 use kernel_link::KernelLink;
 pub use last_selection::{LastSelection, ProjectPick, SELECTION_FILE};
+pub use list_bands::{ListBand, ListPitch};
 use list_state::ListState;
 pub use members::{MemberRow, RecordsTab};
 pub use modal::{Dialog, ModalKind};
@@ -153,7 +154,6 @@ use pending::Pending;
 pub(crate) use plan_doc::{Fact, FactTone, PlanDoc, PlanFacts};
 pub use processes::SidePanelTab;
 use project_list::ProjectList;
-pub use list_bands::{ListBand, ListPitch};
 pub use prose::{ProseMeasure, ProseRow};
 use ratatui::{buffer::Buffer, layout::Rect};
 use record_list::RecordList;
@@ -326,8 +326,6 @@ pub struct App {
     pub(super) bench_panel: bench_progress::BenchPanel,
     /// The to-do drawer under the Chat body
     pub(super) todo_drawer: todo_drawer::TodoDrawer,
-    /// The list pitch and this frame's taller lists
-    pub(super) list_bands: list_bands::ListBands,
     /// The panel below the Record panel: its tab, scope, processes and
     /// scroll positions
     pub(super) side: SidePanel,

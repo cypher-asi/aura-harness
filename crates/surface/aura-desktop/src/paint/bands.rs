@@ -20,6 +20,7 @@ use super::brush::{Brush, Row};
 use super::{Painted, Painter};
 use crate::geom::Size;
 use crate::grid::Metrics;
+use crate::scene::{Layers, RowCache};
 use aura_ui_terminal::ListBand;
 use ratatui::buffer::Cell;
 use ratatui::layout::Position;
@@ -31,7 +32,10 @@ use std::ops::Range;
 pub(super) fn cut_bands(cuts: &mut Vec<usize>, bands: &[ListBand], y: u16, len: usize) {
     let before = cuts.len();
     for band in bands.iter().filter(|band| band.rows.contains(&y)) {
-        cuts.extend([usize::from(band.columns.start), usize::from(band.columns.end)]);
+        cuts.extend([
+            usize::from(band.columns.start),
+            usize::from(band.columns.end),
+        ]);
         for span in band.covered(y) {
             cuts.extend([usize::from(span.start), usize::from(span.end)]);
         }
@@ -93,7 +97,6 @@ impl Painter {
         let covered = band.covered(row.y).next().is_some();
         let drawn = covered.then(|| as_drawn(row.cells, band, row.y));
         let cells = drawn.as_deref().unwrap_or(row.cells);
-        let piece = &cells[columns.clone()];
         let shown = i32::from(band.shown);
         if k < shown {
             let mut stretched = Brush {
@@ -105,31 +108,36 @@ impl Painter {
                 palette: brush.palette,
                 origin: brush.origin,
             };
-            let quads = self.tall_rows.row(columns.start, piece, None, |out| {
-                let looks = stretched.looks(cells);
-                stretched.piece(out, &Row { cells, looks: &looks }, columns.clone(), None);
-            });
+            let quads = piece_quads(&mut self.tall_rows, &mut stretched, cells, columns);
             self.frame.extend_clipped(quads, band_top + k * tall, clip);
         } else {
             let at = band_top + shown * tall + (k - shown) * height;
-            let quads = self.rows.row(columns.start, piece, None, |out| {
-                let looks = brush.looks(cells);
-                brush.piece(out, &Row { cells, looks: &looks }, columns.clone(), None);
-            });
+            let quads = piece_quads(&mut self.rows, brush, cells, columns);
             self.frame.extend_clipped(quads, at, clip);
         }
-        let over = u16::try_from(columns.start).is_ok_and(|x| band.is_covered(x, row.y));
-        if over {
-            let cells = row.cells;
-            let quads = self
-                .rows
-                .row(columns.start, &cells[columns.clone()], None, |out| {
-                    let looks = brush.looks(cells);
-                    brush.piece(out, &Row { cells, looks: &looks }, columns.clone(), None);
-                });
+        if u16::try_from(columns.start).is_ok_and(|x| band.is_covered(x, row.y)) {
+            let quads = piece_quads(&mut self.rows, brush, row.cells, columns);
             self.top.extend_lowered(quads, row.top);
         }
     }
+}
+
+/// The quads of the piece `columns` of a row of `cells`, kept in `cache`
+/// and painted with `brush` the first time, with no prose.
+fn piece_quads<'c>(
+    cache: &'c mut RowCache,
+    brush: &mut Brush<'_>,
+    cells: &[Cell],
+    columns: &Range<usize>,
+) -> &'c Layers {
+    cache.row(columns.start, &cells[columns.clone()], None, |out| {
+        let looks = brush.looks(cells);
+        let row = Row {
+            cells,
+            looks: &looks,
+        };
+        brush.piece(out, &row, columns.clone(), None);
+    })
 }
 
 /// The grid cell drawn at `cell` once `bands` are stretched: `cell` is
@@ -137,9 +145,16 @@ impl Painter {
 /// of the grid's first row the point is, in pixels. Outside a band, or
 /// on what was drawn over one, it is `cell` itself.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-pub fn cell_in_bands(bands: &[ListBand], metrics: Metrics, cell: Position, offset: f32) -> Position {
+pub fn cell_in_bands(
+    bands: &[ListBand],
+    metrics: Metrics,
+    cell: Position,
+    offset: f32,
+) -> Position {
     let Some(band) = bands.iter().find(|band| {
-        band.rows.contains(&cell.y) && band.columns.contains(&cell.x) && !band.is_covered(cell.x, cell.y)
+        band.rows.contains(&cell.y)
+            && band.columns.contains(&cell.x)
+            && !band.is_covered(cell.x, cell.y)
     }) else {
         return cell;
     };

@@ -55,11 +55,17 @@ themes keep working:
 - Bold is for titles and headings, the active tab, the live tail's
   `Working` and status label, and the to-do being worked on. Prompts,
   project names, code block labels and the section titles of panel
-  bodies are regular weight.
+  bodies are regular weight. A channel's INFO, QUEUE and HISTORY have
+  nothing bold.
 
 ### Status Indicators
 
 - **Ready (`●`)** and **working (`⬢`)**: `success`
+- **Status dot**: an entry's state as `●` alone in its color, the text
+  beside it uncolored: `success` done or up, `warning` under way,
+  `muted` waiting, `error` failed, `faint` off. Every dot comes from
+  `components::StatusDot` (a channel's QUEUE, the integrations), so a
+  state is the same color everywhere.
 - **Waiting (`◐`)**: `warning`
 - **Error (`✗`)**: `error`
 - **Failed agent**: an agent that errored out is drawn in the Stop
@@ -239,10 +245,16 @@ What the rows are depends on what the tab shows:
   HISTORY) lists every message the user sent in the channel, newest
   first: those posted to members, those typed to the coordinator
   (read from its chat; a message sent to both is listed once) and its
-  `/plan` requests, which the channel's chat never shows, under a `muted` bold `Your messages` heading with a `faint`
-  `· N`. Each takes two rows: the message on one line in `foreground`,
-  line breaks folded into spaces, then its local time in `muted` (`20:31`
-  today, `11-27 20:31` before). A message over 80 characters shows its
+  `/plan` requests, which the channel's chat never shows. It is drawn
+  like MEMBERS, with no heading and nothing bold. Each message takes two
+  rows: a `list_row` with its kind in the `muted` icon column (`#` a
+  post to members, `→` typed to the coordinator, `P` a `/plan`
+  request) and the message on one line in `foreground`, line breaks
+  folded into spaces; then MEMBERS' second row
+  (`components::detail_row`), in `muted` under the text: its local time
+  (`20:31` today, `11-27 20:31` before) and where it went
+  (`· to members`, `· to the coordinator`, `· plan · RUS3`, the code
+  of the member planning it). A message over 80 characters shows its
   one-line model summary once it comes, until then the message cut at a
   word with `…`. The highlight and the pointer light the item as a
   `list_row` does. ⏎ or a click jumps the chat back to the message: it
@@ -250,10 +262,23 @@ What the rows are depends on what the tab shows:
   in `selection` on `on_selection` for 1.2 seconds; the focus stays on
   the list. A `/plan` request opens its planner's own chat instead,
   jumped and lit the same way, or says the planner has left. The wheel scrolls the list only, never the highlight.
-- **Info bodies** (POLICIES, HOST, a channel's INFO, the RECORD and
-  PROCESS views, a project's info box) describe one thing as a document
-  built with `components::Info`. The whole document scrolls with ↑↓,
-  PgUp/PgDn and Home/End.
+- **Info bodies** (POLICIES, HOST, a channel's INFO and QUEUE, the
+  RECORD and PROCESS views, a project's info box) describe one thing as
+  a document built with `components::Info`. The whole document scrolls
+  with ↑↓, PgUp/PgDn and Home/End.
+- **A channel's INFO** is sections only: its top is a `CHANNEL` section
+  with the `#slug`, the title and the description on indented lines
+  under it, as COORDINATOR, MEMBERS, PROJECT and AGENTS RUN have theirs.
+  Nothing on it is bold.
+- **A channel's QUEUE** is a `MERGES INTO  main` section with the repo's
+  folder under it, then a section per merge, newest first, headed by a
+  marked section: the status dot, the state and the short sha. The
+  branch has its own indented line, underlined in `foreground` when the
+  repo is on GitHub, and a click on it opens the branch there
+  (`https://github.com/owner/repo/tree/<branch>`); off GitHub it is
+  plain. The facts follow (Agent, Queued, Finished, Attempts, Merged,
+  Overlaps) and what happened, in `muted`. Only the dot has a color:
+  no text on QUEUE is bold or colored, a failure's detail included.
 
 ```text
 boxd · aura-re36-3f9c              title     bold foreground
@@ -264,6 +289,8 @@ RESOURCES  1 near full             section   secondary, then a muted note
   Disk      █████████░ 91%         bar       the accent, the rest faint
   ✓ read_file   on   per tool      marked    only the glyph colored
   `cargo test` commands            item      foreground, then a muted detail
+● MERGED  a1b2c3d                 marked    a status dot, then a section
+  aura/feat-parser                 link      foreground, underlined
 
 [p] pull changes  [s] sleep        actions   primary keys, muted labels
 ```
@@ -425,7 +452,14 @@ under a fold arrow, then the timeline, newest first.
   `/todos history` opens it (`▾`), listing each with its agent and
   `done` or `cancelled`. Up to ten rows show, starting at the item in
   progress so it stays in view and keeping the history row, with a
-  `muted` `+N more` row for the rest. It gives up rows before the queue, the benchmark panel and
+  `muted` `+N more` row for the rest. An opened history starts the rows
+  at its own row instead, so its items show however many are still
+  open, and the wheel over the drawer's rows scrolls them; elsewhere on
+  the chat the wheel scrolls the chat. A click on an item opens the
+  agent it was given to, as its MEMBERS row would; an item given to no
+  agent opens nothing. The drawer has no highlight, so no key opens an
+  item; on TASKS, a click and ⏎ both open the agent a row was given to
+  (a todo's task's agent, else its assignee), never the request's. It gives up rows before the queue, the benchmark panel and
   the chat on a short screen. A list with every item closed hides it;
   `/todos` brings it back with its history open.
 - **Input box**: as wide as the Chat panel, bordered like it, with a
@@ -575,3 +609,21 @@ Mono has no glyphs for them, and HOST's `🖥` as a square box left of the
 BENCH's `🔧` as a square box at the agents bar's end with an upright
 open-end wrench centered in it. Hovering either shows its name in a box
 under it, over the grid.
+
+Single-line lists (CHANNELS, PROJECTS, AGENTS, ARCHIVE, BENCH and the
+lists of the side and Kernel panels) are drawn 1.3 rows tall each, on
+whole pixels (`theme::list_row_height`). The terminal UI lays every such
+list out through `App::list_rows` (via `Body::list` or `split_pinned`):
+the desktop sets a `ListPitch` of its cell and list-row heights, the
+list draws in the rows that fit at it, and the window paints those rows
+stretched, the panel's borders with them, mapping the pointer back
+through them. What is drawn over a list later, a menu or a notice, is
+painted where the grid has it, unstretched. Two-row items (a channel's
+MEMBERS and HISTORY, the to-do drawer) and documents keep the grid's
+rows.
+
+A terminal's rows are whole cells, so there 1.3 rounds to 1 and lists
+keep one cell per row: a blank row under each (+100%) would halve what a
+list of 200 agents shows, and a blank row every third (+33%) makes the
+rhythm uneven and the highlight jump. Only the desktop draws the extra
+height, exactly.

@@ -159,8 +159,8 @@ impl ListBand {
 impl App {
     /// Draw single-line lists at `pitch` from the next frame on.
     pub fn set_list_pitch(&mut self, pitch: ListPitch) {
-        if self.list_bands.pitch != pitch {
-            self.list_bands.pitch = pitch;
+        if self.panels.list_bands.pitch != pitch {
+            self.panels.list_bands.pitch = pitch;
             self.request_redraw();
         }
     }
@@ -168,21 +168,22 @@ impl App {
     /// The lists drawn at the taller pitch in the last frame.
     #[must_use]
     pub fn list_bands(&self) -> &[ListBand] {
-        &self.list_bands.bands
+        &self.panels.list_bands.bands
     }
 
     /// The rows a single-line list in `panel` draws in, of the `rows` it
     /// was given: as many as fit at the list pitch, from the top. At a
     /// taller pitch the area is recorded as a band.
     pub(crate) fn list_rows(&mut self, panel: Rect, rows: Rect) -> Rect {
-        let pitch = self.list_bands.pitch;
+        let pitch = self.panels.list_bands.pitch;
         if !pitch.is_tall() || rows.height == 0 {
             return rows;
         }
         let shown = pitch.fit(rows.height);
         let left = panel.x.min(rows.x);
         let right = panel.right().max(rows.right());
-        self.list_bands
+        self.panels
+            .list_bands
             .bands
             .push(ListBand::new(left..right, rows.y..rows.bottom(), shown));
         Rect {
@@ -193,19 +194,19 @@ impl App {
 
     /// Forget last frame's bands, before the panels draw.
     pub(crate) fn clear_list_bands(&mut self) {
-        self.list_bands.bands.clear();
+        self.panels.list_bands.bands.clear();
     }
 
     /// Copy each band's cells, right after the panels drew them.
     pub(crate) fn capture_list_bands(&mut self, buffer: &Buffer) {
-        for band in &mut self.list_bands.bands {
+        for band in &mut self.panels.list_bands.bands {
             band.capture(buffer);
         }
     }
 
     /// Record what was drawn over each band after the panels.
     pub(crate) fn cover_list_bands(&mut self, buffer: &Buffer) {
-        for band in &mut self.list_bands.bands {
+        for band in &mut self.panels.list_bands.bands {
             band.cover(buffer);
         }
     }

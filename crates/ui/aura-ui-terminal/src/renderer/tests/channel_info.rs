@@ -111,15 +111,32 @@ fn test_channel_info_top_is_a_header_with_its_details_indented() {
     let rows = render_rows(&mut app, 140);
     let header = info_row(&rows, "CHANNEL ");
     let column = rows[header].find("CHANNEL").unwrap();
-    let at = |row: usize| rows[row][column..].split('│').next().unwrap_or("").to_string();
-    assert!(at(header + 1).starts_with("  #zode"), "{:?}", at(header + 1));
+    let at = |row: usize| {
+        rows[row][column..]
+            .split('│')
+            .next()
+            .unwrap_or("")
+            .to_string()
+    };
+    assert!(
+        at(header + 1).starts_with("  #zode"),
+        "{:?}",
+        at(header + 1)
+    );
     assert!(
         at(header + 2).starts_with("  Zode release"),
         "{:?}",
         at(header + 2)
     );
-    assert!(at(header + 3).starts_with("  Ship it"), "{:?}", at(header + 3));
-    assert!(at(header + 4).trim().is_empty(), "a blank row, then COORDINATOR");
+    assert!(
+        at(header + 3).starts_with("  Ship it"),
+        "{:?}",
+        at(header + 3)
+    );
+    assert!(
+        at(header + 4).trim().is_empty(),
+        "a blank row, then COORDINATOR"
+    );
     assert!(at(header + 5).starts_with("COORDINATOR"));
 
     // Nothing on INFO is bold, the title included.

@@ -115,10 +115,7 @@ fn click_text(app: &mut App, needle: &str) {
     let column = line.find(needle).map_or(0, |x| line[..x].chars().count());
     click_at(
         app,
-        (
-            u16::try_from(column).unwrap(),
-            u16::try_from(row).unwrap(),
-        ),
+        (u16::try_from(column).unwrap(), u16::try_from(row).unwrap()),
     );
 }
 

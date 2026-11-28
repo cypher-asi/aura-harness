@@ -47,7 +47,6 @@ impl App {
             queue_panel: queue_panel::QueuePanel::default(),
             bench_panel: bench_progress::BenchPanel::default(),
             todo_drawer: todo_drawer::TodoDrawer::default(),
-            list_bands: list_bands::ListBands::default(),
             side: SidePanel::default(),
             graph: graph::GraphState::default(),
             trace_feed: trace_feed::TraceFeed::default(),

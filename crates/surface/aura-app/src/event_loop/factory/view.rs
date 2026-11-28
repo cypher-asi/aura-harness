@@ -94,7 +94,13 @@ mod tests {
         assert_eq!(view.entries[0].agent.as_deref(), Some("RUS1"));
         assert_eq!(view.entries[0].state, MergeStateView::Queued);
         assert_eq!(view.web, None);
-        let linked = queue_view("main", "/repo", &state.entries, 7, Some("https://github.com/o/r".into()));
+        let linked = queue_view(
+            "main",
+            "/repo",
+            &state.entries,
+            7,
+            Some("https://github.com/o/r".into()),
+        );
         assert_eq!(linked.web.as_deref(), Some("https://github.com/o/r"));
         assert_eq!(
             linked.branch_url(&linked.entries[0].branch).as_deref(),

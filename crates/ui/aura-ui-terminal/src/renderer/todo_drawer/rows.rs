@@ -90,11 +90,7 @@ pub(super) fn rows_of(entries: &[Entry<'_>], shown: &[usize]) -> usize {
 /// Otherwise they start at the item in progress, so it stays in view,
 /// and keep the history row; the item in progress shows even in fewer
 /// rows than it takes, cut short.
-pub(super) fn fit(
-    entries: &[Entry<'_>],
-    room: usize,
-    start: Option<usize>,
-) -> (Vec<usize>, bool) {
+pub(super) fn fit(entries: &[Entry<'_>], room: usize, start: Option<usize>) -> (Vec<usize>, bool) {
     let all: Vec<usize> = (0..entries.len()).collect();
     if rows_of(entries, &all) <= room {
         return (all, false);
@@ -340,7 +336,6 @@ fn history_line(app: &App, open: bool, theme: &Theme) -> Line<'static> {
         Span::styled(count, Style::default().fg(theme.colors.faint)),
     ])
 }
-
 
 #[cfg(test)]
 mod tests;

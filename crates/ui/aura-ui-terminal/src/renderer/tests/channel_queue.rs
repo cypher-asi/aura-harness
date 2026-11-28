@@ -107,7 +107,11 @@ fn test_queue_tab_lists_every_merge_newest_first() {
     ] {
         assert!(rows[row].contains(head), "{}", rows[row]);
         assert!(!rows[row].contains(branch), "{}", rows[row]);
-        assert!(rows[row + 1].contains(branch), "its own line: {}", rows[row + 1]);
+        assert!(
+            rows[row + 1].contains(branch),
+            "its own line: {}",
+            rows[row + 1]
+        );
     }
     let queued = local(QUEUED_AT);
     let queued_row = line_with(&rows, &queued);
@@ -124,18 +128,22 @@ fn test_queue_tab_lists_every_merge_newest_first() {
     assert_eq!(rows.iter().filter(|r| r.contains("Attempts")).count(), 1);
 }
 
-#[test]
-fn test_queue_tab_marks_each_merge_by_a_dot_and_colors_no_text() {
-    use ratatui::style::Modifier;
-    let mut app = queue_app();
-    send_zode_queue(&mut app);
-    let theme = test_theme();
+/// The screen of `app`, tall enough for the whole queue.
+fn queue_buffer(app: &mut crate::App, theme: &crate::Theme) -> ratatui::buffer::Buffer {
     let mut terminal =
         ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, TALL)).unwrap();
     terminal
-        .draw(|frame| super::super::render(frame, &mut app, &theme))
+        .draw(|frame| super::super::render(frame, app, theme))
         .unwrap();
-    let buffer = terminal.backend().buffer().clone();
+    terminal.backend().buffer().clone()
+}
+
+#[test]
+fn test_queue_tab_marks_each_merge_by_a_dot() {
+    let mut app = queue_app();
+    send_zode_queue(&mut app);
+    let theme = test_theme();
+    let buffer = queue_buffer(&mut app, &theme);
     for (state, color) in [
         ("MERGED", theme.colors.success),
         ("FAILED", theme.colors.error),
@@ -143,15 +151,31 @@ fn test_queue_tab_marks_each_merge_by_a_dot_and_colors_no_text() {
     ] {
         let row = row_of(&buffer, state);
         let (x, cell) = find_cell(&buffer, row, state).unwrap();
-        assert_eq!(cell.fg, Some(theme.colors.secondary), "{state} is a section title");
+        assert_eq!(
+            cell.fg,
+            Some(theme.colors.secondary),
+            "{state} is a section title"
+        );
         let dot = &buffer[(x - 2, row)];
         assert_eq!(dot.symbol(), "●", "{state}");
         assert_eq!(dot.fg, color, "{state} dot");
     }
     let detail = row_of(&buffer, "cargo test failed");
     let (_, cell) = find_cell(&buffer, detail, "cargo test failed").unwrap();
-    assert_eq!(cell.fg, Some(theme.colors.muted), "what happened is not red");
+    assert_eq!(
+        cell.fg,
+        Some(theme.colors.muted),
+        "what happened is not red"
+    );
+}
 
+#[test]
+fn test_queue_tab_has_no_bold_or_colored_text() {
+    use ratatui::style::Modifier;
+    let mut app = queue_app();
+    send_zode_queue(&mut app);
+    let theme = test_theme();
+    let buffer = queue_buffer(&mut app, &theme);
     // No bold and no colored text anywhere on the tab: only the dots.
     let (x0, top) = {
         let row = row_of(&buffer, "MERGES INTO");
@@ -173,7 +197,11 @@ fn test_queue_tab_marks_each_merge_by_a_dot_and_colors_no_text() {
             if cell.symbol().trim().is_empty() || cell.symbol() == "●" {
                 continue;
             }
-            assert!(plain.contains(&cell.fg), "{:?} colored at {x},{y}", cell.symbol());
+            assert!(
+                plain.contains(&cell.fg),
+                "{:?} colored at {x},{y}",
+                cell.symbol()
+            );
         }
     }
 }
@@ -191,10 +219,7 @@ fn linked_queue(app: &mut crate::App, web: Option<&str>, branch: &str) -> (u16, 
     let rows = render_rows_sized(app, 140, TALL);
     let row = line_with(&rows, branch);
     let column = char_column(&rows[row], branch);
-    (
-        u16::try_from(column).unwrap(),
-        u16::try_from(row).unwrap(),
-    )
+    (u16::try_from(column).unwrap(), u16::try_from(row).unwrap())
 }
 
 #[test]
@@ -208,7 +233,11 @@ fn test_a_click_on_a_branch_opens_it_on_github() {
         ["https://github.com/o/r/tree/fix/escapes"]
     );
     // The header above it is no link.
-    mouse_at(&mut app, MouseEventKind::Down(MouseButton::Left), (at.0, at.1 - 1));
+    mouse_at(
+        &mut app,
+        MouseEventKind::Down(MouseButton::Left),
+        (at.0, at.1 - 1),
+    );
     assert_eq!(app.opened_links().len(), 1);
 }
 

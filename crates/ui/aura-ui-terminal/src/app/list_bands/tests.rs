@@ -4,6 +4,7 @@ use crate::events::{ChannelSummary, UiCommand};
 use ratatui::backend::TestBackend;
 use ratatui::style::Color;
 use ratatui::Terminal;
+use std::ops::Range;
 
 /// The pitch of a 14 px font: 18 px cells, list rows 1.3 as tall.
 const DESKTOP: ListPitch = ListPitch { cell: 18, tall: 23 };
@@ -75,11 +76,18 @@ fn channels_keep_their_highlight_in_the_rows_they_keep() {
             .collect()
     };
     let last_shown = band.rows.start + band.shown - 1;
-    assert!(text(last_shown).contains("chan39"), "{:?}", text(last_shown));
+    assert!(
+        text(last_shown).contains("chan39"),
+        "{:?}",
+        text(last_shown)
+    );
     for y in band.rows.start + band.shown..band.rows.end {
         let inside = text(y);
         let inside = inside.trim_matches(|c| c == '│' || c == ' ');
-        assert!(inside.is_empty(), "the rows under the list are blank: {inside:?}");
+        assert!(
+            inside.is_empty(),
+            "the rows under the list are blank: {inside:?}"
+        );
     }
     assert_eq!(band.row(band.rows.start).len(), band.columns.len());
 }
@@ -106,9 +114,15 @@ fn what_is_drawn_over_a_band_is_recorded_as_covered() {
         }
     }
     band.cover(&buffer);
-    assert_eq!(band.covered(2).collect::<Vec<_>>(), [4..8]);
+    let covered: Vec<Range<u16>> = band.covered(2).collect();
+    assert_eq!(covered.len(), 1);
+    assert_eq!(covered[0], 4..8);
     assert!(band.is_covered(5, 2));
     assert!(!band.is_covered(3, 2));
     assert!(!band.is_covered(5, 1));
-    assert_eq!(band.row(2)[3].symbol(), " ", "the copy keeps what was under");
+    assert_eq!(
+        band.row(2)[3].symbol(),
+        " ",
+        "the copy keeps what was under"
+    );
 }

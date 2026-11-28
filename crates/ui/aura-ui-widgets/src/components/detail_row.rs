@@ -44,8 +44,8 @@ pub fn detail_row<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::list_row::CellStyle;
+    use super::*;
     use crate::components::{list_row, StatusIcon};
 
     fn text(line: &Line<'_>) -> String {
@@ -79,7 +79,11 @@ mod tests {
             &theme,
         );
         let (name, detail) = (text(&name), text(&detail));
-        assert_eq!(name.find("coder"), detail.find("Fix"), "{name:?} {detail:?}");
+        assert_eq!(
+            name.find("coder"),
+            detail.find("Fix"),
+            "{name:?} {detail:?}"
+        );
         assert_eq!(detail.width(), 24);
     }
 

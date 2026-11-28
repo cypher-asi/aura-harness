@@ -66,9 +66,7 @@ use super::modals::placement_name;
 use super::side_list::render_empty;
 use super::text::display_width;
 use crate::app::{AgentRowEnd, HoverTarget, PanelFocus, CHANNEL_MEMBER_ROWS};
-use crate::components::{
-    cell_style, detail_row, tree_row, CellState, Info, StatusIcon, Value,
-};
+use crate::components::{cell_style, detail_row, tree_row, CellState, Info, StatusIcon, Value};
 use crate::events::{AgentSummary, ChannelSummary};
 use crate::host::PlacementView;
 use crate::{App, Theme};

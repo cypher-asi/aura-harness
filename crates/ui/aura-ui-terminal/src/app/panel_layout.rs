@@ -24,6 +24,8 @@ pub(crate) struct PanelLayout {
     pub(crate) channel_side_hidden: bool,
     /// The lists the wheel scrolled off their highlight
     pub(crate) wheel: super::wheel_views::WheelViews,
+    /// The list pitch, and the lists drawn at it this frame
+    pub(crate) list_bands: super::list_bands::ListBands,
 }
 
 impl Default for PanelLayout {
@@ -38,6 +40,7 @@ impl Default for PanelLayout {
             side_column_hidden: None,
             channel_side_hidden: false,
             wheel: super::wheel_views::WheelViews::default(),
+            list_bands: super::list_bands::ListBands::default(),
         }
     }
 }

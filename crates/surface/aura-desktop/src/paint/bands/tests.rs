@@ -1,3 +1,6 @@
+// Pixel positions become cells and back.
+#![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+
 use super::*;
 use crate::chrome::Chrome;
 use crate::grid::Palette;
@@ -81,7 +84,10 @@ fn paint(buffer: &Buffer, bands: &[ListBand]) -> (Vec<Quad>, i32) {
         canvas: None,
     };
     let mut text = TextSystem::new();
-    let quads = Painter::default().paint_with(&view, &mut text).quads.clone();
+    let quads = Painter::default()
+        .paint_with(&view, &mut text)
+        .quads
+        .clone();
     let top = (tab_bar::height(&metrics) + metrics.origin(view.size, COLS).y) as i32;
     (quads, top)
 }
@@ -106,7 +112,11 @@ fn a_bands_rows_are_painted_a_list_row_tall() {
     band.capture(&buffer);
     band.cover(&buffer);
     let (tall, top) = paint(&buffer, &[band]);
-    assert_eq!(fills(&tall, (200, 0, 0)), [(top + 23, 23)], "row 1 at 1 \u{d7} 23");
+    assert_eq!(
+        fills(&tall, (200, 0, 0)),
+        [(top + 23, 23)],
+        "row 1 at 1 \u{d7} 23"
+    );
 }
 
 #[test]

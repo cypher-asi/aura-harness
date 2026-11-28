@@ -214,7 +214,11 @@ fn a_link_is_an_indented_plain_line_whose_index_comes_back() {
     let at = info.link("aura/a-very-long-branch-name");
     let lines = info.into_lines();
     assert_eq!(at, 1);
-    assert!(text(&lines[at]).starts_with("  aura/"), "{:?}", text(&lines[at]));
+    assert!(
+        text(&lines[at]).starts_with("  aura/"),
+        "{:?}",
+        text(&lines[at])
+    );
     assert!(text(&lines[at]).ends_with('…'));
     let link = &lines[at].spans[1];
     assert_eq!(link.style.fg, Some(theme.colors.foreground));
