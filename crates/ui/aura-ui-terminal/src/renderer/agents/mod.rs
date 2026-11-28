@@ -35,7 +35,7 @@ pub(super) mod roster;
 
 use super::chrome::{render_body_block, render_scrollbar, ScrollView};
 use super::header::{self, PanelHeader};
-use crate::components::StatusIcon;
+use crate::components::{RowBadge, StatusIcon, PLAN_BADGE};
 use crate::{
     app::{AgentsTab, HoverTarget, Pane, PanelFocus},
     App, Theme,
@@ -135,6 +135,30 @@ fn draw_list(
         frame.render_widget(Paragraph::new(line), row);
     }
     render_scrollbar(frame, area, rows, view, focused, theme);
+}
+
+/// What follows an agent's name in every list it is in: `(P)` while it
+/// is in plan mode, then its cloud when it runs in the cloud, from
+/// [`App::cloud_badge`], gray, dimmer with the owner's name for another
+/// user's agent. The cloud shows whatever the agent is doing: a cloud
+/// member plans first, and its `(P)` must not hide where it runs.
+pub(super) fn agent_badge<'b>(
+    theme: &Theme,
+    plan_mode: bool,
+    cloud: Option<&'b (String, bool)>,
+) -> Option<RowBadge<'b>> {
+    let colors = &theme.colors;
+    let cloud = cloud.map(|(text, foreign)| {
+        let color = if *foreign { colors.faint } else { colors.muted };
+        (text.as_str(), color)
+    });
+    if plan_mode {
+        return Some(RowBadge {
+            then: cloud,
+            ..RowBadge::new(PLAN_BADGE, colors.success)
+        });
+    }
+    cloud.map(|(text, color)| RowBadge::new(text, color))
 }
 
 pub(super) fn aura_icon(app: &App) -> StatusIcon {

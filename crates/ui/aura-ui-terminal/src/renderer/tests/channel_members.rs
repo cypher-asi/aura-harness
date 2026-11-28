@@ -156,7 +156,7 @@ fn test_a_cloud_member_shows_a_cloud_after_its_name() {
 }
 
 #[test]
-fn test_a_member_in_plan_mode_shows_the_plan_badge_in_place_of_its_cloud() {
+fn test_a_member_in_plan_mode_shows_the_plan_badge_and_keeps_its_cloud() {
     use crate::events::UiCommand;
     use crate::PermissionMode;
     let set_mode = |mode| UiCommand::ForAgent {
@@ -170,8 +170,8 @@ fn test_a_member_in_plan_mode_shows_the_plan_badge_in_place_of_its_cloud() {
     app.process_command(set_mode(PermissionMode::Plan));
     let rows = render_rows(&mut app, 140);
     let planning = rows.iter().find(|row| row.contains("REN3")).unwrap();
-    assert!(planning.contains("rust-engineer (P)"), "{planning}");
-    assert!(!planning.contains('☁'), "plan mode wins, as on PROJECTS");
+    // A cloud member plans first: its (P) must not hide where it runs.
+    assert!(planning.contains("rust-engineer (P) ☁"), "{planning}");
     let buffer = render_buffer(&mut app, 140);
     assert_eq!(cell_at(&buffer, "(P)").fg, test_theme().colors.success);
 

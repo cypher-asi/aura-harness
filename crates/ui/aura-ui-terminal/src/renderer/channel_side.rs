@@ -57,7 +57,7 @@
 //! ```
 
 use super::agents::projects::spawn_guides;
-use super::agents::{working_icon, FAILED_ICON};
+use super::agents::{agent_badge, working_icon, FAILED_ICON};
 use super::chrome::{Body, ScrollView};
 use super::modals::placement_name;
 use super::side_list::render_empty;
@@ -65,8 +65,7 @@ use super::text::display_width;
 use crate::animation::AURA_WIDTH;
 use crate::app::{AgentRowEnd, HoverTarget, PanelFocus, CHANNEL_MEMBER_ROWS};
 use crate::components::{
-    cell_style, tree_row, truncate_record_info, CellState, Info, RowBadge, StatusIcon, Value,
-    PLAN_BADGE, ROW_INSET,
+    cell_style, tree_row, truncate_record_info, CellState, Info, StatusIcon, Value, ROW_INSET,
 };
 use crate::events::{AgentSummary, ChannelSummary};
 use crate::host::PlacementView;
@@ -178,7 +177,7 @@ fn member_rows<'a>(
         member_icon(app, (member, index), theme),
         (
             member_name(member),
-            member_badge(theme, member.plan_mode, cloud.as_ref()),
+            agent_badge(theme, member.plan_mode, cloud.as_ref()),
         ),
         cell,
         &end,
@@ -212,28 +211,6 @@ fn member_icon(app: &App, (member, index): (&AgentSummary, usize), theme: &Theme
     } else {
         StatusIcon::new("", theme.colors.muted)
     }
-}
-
-/// What follows a member's name, as on PROJECTS: `(P)` while it is in
-/// plan mode, which wins; else its cloud when it runs in the cloud, from
-/// [`App::cloud_badge`], gray, dimmer with the owner's name for another
-/// user's agent.
-fn member_badge<'b>(
-    theme: &Theme,
-    plan_mode: bool,
-    cloud: Option<&'b (String, bool)>,
-) -> Option<RowBadge<'b>> {
-    let colors = &theme.colors;
-    if plan_mode {
-        return Some(RowBadge {
-            text: PLAN_BADGE,
-            color: colors.success,
-        });
-    }
-    cloud.map(|(text, foreign)| RowBadge {
-        text,
-        color: if *foreign { colors.faint } else { colors.muted },
-    })
 }
 
 /// What a member's first row calls it: the permanent agent it is an
