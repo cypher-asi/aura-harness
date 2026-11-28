@@ -275,7 +275,7 @@ fn divider_row(rows: &[String]) -> usize {
 }
 
 /// A draft of `n` rows, "row 1" to "row n", one per line.
-fn numbered_rows(n: usize) -> String {
+pub(super) fn numbered_rows(n: usize) -> String {
     (1..=n)
         .map(|i| format!("row {i:02}"))
         .collect::<Vec<_>>()
@@ -283,7 +283,7 @@ fn numbered_rows(n: usize) -> String {
 }
 
 /// Whether the screen shows the draft row `row NN`.
-fn shows_row(rows: &[String], i: usize) -> bool {
+pub(super) fn shows_row(rows: &[String], i: usize) -> bool {
     let label = format!("row {i:02}");
     rows.iter().any(|r| r.contains(&label))
 }

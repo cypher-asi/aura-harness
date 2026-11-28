@@ -23,11 +23,14 @@
 //! Chat body, as a terminal's does (see `chat_panel::terminal`).
 
 mod inline;
+mod rows;
 mod spans;
 #[cfg(test)]
 mod wrap_tests;
 
 pub(super) use inline::show_input;
+use rows::shown_rows;
+pub(in crate::renderer) use rows::split_rows;
 pub(super) use spans::{chat_spans, prompt_spans, prose_spans};
 
 use super::text::display_width;
@@ -77,8 +80,12 @@ struct Plan<'a> {
     typing_x: u16,
     /// Columns the typed text wraps at.
     width: usize,
-    /// Rows of typed text, each at most the typing width.
+    /// The rows of typed text on screen, each at most the typing width:
+    /// only those of `shown`, so a draft of any length costs a box of
+    /// rows to style and cut.
     rows: Vec<Vec<Span<'static>>>,
+    /// Which of the text's rows are on screen.
+    shown: InputRows,
     /// Row and column of the cursor within `rows`.
     cursor: (usize, usize),
     /// Shown in place of the text while nothing is typed.
@@ -88,9 +95,13 @@ struct Plan<'a> {
     stop_x: Option<u16>,
 }
 
-/// Lay out the input in a box spanning `area`'s columns.
-fn plan<'a>(area: Rect, app: &'a App, theme: &Theme) -> Plan<'a> {
+/// Lay out the input in a box spanning `area`'s columns, `visible` rows
+/// of text tall.
+fn plan<'a>(area: Rect, app: &'a App, theme: &Theme, visible: usize) -> Plan<'a> {
     let shape = shape(area, app);
+    let shown = shown_rows(app, shape.cursor, shape.rows(), visible);
+    // Styling borrows the text, a span per token; only the rows on screen
+    // are cut out and owned.
     let spans = if shape.command {
         super::command::command_spans(&shape.display, theme)
     } else if shape.prompt == CHAT_PROMPT {
@@ -98,8 +109,8 @@ fn plan<'a>(area: Rect, app: &'a App, theme: &Theme) -> Plan<'a> {
     } else {
         prose_spans(&shape.display, theme)
     };
-    let mut rows = split_rows(super::command::owned(spans), &shape.starts);
-    rows.resize_with(shape.rows(), Vec::new);
+    let window = shown.top..(shown.top + shown.visible).min(shape.rows());
+    let rows = split_rows(&spans, &shape.starts, window);
 
     Plan {
         prompt: shape.prompt,
@@ -107,6 +118,7 @@ fn plan<'a>(area: Rect, app: &'a App, theme: &Theme) -> Plan<'a> {
         typing_x: shape.typing_x,
         width: shape.width,
         rows,
+        shown,
         cursor: shape.cursor,
         placeholder: shape.placeholder,
         stop_x: shape.stop_x,
@@ -233,36 +245,6 @@ fn stop_button_x(app: &App, typing_x: u16, right: u16) -> Option<u16> {
     (typing >= MIN_TYPING_WITH_STOP).then_some(x)
 }
 
-/// Cut `spans` into rows at the char offsets in `starts`, one row per
-/// start even when the text ends in a newline. Newlines count as chars for
-/// the offsets but are not drawn: ratatui would show them as a blank cell
-/// at best.
-fn split_rows(spans: Vec<Span<'static>>, starts: &[usize]) -> Vec<Vec<Span<'static>>> {
-    let mut rows: Vec<Vec<Span<'static>>> = vec![Vec::new()];
-    let mut next = starts.iter().skip(1).peekable();
-    let mut index = 0;
-    for span in spans {
-        for c in span.content.chars() {
-            if next.peek().is_some_and(|&&start| start == index) {
-                next.next();
-                rows.push(Vec::new());
-            }
-            index += 1;
-            if c == '\n' {
-                continue;
-            }
-            if let Some(row) = rows.last_mut() {
-                match row.last_mut() {
-                    Some(last) if last.style == span.style => last.content.to_mut().push(c),
-                    _ => row.push(Span::styled(c.to_string(), span.style)),
-                }
-            }
-        }
-    }
-    rows.resize_with(starts.len().max(rows.len()), Vec::new);
-    rows
-}
-
 /// Rows of text the input wants in a box spanning `area`'s columns, at
 /// most `max_rows` and never fewer than one. The box adds [`BOX_ROWS`].
 pub(super) fn input_rows(area: Rect, app: &App, max_rows: u16) -> u16 {
@@ -308,7 +290,7 @@ pub(super) fn render_text(
     app: &App,
     theme: &Theme,
 ) -> InputDrawn {
-    let plan = plan(area, app, theme);
+    let plan = plan(area, app, theme, usize::from(inner.height));
     let wrap_width = plan.width;
     let right = inner.x + inner.width;
     render_prompt(frame, &plan, inner, right, theme);
@@ -328,7 +310,7 @@ pub(super) fn render_text(
         render_placeholder(frame, placeholder, &text, theme);
     }
 
-    let rows = shown_rows(app, plan.cursor, plan.rows.len(), inner);
+    let rows = plan.shown;
     render_rows(frame, plan.rows, &rows, &text);
     place_cursor(frame, app, plan.cursor, &rows, &text);
     InputDrawn {
@@ -399,30 +381,14 @@ fn render_placeholder(frame: &mut Frame, placeholder: String, text: &TextArea, t
     );
 }
 
-/// Which of the `total` rows of text are shown in `inner`.
-fn shown_rows(app: &App, cursor: (usize, usize), total: usize, inner: Rect) -> InputRows {
-    // Once the input outgrows its rows, show where the wheel scrolled it
-    // to, or else keep the cursor's row in view.
-    let visible = usize::from(inner.height);
-    let first = app.input_scroll_top().map_or_else(
-        || (cursor.0 + 1).saturating_sub(visible),
-        |top| top.min(total.saturating_sub(visible)),
-    );
-    InputRows {
-        top: first,
-        total,
-        visible,
-    }
-}
-
 fn render_rows(
     frame: &mut Frame,
     rows: Vec<Vec<Span<'static>>>,
     shown: &InputRows,
     text: &TextArea,
 ) {
-    let (first, visible) = (shown.top, shown.visible);
-    for (i, row) in rows.into_iter().skip(first).take(visible).enumerate() {
+    // `rows` are the shown ones already, from the first shown on.
+    for (i, row) in rows.into_iter().take(shown.visible).enumerate() {
         let y = text.y + u16::try_from(i).unwrap_or(u16::MAX);
         frame.render_widget(
             Paragraph::new(Line::from(row)),

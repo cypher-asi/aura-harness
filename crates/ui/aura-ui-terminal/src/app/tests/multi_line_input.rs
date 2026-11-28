@@ -167,8 +167,14 @@ fn down_on_the_last_line_of_a_typed_draft_keeps_it() {
         app.handle_key(key(KeyCode::Down));
         assert_eq!((app.input(), app.cursor_pos()), ("one\ntwo", 7));
     }
-    // History is still a key away.
-    app.handle_key(key(KeyCode::Up));
+    // Nor does Up swap the draft for history: on its first row it goes
+    // to the start, and stays.
+    for _ in 0..3 {
+        app.handle_key(key(KeyCode::Up));
+    }
+    assert_eq!((app.input(), app.cursor_pos()), ("one\ntwo", 0));
+    // History is a key away from an empty prompt.
+    app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
     app.handle_key(key(KeyCode::Up));
     assert_eq!(app.input(), "older");
 }

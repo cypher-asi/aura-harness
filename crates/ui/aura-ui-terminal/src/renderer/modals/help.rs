@@ -46,7 +46,7 @@ const COMMANDS: [(&str, &str); 31] = [
 ];
 
 /// The keys.
-const KEYS: [(&str, &str); 20] = [
+const KEYS: [(&str, &str); 21] = [
     ("Enter / Shift+Enter", "Send / new line"),
     ("@path", "Attach a file or folder"),
     ("Ctrl+V", "Paste an image (or text)"),
@@ -55,6 +55,7 @@ const KEYS: [(&str, &str); 20] = [
     ("Tab", "Switch panels"),
     ("Shift+Tab", "Approval level (yolo→ask→strict)"),
     ("↑/↓", "Navigate / History"),
+    ("Ctrl+↑/↓", "Input: to its start / end"),
     ("Ctrl+N", "New project (pick its folder)"),
     ("Space / Shift+Space", "Fold agent / its project"),
     ("Shift+←/→", "Panel tabs: TERMINAL, GRAPH"),
