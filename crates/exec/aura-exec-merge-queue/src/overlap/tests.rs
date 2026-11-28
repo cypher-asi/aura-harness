@@ -80,11 +80,12 @@ fn open_work_is_the_latest_of_each_branch_not_yet_merged() {
     let merged = RunOutcome::Merged {
         merged: "x".to_string(),
         note: String::new(),
+        pr: None,
     };
     finish(&mut state, merged, 10);
     let now = at(Duration::hours(FIXING_HOURS).num_seconds());
-    finish(&mut state, RunOutcome::Failed("conflict".to_string()), 20);
-    finish(&mut state, RunOutcome::Failed("old".to_string()), -100);
+    finish(&mut state, RunOutcome::Failed("conflict".into()), 20);
+    finish(&mut state, RunOutcome::Failed("old".into()), -100);
     let branches: Vec<String> = open_work(&state.entries, now)
         .into_iter()
         .map(|work| work.branch)

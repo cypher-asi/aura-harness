@@ -7,6 +7,7 @@
 //! build = "cargo build --workspace"  # "" turns the build check off
 //! test = "cargo test --workspace"    # "" turns the test check off
 //! check_timeout_secs = 3600          # per check
+//! land = "pull_request"              # or "push"; see [`Landing`]
 //! ```
 //!
 //! Without a file, the checks are inferred from the repo's files
@@ -44,6 +45,22 @@ pub struct QueueConfig {
     pub check_timeout: Duration,
     /// How long each git command may run
     pub git_timeout: Duration,
+    /// How an entry lands on the target
+    pub land: Landing,
+}
+
+/// How the queue lands an entry it checked.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Landing {
+    /// Through the branch's PR when the queue has a forge for the repo
+    /// and the entry was pushed to a remote; else [`Self::Push`]
+    #[default]
+    Auto,
+    /// Always through the branch's PR; an entry with no forge fails
+    PullRequest,
+    /// Push the checked merge to the target branch
+    Push,
 }
 
 impl QueueConfig {
@@ -56,6 +73,7 @@ impl QueueConfig {
             test: None,
             check_timeout: DEFAULT_CHECK_TIMEOUT,
             git_timeout: GIT_TIMEOUT,
+            land: Landing::Auto,
         }
     }
 
@@ -90,6 +108,11 @@ impl QueueConfig {
         Ok(Self {
             target: self.target.clone(),
             git_timeout: self.git_timeout,
+            land: if text.is_some() {
+                checks.land
+            } else {
+                self.land
+            },
             ..checks
         })
     }
@@ -123,6 +146,7 @@ struct ConfigFile {
     build: Option<String>,
     test: Option<String>,
     check_timeout_secs: Option<u64>,
+    land: Option<Landing>,
 }
 
 impl ConfigFile {
@@ -151,6 +175,7 @@ impl ConfigFile {
                 .check_timeout_secs
                 .map_or(DEFAULT_CHECK_TIMEOUT, Duration::from_secs),
             git_timeout: GIT_TIMEOUT,
+            land: self.land.unwrap_or_default(),
         }
     }
 }
@@ -215,6 +240,16 @@ mod tests {
         assert_eq!(config.build, None, "an empty command turns a check off");
         assert_eq!(config.test.as_deref(), Some("make check"));
         assert_eq!(config.check_timeout, Duration::from_secs(5));
+        assert_eq!(config.land, Landing::Auto);
+        let push = base_with("land = \"push\"\n");
+        assert_eq!(push.land, Landing::Push);
+    }
+
+    fn base_with(text: &str) -> QueueConfig {
+        let dir = tempfile::tempdir().unwrap();
+        QueueConfig::unchecked("main")
+            .with_checks(Some(text), dir.path())
+            .unwrap()
     }
 
     #[test]

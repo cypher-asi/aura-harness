@@ -58,7 +58,8 @@ pub(crate) async fn views(
             Entry::Occupied(known) => known.get().clone(),
             Entry::Vacant(slot) => {
                 let page = queue.page(window).await;
-                let view = queue_view(target, &repo, &page.entries, page.older);
+                let mut view = queue_view(target, &repo, &page.entries, page.older);
+                view.broken = page.held;
                 slot.insert(view).clone()
             }
         };

@@ -12,6 +12,9 @@
 //! ~/code/zode
 //!
 //! FAILED  feat/parser  a1b2c3d
+//!   Failing   parser::escapes
+//!   ---- parser::escapes stdout ----
+//!   assertion `left == right` failed
 //!   Agent     RE36
 //!   Queued    11-27 20:31
 //!   Finished  11-27 20:33
@@ -19,6 +22,11 @@
 //!   Overlaps  q4 feat/lexer (RE37): src/parser.rs
 //!   cargo test failed: parser::escapes
 //! ```
+//!
+//! A failed merge shows the tests that failed it and their output (or the
+//! files that conflicted) first, before its other facts. When the queue
+//! found the target failing its own checks, that comes first of all,
+//! above every merge.
 //!
 //! Without a queue, or with nothing in it, a note says where merges come
 //! from. The session sends the newest merges a page at a time: under the
@@ -92,6 +100,13 @@ pub(super) fn queue_lines(
         if !queue.repo.trim().is_empty() {
             info.note(&queue.repo);
         }
+        if let Some(broken) = queue.broken.as_deref().filter(|b| !b.trim().is_empty()) {
+            info.blank();
+            info.text(
+                &format!("{} is broken: {broken}", queue.target),
+                Value::Error,
+            );
+        }
     }
     let entries = queue.map_or(&[][..], |queue| queue.entries.as_slice());
     if entries.is_empty() {
@@ -163,6 +178,7 @@ fn entry_head(entry: &MergeEntryView, width: usize, theme: &Theme) -> Line<'stat
 /// happened.
 fn entry_facts(entry: &MergeEntryView, width: usize, theme: &Theme) -> Vec<Line<'static>> {
     let mut info = Info::new(width, theme).wrap_values();
+    failure_first(&mut info, entry, theme);
     if let Some(agent) = entry.agent.as_deref().filter(|agent| !agent.is_empty()) {
         info.fact("Agent", agent, Value::Plain);
     }
@@ -175,6 +191,9 @@ fn entry_facts(entry: &MergeEntryView, width: usize, theme: &Theme) -> Vec<Line<
     }
     if let Some(merged) = entry.merged.as_deref().filter(|sha| !sha.is_empty()) {
         info.fact("Merged", merged, Value::Quiet);
+    }
+    if let Some(pr) = entry.pr.as_deref().filter(|pr| !pr.is_empty()) {
+        info.fact("PR", pr, Value::Quiet);
     }
     for (at, overlap) in entry.overlaps.iter().enumerate() {
         let label = if at == 0 { "Overlaps" } else { "" };
@@ -190,6 +209,33 @@ fn entry_facts(entry: &MergeEntryView, width: usize, theme: &Theme) -> Vec<Line<
     }
     info.into_lines()
 }
+
+/// A failed merge's failing tests and their output, before anything else
+/// about it: what to fix is what its agent and the user look for first.
+fn failure_first(info: &mut Info, entry: &MergeEntryView, theme: &Theme) {
+    if entry.state != MergeStateView::Failed {
+        return;
+    }
+    for (at, test) in entry.failing_tests.iter().enumerate() {
+        let label = if at == 0 { "Failing" } else { "" };
+        info.fact(label, test, Value::Error);
+    }
+    if let Some(excerpt) = entry.failure_excerpt.as_deref() {
+        // Kept as printed, spaces and all: a snapshot diff reads by its
+        // columns. Cut to the column, not wrapped.
+        let room = info.indented_width();
+        let style = Style::default().fg(theme.colors.muted);
+        let lines = excerpt
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .take(EXCERPT_LINES)
+            .map(|line| Line::styled(truncate_line(line, room), style));
+        info.indented(lines);
+    }
+}
+
+/// Most lines of a failure's output a QUEUE block shows.
+const EXCERPT_LINES: usize = 24;
 
 /// The colour of a merge's state: landed in the accent, failed in the
 /// error colour, running in the info colour, so it stands apart from a

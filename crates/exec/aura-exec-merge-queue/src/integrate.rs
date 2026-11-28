@@ -1,6 +1,7 @@
 //! Landing one entry: merge the latest target into it in the queue's own
 //! worktree, run the checks there, then move the target branch to the
-//! result, fast-forward only.
+//! result, fast-forward only, or merge the branch's PR pinned to the
+//! tested head ([`pull_request`]).
 //!
 //! The queue merges rather than rebases: an agent's `git_ship` already
 //! merged the target into its branch and resolved what conflicted, and a
@@ -30,17 +31,23 @@
 //! was checked is retried from the fetch, up to [`LAND_ATTEMPTS`] times.
 
 use crate::checks::run_check;
-use crate::config::QueueConfig;
+use crate::config::{Landing, QueueConfig};
 use crate::entry::{short_sha, MergeEntry};
 use crate::error::QueueError;
+use crate::forge::Forge;
 use crate::git;
+use crate::report::{Failure, FailureKind, Hold};
 use crate::resolve::{self, conflict_reason, Settled};
 use crate::state::RunOutcome;
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub use crate::repo::RepoPaths;
 
+mod diagnose;
+mod land;
+mod pull_request;
 mod worktree;
 
 /// How many times an entry is tried again when the target moved under it.
@@ -59,18 +66,33 @@ pub trait Integrator: Send + Sync {
     async fn landed(&self, _entry: &MergeEntry) -> Option<String> {
         None
     }
+
+    /// The target's tip now, read from `remote` (else the local branch);
+    /// `None` when it can't be read. A held queue polls it to tell when
+    /// the target moved.
+    async fn target_tip(&self, _remote: Option<&str>) -> Option<String> {
+        None
+    }
 }
 
 /// Why landing stopped.
 enum Stop {
-    Fail(String),
-    /// The target moved since it was fetched: try again.
+    Fail(Box<Failure>),
+    /// The target or the branch moved since it was fetched: try again.
     Moved,
+    /// Not the entry's fault: hold the queue.
+    Hold(Box<Hold>),
+}
+
+impl Stop {
+    fn fail(kind: FailureKind, reason: impl Into<String>) -> Self {
+        Self::Fail(Box::new(Failure::new(kind, reason)))
+    }
 }
 
 impl From<QueueError> for Stop {
     fn from(error: QueueError) -> Self {
-        Self::Fail(error.to_string())
+        Self::fail(FailureKind::Other, error.to_string())
     }
 }
 
@@ -80,22 +102,52 @@ type Step<T> = Result<T, Stop>;
 pub struct GitIntegrator {
     repo: RepoPaths,
     config: QueueConfig,
+    /// Where the repo's PRs live; entries land by push without one
+    forge: Option<Arc<dyn Forge>>,
+    /// The target's tip after this integrator's last merge: the newest
+    /// commit known to pass the checks
+    last_green: std::sync::Mutex<Option<String>>,
 }
 
 impl GitIntegrator {
     /// An integrator for `repo` with `config`.
     #[must_use]
     pub const fn new(repo: RepoPaths, config: QueueConfig) -> Self {
-        Self { repo, config }
+        Self {
+            repo,
+            config,
+            forge: None,
+            last_green: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// The newest target commit known to pass the checks.
+    fn last_green(&self) -> Option<String> {
+        self.last_green
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// This integrator, landing pushed entries through their PRs on
+    /// `forge` ([`Landing`]).
+    #[must_use]
+    pub fn with_forge(mut self, forge: Arc<dyn Forge>) -> Self {
+        self.forge = Some(forge);
+        self
     }
 
     async fn attempt(&self, entry: &MergeEntry) -> Step<RunOutcome> {
         let target = self.fetch(entry).await?;
         self.prepare_worktree(&target).await?;
+        if let Some(forge) = self.forge_for(entry, &target).await? {
+            return self.attempt_pr(forge.as_ref(), entry, &target).await;
+        }
         let Some((landing, how)) = self.merge(entry, &target).await? else {
             return Ok(RunOutcome::Merged {
                 merged: target,
                 note: "already on the target branch; nothing to merge".to_string(),
+                pr: None,
             });
         };
         let checked = self.check(&target).await?;
@@ -103,7 +155,23 @@ impl GitIntegrator {
         Ok(RunOutcome::Merged {
             merged: landing,
             note: format!("{how}; {checked}"),
+            pr: None,
         })
+    }
+
+    /// The forge `entry` lands through, as the target's config says
+    /// ([`Landing`]); `None` to push it to the target.
+    async fn forge_for(&self, entry: &MergeEntry, target: &str) -> Step<Option<Arc<dyn Forge>>> {
+        let land = self.checks_at(target, &self.repo.worktree()).await?.land;
+        let forge = entry.remote.as_ref().and(self.forge.clone());
+        match (land, forge) {
+            (Landing::Push, _) | (Landing::Auto, None) => Ok(None),
+            (_, Some(forge)) => Ok(Some(forge)),
+            (Landing::PullRequest, None) => Err(Stop::fail(
+                FailureKind::Other,
+                "the repo lands through pull requests, but the queue has no GitHub repo for it",
+            )),
+        }
     }
 
     /// Fetch the target and the entry's branch; returns the target's tip.
@@ -131,18 +199,22 @@ impl GitIntegrator {
         )
         .await?;
         if !tip.ok {
-            return Err(Stop::Fail(format!(
-                "the target branch {target} does not exist"
-            )));
+            return Err(Stop::fail(
+                FailureKind::Other,
+                format!("the target branch {target} does not exist"),
+            ));
         }
         let commit = format!("{}^{{commit}}", entry.head);
         let head = git::run(top, &["rev-parse", "--verify", "--quiet", &commit], timeout).await?;
         if !head.ok {
-            return Err(Stop::Fail(format!(
-                "commit {} of {} is gone (was the branch force-pushed?)",
-                entry.short_head(),
-                entry.branch
-            )));
+            return Err(Stop::fail(
+                FailureKind::Other,
+                format!(
+                    "commit {} of {} is gone (was the branch force-pushed?)",
+                    entry.short_head(),
+                    entry.branch
+                ),
+            ));
         }
         Ok(tip.stdout)
     }
@@ -227,13 +299,11 @@ impl GitIntegrator {
             Err(error) => (vec![error.to_string()], Vec::new()),
         };
         git::run(worktree, &["merge", "--abort"], timeout).await?;
-        Err(Stop::Fail(conflict_reason(
-            &self.config.target,
-            target,
-            &real,
-            &generated,
-            stderr,
-        )))
+        let reason = conflict_reason(&self.config.target, target, &real, &generated, stderr);
+        Err(Stop::Fail(Box::new(Failure {
+            files: real,
+            ..Failure::new(FailureKind::Conflict, reason)
+        })))
     }
 
     /// Run the checks the target's config file sets (else the inferred
@@ -243,22 +313,29 @@ impl GitIntegrator {
         let config = self.checks_at(target, &worktree).await?;
         let log = self.repo.check_log();
         let mut passed = Vec::new();
+        let mut flaky = None;
         for (name, command) in [("build", &config.build), ("test", &config.test)] {
             let Some(command) = command.as_deref() else {
                 continue;
             };
-            run_check(&worktree, command, config.check_timeout, &log)
-                .await
-                .map_err(|failure| {
-                    Stop::Fail(format!("{name} `{}` {}", failure.command, failure.reason))
-                })?;
+            if let Err(failure) = run_check(&worktree, command, config.check_timeout, &log).await {
+                let stop = check_failed(name, &failure);
+                if name != "test" {
+                    return Err(stop);
+                }
+                flaky = Some(self.diagnose(command, &config, target, stop).await?);
+            }
             passed.push(name);
         }
-        Ok(if passed.is_empty() {
+        let mut said = if passed.is_empty() {
             "no build or test configured".to_string()
         } else {
             format!("{} passed", passed.join(" and "))
-        })
+        };
+        if let Some(flaky) = flaky {
+            said.push_str(&format!("; {flaky}"));
+        }
+        Ok(said)
     }
 
     /// The config with the checks of the target commit `target`'s config
@@ -271,112 +348,8 @@ impl GitIntegrator {
         let base = self.config.clone();
         tokio::task::spawn_blocking(move || base.with_checks(text.as_deref(), &tree))
             .await
-            .map_err(|e| Stop::Fail(format!("reading the checks: {e}")))?
+            .map_err(|e| Stop::fail(FailureKind::Other, format!("reading the checks: {e}")))?
             .map_err(Stop::from)
-    }
-
-    /// Move the target branch from `target` to `landing`.
-    async fn land(&self, entry: &MergeEntry, landing: &str, target: &str) -> Step<()> {
-        let timeout = self.config.git_timeout;
-        let branch = format!("refs/heads/{}", self.config.target);
-        let Some(remote) = entry.remote.as_deref() else {
-            return self.land_local(&branch, landing, target).await;
-        };
-        let spec = format!("{landing}:{branch}");
-        let pushed = match git::run(
-            &self.repo.top,
-            &["push", "--porcelain", remote, &spec],
-            timeout,
-        )
-        .await
-        {
-            Ok(pushed) => pushed,
-            // A push cut off by its timeout may have landed all the same.
-            Err(error) => {
-                return match self.remote_holds(remote, landing).await {
-                    Some(_) => Ok(()),
-                    None => Err(Stop::from(error)),
-                };
-            }
-        };
-        if pushed.ok {
-            return Ok(());
-        }
-        let said = format!("{}\n{}", pushed.stdout, pushed.stderr);
-        if said.contains("non-fast-forward")
-            || said.contains("fetch first")
-            || said.contains("[rejected]")
-        {
-            return Err(Stop::Moved);
-        }
-        Err(Stop::Fail(format!(
-            "pushing to {remote}: {}",
-            pushed.stderr
-        )))
-    }
-
-    /// Move a local target: fast-forward its checkout when it has one,
-    /// else swap the ref.
-    async fn land_local(&self, branch: &str, landing: &str, target: &str) -> Step<()> {
-        let timeout = self.config.git_timeout;
-        let top = &self.repo.top;
-        let listed = git::ok(top, &["worktree", "list", "--porcelain"], timeout).await?;
-        let Some(checkout) = checkout_of(&listed, branch) else {
-            let swapped = git::run(top, &["update-ref", branch, landing, target], timeout).await?;
-            return if swapped.ok { Ok(()) } else { Err(Stop::Moved) };
-        };
-        let status = git::ok(
-            &checkout,
-            &["status", "--porcelain", "--untracked-files=no"],
-            timeout,
-        )
-        .await?;
-        if !status.is_empty() {
-            return Err(Stop::Fail(format!(
-                "{} is checked out with uncommitted changes at {}; commit or stash them",
-                self.config.target,
-                checkout.display()
-            )));
-        }
-        let merged = git::run(&checkout, &["merge", "--ff-only", landing], timeout).await?;
-        if merged.ok {
-            Ok(())
-        } else {
-            Err(Stop::Fail(format!(
-                "fast-forwarding {}: {}",
-                checkout.display(),
-                merged.stderr
-            )))
-        }
-    }
-}
-
-impl GitIntegrator {
-    /// The tip of the remote's target when it holds `commit`.
-    async fn remote_holds(&self, remote: &str, commit: &str) -> Option<String> {
-        let timeout = self.config.git_timeout;
-        let top = &self.repo.top;
-        let spec = format!("+refs/heads/{}:{TARGET_REF}", self.config.target);
-        let args = [&git::FETCH_ARGS[..], &[remote, &spec]].concat();
-        git::ok(top, &args, timeout).await.ok()?;
-        self.holds(TARGET_REF, commit).await
-    }
-
-    /// The tip of `reference` when it holds `commit`.
-    async fn holds(&self, reference: &str, commit: &str) -> Option<String> {
-        let timeout = self.config.git_timeout;
-        let top = &self.repo.top;
-        let held = git::run(
-            top,
-            &["merge-base", "--is-ancestor", commit, reference],
-            timeout,
-        )
-        .await
-        .ok()?;
-        if !held.ok {
-            return None;
-        }
-        git::ok(top, &["rev-parse", reference], timeout).await.ok()
     }
 }
 
@@ -392,21 +365,54 @@ impl Integrator for GitIntegrator {
         }
     }
 
+    async fn target_tip(&self, remote: Option<&str>) -> Option<String> {
+        self.tip_of_target(remote).await
+    }
+
     async fn integrate(&self, entry: &MergeEntry) -> RunOutcome {
         for _ in 0..LAND_ATTEMPTS {
             match self.attempt(entry).await {
-                Ok(outcome) => return outcome,
-                Err(Stop::Fail(reason)) => return RunOutcome::Failed(reason),
+                Ok(outcome) => {
+                    if let RunOutcome::Merged { merged, .. } = &outcome {
+                        *self
+                            .last_green
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                            Some(merged.clone());
+                    }
+                    return outcome;
+                }
+                Err(Stop::Fail(failure)) => return RunOutcome::Failed(*failure),
+                Err(Stop::Hold(hold)) => return RunOutcome::Held(*hold),
                 Err(Stop::Moved) => {
                     tracing::info!(entry = %entry.id, "Target moved while checking; trying again");
                 }
             }
         }
-        RunOutcome::Failed(format!(
-            "{} kept moving; tried {LAND_ATTEMPTS} times",
-            self.config.target
+        RunOutcome::Failed(Failure::new(
+            FailureKind::Other,
+            format!(
+                "{} or the branch kept moving; tried {LAND_ATTEMPTS} times",
+                self.config.target
+            ),
         ))
     }
+}
+
+/// The failure of check `name` (`build`, `test`): its reason, and the
+/// output after its first line as the excerpt.
+fn check_failed(name: &str, failure: &crate::checks::CheckFailure) -> Stop {
+    let output = failure
+        .reason
+        .split_once('\n')
+        .map_or("", |(_, output)| output);
+    Stop::Fail(Box::new(Failure {
+        excerpt: (!output.trim().is_empty()).then(|| output.to_string()),
+        ..Failure::new(
+            FailureKind::Check,
+            format!("{name} `{}` {}", failure.command, failure.reason),
+        )
+    }))
 }
 
 /// The worktree `worktree list --porcelain` shows with `branch` checked
