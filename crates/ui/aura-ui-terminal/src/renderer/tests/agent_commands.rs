@@ -243,9 +243,9 @@ fn test_context_command_lists_project_instructions() {
         globs: None,
         status: InstructionStatus::Included,
     }]));
-    run_slash(&mut app, "/context");
+    run_slash(&mut app, "/context text");
     run_slash(&mut app, "/new");
-    run_slash(&mut app, "/context");
+    run_slash(&mut app, "/context text");
 
     let texts: Vec<String> = app
         .messages()

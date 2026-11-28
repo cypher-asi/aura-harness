@@ -139,9 +139,10 @@ fn test_status_line_shows_context_cache_and_cost() {
         editable: true,
     }]));
 
-    let rows = render_rows(&mut app, 160);
+    // Wide enough for every part: the ring takes two columns more.
+    let rows = render_rows(&mut app, 170);
     let status = &rows[rows.len() - 1];
-    assert!(status.contains("62% context used"), "{status:?}");
+    assert!(status.contains("◑ 62% context used"), "{status:?}");
     assert!(status.contains("96% cached"), "{status:?}");
     assert!(status.contains("$3.42"), "{status:?}");
     assert!(status.contains("1 call"), "{status:?}");
